@@ -112,6 +112,10 @@ const isKnownIndustry = value => INDUSTRIES.includes(normalizeIndustry(value));
 const getIndustryBucket = value => isKnownIndustry(value) ? normalizeIndustry(value) : OTHER_INDUSTRY_LABEL;
 const matchesIndustryFilter = (value, filter) => filter==="All" || (filter===OTHER_INDUSTRY_LABEL ? !isKnownIndustry(value) : normalizeIndustry(value)===filter);
 const normalizeCompanyKey = value => String(value || "").toLowerCase().replace(/[^a-z0-9]/g,"");
+const isLinkTarget = target => {
+  const node = target && (target.nodeType === 1 ? target : target.parentElement);
+  return !!node?.closest?.("a,[data-external-url]");
+};
 const stageMap = Object.fromEntries(STAGES.map(stage => [stage.toLowerCase(), stage]));
 const normalizeStage = raw => {
   const key = String(raw || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -553,6 +557,10 @@ function App(){
   const [tasks,setTasks] = useState(()=>safeJson(localStorage.getItem("ed_tasks"),[]));
   const [taskTitle,setTaskTitle] = useState("");
   const [taskDate,setTaskDate] = useState("");
+  const [editingTaskId,setEditingTaskId] = useState(null);
+  const [editingTaskDraft,setEditingTaskDraft] = useState({title:"",due_date:""});
+  const [editingActId,setEditingActId] = useState(null);
+  const [editingActDraft,setEditingActDraft] = useState({type:"Call",note:""});
   const [notesDraft,setNotesDraft] = useState("");
   const [contactsDraft,setContactsDraft] = useState("");
   const [detailPanelHeight,setDetailPanelHeight] = useState(280);
@@ -662,6 +670,10 @@ function App(){
     setSelected(rec);
     setNotesDraft(rec.notes || "");
     setContactsDraft(contactsTextFromRecord(rec));
+    setEditingTaskId(null);
+    setEditingTaskDraft({title:"",due_date:""});
+    setEditingActId(null);
+    setEditingActDraft({type:"Call",note:""});
     setTaskTitle("");
     setTaskDate("");
     setNewAct({type:"Call",note:""});
@@ -703,6 +715,42 @@ function App(){
   };
   const toggleTask = id => saveTasks(tasks.map(t=>t.id===id?{...t,done:!t.done}:t));
   const deleteTask = id => saveTasks(tasks.filter(t=>t.id!==id));
+  const startTaskEdit = task => {
+    setEditingTaskId(task.id);
+    setEditingTaskDraft({title:task.title || "",due_date:task.due_date || ""});
+  };
+  const saveTaskEdit = id => {
+    const title = String(editingTaskDraft.title || "").trim();
+    if(!title){
+      setEditingTaskId(null);
+      setEditingTaskDraft({title:"",due_date:""});
+      return;
+    }
+    saveTasks(tasks.map(task => task.id===id ? {...task,title,due_date:editingTaskDraft.due_date || ""} : task));
+    setEditingTaskId(null);
+    setEditingTaskDraft({title:"",due_date:""});
+  };
+  const startActivityEdit = activity => {
+    setEditingActId(activity.id);
+    setEditingActDraft({type:activity.type || "Call",note:activity.note || ""});
+  };
+  const saveActivityEdit = async id => {
+    const note = String(editingActDraft.note || "").trim();
+    if(!note){
+      setEditingActId(null);
+      setEditingActDraft({type:"Call",note:""});
+      return;
+    }
+    const payload = {type:editingActDraft.type || "Call",note};
+    const { error } = await sb.from("activities").update(payload).eq("id",id);
+    if(error){
+      toast2("Save error: "+error.message);
+      return;
+    }
+    setActs(list => list.map(activity => activity.id===id ? {...activity,...payload} : activity));
+    setEditingActId(null);
+    setEditingActDraft({type:"Call",note:""});
+  };
 
   const logActivity = async () => {
     if(!selected || !newAct.note.trim()) return;
@@ -1251,9 +1299,23 @@ function App(){
                   {tasks.filter(t=>taskMatchesRecord(t, selected)).length===0 && <div className="mono" style={{fontSize:11,color:"#8ea0bd"}}>No tasks yet.</div>}
                   {tasks.filter(t=>taskMatchesRecord(t, selected)).map(t=>(
                     <div key={t.id} style={{display:"flex",gap:8,alignItems:"center",padding:"8px 0",borderBottom:"1px solid #f1f5f9"}}>
-                      <input type="checkbox" checked={t.done} onChange={()=>toggleTask(t.id)} />
-                      <div style={{flex:1}}><div style={{fontSize:13,textDecoration:t.done?"line-through":"none",color:t.done?"#94a3b8":"#0f172a"}}>{t.title}</div>{t.due_date&&<div className="mono" style={{fontSize:10,color:t.due_date<today()&&!t.done?"#ef4444":"#94a3b8"}}>{t.due_date}</div>}</div>
-                      <button onClick={()=>deleteTask(t.id)} style={{border:"none",background:"transparent",color:"#cbd5e1",fontSize:16,cursor:"pointer"}}>×</button>
+                      <input type="checkbox" checked={t.done} onChange={()=>toggleTask(t.id)} onClick={e=>e.stopPropagation()} />
+                      <div
+                        style={{flex:1}}
+                        onClick={()=>startTaskEdit(t)}
+                        onBlur={e=>{ if(editingTaskId===t.id && !e.currentTarget.contains(e.relatedTarget)) saveTaskEdit(t.id); }}
+                      >
+                        {editingTaskId===t.id
+                          ? <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 130px",gap:8}}>
+                              <input className="field" autoFocus value={editingTaskDraft.title} onChange={e=>setEditingTaskDraft(cur=>({...cur,title:e.target.value}))} onKeyDown={e=>{ if(e.key==="Enter") saveTaskEdit(t.id); if(e.key==="Escape"){ setEditingTaskId(null); setEditingTaskDraft({title:"",due_date:""}); } }} />
+                              <input className="field mono" type="date" value={editingTaskDraft.due_date} onChange={e=>setEditingTaskDraft(cur=>({...cur,due_date:e.target.value}))} onKeyDown={e=>{ if(e.key==="Escape"){ setEditingTaskId(null); setEditingTaskDraft({title:"",due_date:""}); } }} />
+                            </div>
+                          : <div>
+                              <div style={{fontSize:13,textDecoration:t.done?"line-through":"none",color:t.done?"#94a3b8":"#0f172a",cursor:"text"}}>{t.title}</div>
+                              {t.due_date&&<div className="mono" style={{fontSize:10,color:t.due_date<today()&&!t.done?"#ef4444":"#94a3b8"}}>{t.due_date}</div>}
+                            </div>}
+                      </div>
+                      <button onClick={e=>{ e.stopPropagation(); deleteTask(t.id); }} style={{border:"none",background:"transparent",color:"#cbd5e1",fontSize:16,cursor:"pointer"}}>×</button>
                     </div>
                   ))}
                 </div>
@@ -1263,9 +1325,25 @@ function App(){
                   <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 64px",gap:8,marginBottom:10}}><input className="field" value={newAct.note} onChange={e=>setNewAct(cur=>({...cur,note:e.target.value}))} placeholder="Add a note..." style={{background:"#fbfcfe"}} onKeyDown={e=>e.key==="Enter"&&logActivity()} /><button onClick={logActivity} style={{padding:"8px 14px",border:"none",borderRadius:4,background:"#ef4444",color:"#fff",cursor:"pointer",fontWeight:800,fontSize:12,letterSpacing:".05em"}}>LOG</button></div>
                   {!detailActs.length && <div className="mono" style={{fontSize:11,color:"#8ea0bd"}}>No activity yet.</div>}
                   {detailActs.map(a=>(
-                    <div key={a.id} style={{padding:"10px 0",borderBottom:"1px solid #f1f5f9"}}>
-                      <div style={{fontSize:12}}><span className="condensed" style={{fontWeight:700,color:"#1e3a8a",textTransform:"uppercase"}}>{a.type}</span><span style={{color:"#cbd5e1"}}> · </span><span className="mono" style={{fontSize:10,color:"#94a3b8"}}>{a.date}</span></div>
-                      <LinkifiedText text={a.note} style={{fontSize:13,color:"#475569",lineHeight:1.6}} />
+                    <div
+                      key={a.id}
+                      style={{padding:"10px 0",borderBottom:"1px solid #f1f5f9"}}
+                      onBlur={e=>{ if(editingActId===a.id && !e.currentTarget.contains(e.relatedTarget)) saveActivityEdit(a.id); }}
+                    >
+                      {editingActId===a.id
+                        ? <div style={{display:"grid",gap:8}}>
+                            <div style={{display:"grid",gridTemplateColumns:"150px minmax(0,1fr)",gap:8,alignItems:"center"}}>
+                              <select className="field mono" value={editingActDraft.type} onChange={e=>setEditingActDraft(cur=>({...cur,type:e.target.value}))}>
+                                {["Call","Email","Meeting","Note"].map(type=><option key={type}>{type}</option>)}
+                              </select>
+                              <div className="mono" style={{fontSize:10,color:"#94a3b8"}}>{a.date}</div>
+                            </div>
+                            <textarea className="fieldbox" autoFocus style={{minHeight:82,resize:"vertical"}} value={editingActDraft.note} onChange={e=>setEditingActDraft(cur=>({...cur,note:e.target.value}))} onKeyDown={e=>{ if(e.key==="Escape"){ setEditingActId(null); setEditingActDraft({type:"Call",note:""}); } if((e.ctrlKey||e.metaKey)&&e.key==="Enter") saveActivityEdit(a.id); }} />
+                          </div>
+                        : <div onClick={e=>{ if(isLinkTarget(e.target)) return; startActivityEdit(a); }} style={{cursor:"text"}}>
+                            <div style={{fontSize:12}}><span className="condensed" style={{fontWeight:700,color:"#1e3a8a",textTransform:"uppercase"}}>{a.type}</span><span style={{color:"#cbd5e1"}}> · </span><span className="mono" style={{fontSize:10,color:"#94a3b8"}}>{a.date}</span></div>
+                            <LinkifiedText text={a.note} style={{fontSize:13,color:"#475569",lineHeight:1.6}} />
+                          </div>}
                     </div>
                   ))}
                 </div>
