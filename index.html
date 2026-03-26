@@ -23,6 +23,8 @@
   .spinner{width:34px;height:34px;border:3px solid #e2e8f0;border-top-color:#1e3a8a;border-radius:50%;animation:spin .75s linear infinite}
   .field{width:100%;padding:9px 11px;border:1px solid #dbe2ea;border-radius:4px;background:#fff}
   .fieldbox{width:100%;padding:8px 10px;border:1px solid #dbe2ea;border-radius:4px;background:#fff;resize:vertical;min-height:72px}
+  .editablebox{width:100%;padding:8px 10px;border:1px solid #dbe2ea;border-radius:4px;background:#fff;white-space:pre-wrap;word-break:break-word;line-height:1.7;font-size:13px;color:#475569;cursor:text;overflow:hidden}
+  .editablebox:empty:before{content:attr(data-placeholder);color:#94a3b8}
   @keyframes fade{from{opacity:0}to{opacity:1}}
   @keyframes slide{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
   @keyframes spin{to{transform:rotate(360deg)}}
@@ -342,6 +344,12 @@ const normalizeExternalUrl = value => {
   if(/^https?:\/\//i.test(raw)) return raw;
   return "https://" + raw.replace(/^\/+/, "");
 };
+const escapeHtml = value => String(value || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+const linkifiedHtml = text => String(text || "").split(EXTERNAL_LINK_RE).map(part => isExternalLinkText(part)
+  ? `<a href="${escapeHtml(normalizeExternalUrl(part))}" target="_blank" rel="noreferrer" data-external-link="true" style="color:#1d4ed8;text-decoration:underline;word-break:break-all;cursor:pointer;">${escapeHtml(part)}</a>`
+  : escapeHtml(part)
+).join("");
+const editableTextFromElement = element => String(element?.innerText || "").replace(/\u00A0/g," ").replace(/\r/g,"").replace(/\n$/, "");
 const LinkifiedText = ({ text, style }) => {
   const parts = String(text || "").split(EXTERNAL_LINK_RE);
   return (
@@ -353,6 +361,47 @@ const LinkifiedText = ({ text, style }) => {
     </div>
   );
 };
+
+const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onMeasure, placeholder, height, style }, forwardedRef) => {
+  const innerRef = useRef(null);
+
+  useEffect(()=>{
+    const element = innerRef.current;
+    if(!element || document.activeElement===element) return;
+    const html = linkifiedHtml(value);
+    if(element.innerHTML !== html) element.innerHTML = html;
+  },[value]);
+
+  useEffect(()=>{
+    if(typeof forwardedRef === "function") forwardedRef(innerRef.current);
+    else if(forwardedRef) forwardedRef.current = innerRef.current;
+  },[forwardedRef]);
+
+  return (
+    <div
+      ref={innerRef}
+      className="editablebox"
+      contentEditable
+      suppressContentEditableWarning
+      data-placeholder={placeholder}
+      style={{height,minHeight:height,border:"1px solid #eef2f7",background:"#fff",...style}}
+      onInput={e=>{ onChange(editableTextFromElement(e.currentTarget)); onMeasure?.(); }}
+      onBlur={e=>{
+        const nextValue = editableTextFromElement(e.currentTarget);
+        e.currentTarget.innerHTML = linkifiedHtml(nextValue);
+        onMeasure?.();
+        onBlurSave?.(nextValue);
+      }}
+      onMouseDown={e=>{
+        const anchor = e.target?.closest?.("a[data-external-link='true']");
+        if(!anchor) return;
+        e.preventDefault();
+        e.stopPropagation();
+        window.open(anchor.href, "_blank", "noopener,noreferrer");
+      }}
+    />
+  );
+});
 
 const Pill = ({ label, color }) => <span className="mono" style={pillStyle(color || "#64748b")}>{label}</span>;
 const Tag = ({ label, color }) => <span className="mono" style={tagStyle(color || "#1e3a8a")}>{label}</span>;
@@ -744,9 +793,12 @@ function App(){
     const measure = element => {
       if(!element) return 0;
       const previous = element.style.height;
-      element.style.height = "0px";
+      const previousMinHeight = element.style.minHeight;
+      element.style.height = "auto";
+      element.style.minHeight = "0px";
       const height = element.scrollHeight;
       element.style.height = previous;
+      element.style.minHeight = previousMinHeight;
       return height;
     };
     const nextHeight = Math.max(280, measure(notesBoxRef.current), measure(contactsBoxRef.current));
@@ -1037,29 +1089,27 @@ function App(){
               {selected.type==="manufacturer" ? <>
                 <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>NOTES</div>
-                  <textarea
+                  <EditableLinkField
                     ref={notesBoxRef}
-                    className="fieldbox"
-                    style={{height:detailPanelHeight,minHeight:detailPanelHeight,border:"1px solid #eef2f7",background:"#fff",overflow:"hidden"}}
+                    height={detailPanelHeight}
                     placeholder="Internal notes, follow-up reminders..."
                     value={notesDraft}
-                    onChange={e=>setNotesDraft(e.target.value)}
-                    onInput={syncDetailPanelHeight}
-                    onBlur={()=>saveMfrField("notes", notesDraft)}
+                    onChange={setNotesDraft}
+                    onMeasure={syncDetailPanelHeight}
+                    onBlurSave={nextValue=>saveMfrField("notes", nextValue)}
                   />
                 </div>
                 <div style={{display:"grid",gap:20,alignContent:"start"}}>
                   <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
                     <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>CONTACTS</div>
-                    <textarea
+                    <EditableLinkField
                       ref={contactsBoxRef}
-                      className="fieldbox"
-                      style={{height:detailPanelHeight,minHeight:detailPanelHeight,border:"1px solid #eef2f7",background:"#fff",overflow:"hidden"}}
+                      height={detailPanelHeight}
                       placeholder="Name, Title, LinkedIn URL"
                       value={contactsDraft}
-                      onChange={e=>setContactsDraft(e.target.value)}
-                      onInput={syncDetailPanelHeight}
-                      onBlur={()=>saveContacts(contactsDraft)}
+                      onChange={setContactsDraft}
+                      onMeasure={syncDetailPanelHeight}
+                      onBlurSave={saveContacts}
                     />
                     <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:6}}>One per line: Name, Title, LinkedIn</div>
                   </div>
