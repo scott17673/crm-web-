@@ -351,21 +351,24 @@ const linkifiedHtml = text => String(text || "").split(EXTERNAL_LINK_RE).map(par
   : escapeHtml(part)
 ).join("");
 const editableTextFromElement = element => String(element?.innerText || "").replace(/\u00A0/g," ").replace(/\r/g,"").replace(/\n$/, "");
-const insertPlainTextAtSelection = text => {
-  if(document.queryCommandSupported?.("insertText")){
-    document.execCommand("insertText", false, text);
+const insertHtmlAtSelection = html => {
+  if(document.queryCommandSupported?.("insertHTML")){
+    document.execCommand("insertHTML", false, html);
     return;
   }
   const selection = window.getSelection();
   if(!selection?.rangeCount) return;
   const range = selection.getRangeAt(0);
   range.deleteContents();
-  const node = document.createTextNode(text);
-  range.insertNode(node);
-  range.setStartAfter(node);
-  range.collapse(true);
-  selection.removeAllRanges();
-  selection.addRange(range);
+  const fragment = range.createContextualFragment(html);
+  const lastNode = fragment.lastChild;
+  range.insertNode(fragment);
+  if(lastNode){
+    range.setStartAfter(lastNode);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
 };
 const rangeFromPoint = (x, y) => {
   if(document.caretRangeFromPoint) return document.caretRangeFromPoint(x, y);
@@ -444,7 +447,7 @@ const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onMea
       onPaste={e=>{
         e.preventDefault();
         const text = e.clipboardData?.getData("text/plain") || "";
-        insertPlainTextAtSelection(text);
+        insertHtmlAtSelection(linkifiedHtml(text).replace(/\r?\n/g, "<br>"));
         window.requestAnimationFrame(()=>{
           const nextValue = editableTextFromElement(innerRef.current);
           onChange(nextValue);
