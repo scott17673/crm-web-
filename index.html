@@ -272,7 +272,7 @@ const exportRecordRows = (records, tab) => {
       company: record.company || "",
       stage: record.stage || "",
       industry: record.industry || "",
-      notes: record.notes || "",
+      notes: richNotesPlainText(record.notes),
       contacts: (record.contacts || []).map(contact => [contact.name, contact.title, contact.linkedin].filter(Boolean).join(" | ")).join(" ;; "),
       tags: (record.tags || []).join(", "),
       last_activity: record.lastContact || "",
@@ -351,6 +351,79 @@ const linkifiedHtml = text => String(text || "").split(EXTERNAL_LINK_RE).map(par
   : escapeHtml(part)
 ).join("");
 const editableTextFromElement = element => String(element?.innerText || "").replace(/\u00A0/g," ").replace(/\r/g,"").replace(/\n$/, "");
+const cleanupRichNotesHtml = html => String(html || "")
+  .replace(/(?:\s*<br>\s*){3,}/gi, "<br><br>")
+  .replace(/^(?:\s*<br>\s*)+|(?:\s*<br>\s*)+$/gi, "");
+const richNotesFromPlainText = text => cleanupRichNotesHtml(escapeHtml(String(text || "")).replace(/\r?\n/g, "<br>"));
+const isBoldRichNode = node => {
+  if(!node || node.nodeType!==1) return false;
+  const tag = node.tagName.toLowerCase();
+  if(tag==="strong" || tag==="b") return true;
+  const fontWeight = String(node.style?.fontWeight || "").toLowerCase();
+  return fontWeight==="bold" || fontWeight==="bolder" || Number.parseInt(fontWeight, 10) >= 600;
+};
+const richNotesPlainText = raw => {
+  const template = document.createElement("template");
+  template.innerHTML = String(raw || "");
+  const walk = nodes => Array.from(nodes || []).map(node => {
+    if(node.nodeType===3) return node.textContent || "";
+    if(node.nodeType!==1) return "";
+    const tag = node.tagName.toLowerCase();
+    if(tag==="br") return "\n";
+    const inner = walk(node.childNodes);
+    if(["div","p","li"].includes(tag)) return `${inner}\n`;
+    return inner;
+  }).join("");
+  return walk(template.content.childNodes).replace(/\u00A0/g, " ").replace(/\r/g, "").replace(/\n{3,}/g, "\n\n").trim();
+};
+const serializeRichNotesNode = node => {
+  if(node.nodeType===3) return escapeHtml(node.textContent || "");
+  if(node.nodeType!==1) return "";
+  const tag = node.tagName.toLowerCase();
+  if(tag==="br") return "<br>";
+  if(tag==="a"){
+    const text = (node.textContent || "").trim();
+    const href = String(node.getAttribute("href") || "").trim();
+    const combined = text
+      ? (href && !text.includes(href) && !isExternalLinkText(text) ? `${text} ${href}` : text)
+      : href;
+    return richNotesFromPlainText(combined);
+  }
+  const inner = Array.from(node.childNodes || []).map(serializeRichNotesNode).join("");
+  if(isBoldRichNode(node)) return inner ? `<strong>${inner}</strong>` : "";
+  if(["div","p","li"].includes(tag)) return `${inner}<br>`;
+  return inner;
+};
+const richNotesFromHtml = rawHtml => {
+  const template = document.createElement("template");
+  template.innerHTML = String(rawHtml || "");
+  return cleanupRichNotesHtml(Array.from(template.content.childNodes || []).map(serializeRichNotesNode).join(""));
+};
+const richNotesFromElement = element => richNotesFromHtml(element?.innerHTML || "");
+const renderRichNotesHtml = raw => {
+  const template = document.createElement("template");
+  template.innerHTML = String(raw || "");
+  const walk = nodes => Array.from(nodes || []).map(node => {
+    if(node.nodeType===3) return linkifiedHtml(node.textContent || "");
+    if(node.nodeType!==1) return "";
+    const tag = node.tagName.toLowerCase();
+    if(tag==="br") return "<br>";
+    if(isBoldRichNode(node)){
+      const inner = walk(node.childNodes);
+      return inner ? `<strong>${inner}</strong>` : "";
+    }
+    if(tag==="a"){
+      const text = (node.textContent || "").trim();
+      const href = normalizeExternalUrl(node.getAttribute("href") || text);
+      const label = text || href;
+      return label ? `<span data-external-url="${escapeHtml(href)}" style="color:#1d4ed8;text-decoration:underline;word-break:break-all;cursor:pointer;">${escapeHtml(label)}</span>` : "";
+    }
+    const inner = walk(node.childNodes);
+    if(["div","p","li"].includes(tag)) return `${inner}<br>`;
+    return inner;
+  }).join("");
+  return cleanupRichNotesHtml(walk(template.content.childNodes));
+};
 const insertHtmlAtSelection = html => {
   if(document.queryCommandSupported?.("insertHTML")){
     document.execCommand("insertHTML", false, html);
@@ -388,15 +461,15 @@ const LinkifiedText = ({ text, style }) => {
   );
 };
 
-const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onMeasure, placeholder, height, style }, forwardedRef) => {
+const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onMeasure, placeholder, height, style, richText=false }, forwardedRef) => {
   const innerRef = useRef(null);
 
   useEffect(()=>{
     const element = innerRef.current;
     if(!element || document.activeElement===element) return;
-    const html = linkifiedHtml(value);
+    const html = richText ? renderRichNotesHtml(value) : linkifiedHtml(value);
     if(element.innerHTML !== html) element.innerHTML = html;
-  },[value]);
+  },[value, richText]);
 
   useEffect(()=>{
     if(typeof forwardedRef === "function") forwardedRef(innerRef.current);
@@ -411,20 +484,26 @@ const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onMea
       suppressContentEditableWarning
       data-placeholder={placeholder}
       style={{height,minHeight:height,border:"1px solid #eef2f7",background:"#fff",...style}}
-      onInput={e=>{ onChange(editableTextFromElement(e.currentTarget)); onMeasure?.(); }}
+      onInput={e=>{ onChange(richText ? richNotesFromElement(e.currentTarget) : editableTextFromElement(e.currentTarget)); onMeasure?.(); }}
       onPaste={e=>{
         e.preventDefault();
-        const text = e.clipboardData?.getData("text/plain") || "";
-        insertHtmlAtSelection(linkifiedHtml(text).replace(/\r?\n/g, "<br>"));
+        const html = richText
+          ? renderRichNotesHtml(
+              e.clipboardData?.getData("text/html")
+                ? richNotesFromHtml(e.clipboardData.getData("text/html"))
+                : richNotesFromPlainText(e.clipboardData?.getData("text/plain") || "")
+            )
+          : linkifiedHtml(e.clipboardData?.getData("text/plain") || "").replace(/\r?\n/g, "<br>");
+        insertHtmlAtSelection(html);
         window.requestAnimationFrame(()=>{
-          const nextValue = editableTextFromElement(innerRef.current);
+          const nextValue = richText ? richNotesFromElement(innerRef.current) : editableTextFromElement(innerRef.current);
           onChange(nextValue);
           onMeasure?.();
         });
       }}
       onBlur={e=>{
-        const nextValue = editableTextFromElement(e.currentTarget);
-        e.currentTarget.innerHTML = linkifiedHtml(nextValue);
+        const nextValue = richText ? richNotesFromElement(e.currentTarget) : editableTextFromElement(e.currentTarget);
+        e.currentTarget.innerHTML = richText ? renderRichNotesHtml(nextValue) : linkifiedHtml(nextValue);
         onMeasure?.();
         onBlurSave?.(nextValue);
       }}
@@ -540,7 +619,7 @@ function App(){
       record.company,
       record.stage,
       record.industry,
-      record.notes,
+      richNotesPlainText(record.notes),
       record.end_product,
       ...(record.tags || []),
       ...(record.contacts || []).flatMap(contact => [contact.name, contact.title, contact.linkedin]),
@@ -1034,7 +1113,7 @@ function App(){
                           <td style={{padding:"12px 16px",borderBottom:"1px solid #eef3f9",fontSize:12,color:IND_COLORS[getIndustryBucket(record.industry)]||"#64748b",fontWeight:700}}>{isKnownIndustry(record.industry) ? record.industry : (record.industry || OTHER_INDUSTRY_LABEL)}</td>
                           <td style={{padding:"12px 16px",borderBottom:"1px solid #eef3f9",fontSize:12,color:"#64748b"}}>{(record.contacts||[]).map(contact=>contact.name).filter(Boolean).join(", ")||"—"}</td>
                           <td className="mono" style={{padding:"12px 16px",borderBottom:"1px solid #eef3f9",fontSize:12,color:activityColor,fontWeight:700}}>{record.lastContact||"Never"}{daysSince!=null?` (${daysSince}d)`:""}</td>
-                          <td style={{padding:"12px 16px",borderBottom:"1px solid #eef3f9",fontSize:12,color:"#64748b",maxWidth:260,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{record.notes||"—"}</td>
+                          <td style={{padding:"12px 16px",borderBottom:"1px solid #eef3f9",fontSize:12,color:"#64748b",maxWidth:260,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{richNotesPlainText(record.notes)||"—"}</td>
                         </tr>
                       );
                     })}
@@ -1133,6 +1212,7 @@ function App(){
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>NOTES</div>
                   <EditableLinkField
                     ref={notesBoxRef}
+                    richText
                     height={detailPanelHeight}
                     placeholder="Internal notes, follow-up reminders..."
                     value={notesDraft}
