@@ -103,6 +103,7 @@ const parseCsv = text => {
 const csvValue = v => { const s=String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s; };
 const downloadCsv = (rows, name) => { if(!rows.length) return; const keys=Object.keys(rows[0]); const lines=[keys.join(","),...rows.map(row=>keys.map(k=>csvValue(row[k])).join(","))]; const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([lines.join("\n")],{type:"text/csv"})); a.download=name; a.click(); };
 const fmtEmail = (name, domain, fmt) => { const parts=(name||"").trim().split(/\s+/); const first=(parts[0]||"").toLowerCase(); const last=(parts[parts.length-1]||"").toLowerCase(); const f=first[0]||""; return fmt.replace("{first}",first).replace("{last}",last).replace("{f}",f)+"@"+domain; };
+const extractUrls = text => [...new Set((String(text || "").match(/https?:\/\/[^\s]+/g) || []).map(url => url.replace(/[),.;]+$/g, "")))];
 const firstFilled = (...vals) => vals.find(v => String(v ?? "").trim()) || "";
 const normalizeIndustry = value => String(value || "").trim();
 const isKnownIndustry = value => INDUSTRIES.includes(normalizeIndustry(value));
@@ -723,6 +724,7 @@ function App(){
   const allVisibleSelected = visibleKeys.length>0 && visibleKeys.every(key => selectedKeys.includes(key));
   const exportRecords = selectedVisibleRecords.length ? selectedVisibleRecords : list;
   const exportFileName = `${tab}${selectedVisibleRecords.length ? "-selected" : ""}.csv`;
+  const selectedNoteUrls = selected?.type==="manufacturer" ? extractUrls(selected.notes) : [];
 
   useEffect(()=>{
     setSelectedKeys(keys => {
@@ -998,7 +1000,13 @@ function App(){
             <div style={{padding:"22px 28px 24px",display:"grid",gridTemplateColumns:selected.type==="manufacturer"?"minmax(0,1fr) 340px":"1fr",gap:20}}>
               {selected.type==="manufacturer" ? <>
                 <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
-                  <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>NOTES</div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8,flexWrap:"wrap"}}>
+                    <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em"}}>NOTES</div>
+                    {!!selectedNoteUrls.length && <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                      <button onClick={()=>selectedNoteUrls.forEach(url => window.open(url, "_blank", "noopener,noreferrer"))} style={{padding:"4px 8px",border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",color:"#1d4ed8",cursor:"pointer",fontSize:11,fontWeight:700}}>Open Links ({selectedNoteUrls.length})</button>
+                      <button onClick={()=>{navigator.clipboard.writeText(selectedNoteUrls.join("\n")); toast2("Copied links");}} style={{padding:"4px 8px",border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",color:"#475569",cursor:"pointer",fontSize:11,fontWeight:700}}>Copy Links</button>
+                    </div>}
+                  </div>
                   <textarea className="fieldbox" style={{minHeight:392,border:"1px solid #eef2f7",background:"#fff"}} placeholder="Internal notes, follow-up reminders..." value={selected.notes||""} onChange={e=>setSelected(cur=>({...cur,notes:e.target.value}))} onBlur={e=>saveMfrField("notes",e.target.value)} />
                 </div>
                 <div style={{display:"grid",gap:20}}>
