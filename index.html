@@ -37,7 +37,7 @@ const sb = createClient(
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxcWl0bnZ5dWVicWZ2Z3BsY2JhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxNDcwNDUsImV4cCI6MjA4ODcyMzA0NX0.15H-Ry876rY-Hl4vPzY5DZ95th_qqjDAqqVKlTSMeXY"
 );
 
-const { useState, useEffect, useMemo, useCallback } = React;
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
 const STAGES = ["Unqualified","Prospect","Outreach","Qualified","Proposal","Negotiation","Closed Won","Closed Lost"];
 const LOST_REASONS = ["Price","Competitor","No Budget","No Decision","Bad Fit","Timing","Other"];
 const INDUSTRIES = ["Food and Beverage","Concrete","Metal Refineries","Recycling","Mining/Aggregate","Asphalt Plants","Building Products"];
@@ -109,10 +109,6 @@ const isKnownIndustry = value => INDUSTRIES.includes(normalizeIndustry(value));
 const getIndustryBucket = value => isKnownIndustry(value) ? normalizeIndustry(value) : OTHER_INDUSTRY_LABEL;
 const matchesIndustryFilter = (value, filter) => filter==="All" || (filter===OTHER_INDUSTRY_LABEL ? !isKnownIndustry(value) : normalizeIndustry(value)===filter);
 const normalizeCompanyKey = value => String(value || "").toLowerCase().replace(/[^a-z0-9]/g,"");
-const isAnchorTarget = target => {
-  const node = target && (target.nodeType === 1 ? target : target.parentElement);
-  return !!node?.closest?.("a");
-};
 const stageMap = Object.fromEntries(STAGES.map(stage => [stage.toLowerCase(), stage]));
 const normalizeStage = raw => {
   const key = String(raw || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -346,8 +342,6 @@ const normalizeExternalUrl = value => {
   if(/^https?:\/\//i.test(raw)) return raw;
   return "https://" + raw.replace(/^\/+/, "");
 };
-const estimateVisualLineCount = (text, charsPerLine=96) => String(text || "").split(/\r?\n/).reduce((total, line) => total + Math.max(1, Math.ceil(String(line || "").length / charsPerLine)), 0);
-
 const LinkifiedText = ({ text, style }) => {
   const parts = String(text || "").split(EXTERNAL_LINK_RE);
   return (
@@ -391,8 +385,9 @@ function App(){
   const [taskDate,setTaskDate] = useState("");
   const [notesDraft,setNotesDraft] = useState("");
   const [contactsDraft,setContactsDraft] = useState("");
-  const [notesEditing,setNotesEditing] = useState(false);
-  const [contactsEditing,setContactsEditing] = useState(false);
+  const [detailPanelHeight,setDetailPanelHeight] = useState(280);
+  const notesBoxRef = useRef(null);
+  const contactsBoxRef = useRef(null);
   const [showEmailFmt,setShowEmailFmt] = useState(false);
   const [efName,setEfName] = useState("");
   const [efDomain,setEfDomain] = useState("");
@@ -497,8 +492,6 @@ function App(){
     setSelected(rec);
     setNotesDraft(rec.notes || "");
     setContactsDraft(contactsTextFromRecord(rec));
-    setNotesEditing(false);
-    setContactsEditing(false);
     setTaskTitle("");
     setTaskDate("");
     setNewAct({type:"Call",note:""});
@@ -747,14 +740,18 @@ function App(){
   const allVisibleSelected = visibleKeys.length>0 && visibleKeys.every(key => selectedKeys.includes(key));
   const exportRecords = selectedVisibleRecords.length ? selectedVisibleRecords : list;
   const exportFileName = `${tab}${selectedVisibleRecords.length ? "-selected" : ""}.csv`;
-  const notesPanelMinHeight = Math.max(280, estimateVisualLineCount(notesEditing ? notesDraft : (selected?.notes || ""), 126) * 22 + 52);
-  const contactsPanelMinHeight = Math.max(
-    280,
-    contactsEditing
-      ? estimateVisualLineCount(contactsDraft, 72) * 22 + 52
-      : ((selected?.contacts || []).reduce((total, contact) => total + estimateVisualLineCount([contact.name, contact.title, contact.linkedin].filter(Boolean).join("\n"), 56), 0) * 22 + 52)
-  );
-  const detailPanelMinHeight = Math.max(notesPanelMinHeight, contactsPanelMinHeight);
+  const syncDetailPanelHeight = useCallback(() => {
+    const measure = element => {
+      if(!element) return 0;
+      const previous = element.style.height;
+      element.style.height = "0px";
+      const height = element.scrollHeight;
+      element.style.height = previous;
+      return height;
+    };
+    const nextHeight = Math.max(280, measure(notesBoxRef.current), measure(contactsBoxRef.current));
+    setDetailPanelHeight(current => Math.abs(current - nextHeight) < 2 ? current : nextHeight);
+  }, []);
 
   useEffect(()=>{
     setSelectedKeys(keys => {
@@ -762,6 +759,15 @@ function App(){
       return next.length===keys.length ? keys : next;
     });
   },[visibleKeys.join("|")]);
+
+  useEffect(()=>{
+    if(selected?.type!=="manufacturer"){
+      setDetailPanelHeight(280);
+      return;
+    }
+    const frame = window.requestAnimationFrame(syncDetailPanelHeight);
+    return () => window.cancelAnimationFrame(frame);
+  },[selected?.id, selected?.type, notesDraft, contactsDraft, syncDetailPanelHeight]);
 
   const toggleSelectRecord = rec => {
     const key = recordKey(rec);
@@ -1031,35 +1037,31 @@ function App(){
               {selected.type==="manufacturer" ? <>
                 <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>NOTES</div>
-                  {notesEditing
-                    ? <textarea className="fieldbox" autoFocus style={{minHeight:detailPanelMinHeight,border:"1px solid #eef2f7",background:"#fff"}} placeholder="Internal notes, follow-up reminders..." value={notesDraft} onChange={e=>setNotesDraft(e.target.value)} onBlur={async ()=>{ const ok = await saveMfrField("notes", notesDraft); if(ok){ setNotesEditing(false); } }} />
-                    : <div style={{minHeight:detailPanelMinHeight,padding:"10px 12px",border:"1px solid #eef2f7",borderRadius:4,background:"#fff",cursor:"text"}} onClick={e=>{ if(isAnchorTarget(e.target)) return; setNotesDraft(selected.notes || ""); setNotesEditing(true); }}>
-                        {selected.notes
-                          ? <LinkifiedText text={selected.notes} style={{fontSize:13,color:"#475569",lineHeight:1.7}} />
-                          : <div style={{fontSize:13,color:"#94a3b8"}}>Internal notes, follow-up reminders...</div>}
-                      </div>
-                  }
+                  <textarea
+                    ref={notesBoxRef}
+                    className="fieldbox"
+                    style={{height:detailPanelHeight,minHeight:detailPanelHeight,border:"1px solid #eef2f7",background:"#fff",overflow:"hidden"}}
+                    placeholder="Internal notes, follow-up reminders..."
+                    value={notesDraft}
+                    onChange={e=>setNotesDraft(e.target.value)}
+                    onInput={syncDetailPanelHeight}
+                    onBlur={()=>saveMfrField("notes", notesDraft)}
+                  />
                 </div>
                 <div style={{display:"grid",gap:20,alignContent:"start"}}>
                   <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
                     <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>CONTACTS</div>
-                    {contactsEditing
-                      ? <>
-                          <textarea className="fieldbox" autoFocus style={{minHeight:detailPanelMinHeight,border:"1px solid #eef2f7",background:"#fff"}} placeholder="Name, Title, LinkedIn URL" value={contactsDraft} onChange={e=>setContactsDraft(e.target.value)} onBlur={async ()=>{ const ok = await saveContacts(contactsDraft); if(ok) setContactsEditing(false); }} />
-                          <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:6}}>One per line: Name, Title, LinkedIn</div>
-                        </>
-                      : <div style={{minHeight:detailPanelMinHeight,padding:"10px 12px",border:"1px solid #eef2f7",borderRadius:4,background:"#fff",display:"grid",gap:12,alignContent:"start",cursor:"text"}} onClick={e=>{ if(isAnchorTarget(e.target)) return; setContactsDraft(contactsTextFromRecord(selected)); setContactsEditing(true); }}>
-                          {(selected.contacts || []).length
-                            ? selected.contacts.map((contact, index)=>(
-                                <div key={[contact.name,contact.title,contact.linkedin,index].join("|")} style={{paddingBottom:10,borderBottom:index < selected.contacts.length-1 ? "1px solid #f1f5f9" : "none"}}>
-                                  <div style={{fontSize:13,fontWeight:700,color:"#172033"}}>{contact.name}</div>
-                                  {contact.title && <div style={{fontSize:12,color:"#64748b",marginTop:2}}>{contact.title}</div>}
-                                  {contact.linkedin && <a href={normalizeExternalUrl(contact.linkedin)} target="_blank" rel="noreferrer" onMouseDown={e=>e.stopPropagation()} onPointerDown={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} style={{display:"inline-block",marginTop:4,color:"#1d4ed8",textDecoration:"underline",wordBreak:"break-all",fontSize:12,cursor:"pointer"}}>{contact.linkedin}</a>}
-                                </div>
-                              ))
-                            : <div style={{fontSize:13,color:"#94a3b8"}}>No contacts yet.</div>}
-                        </div>
-                    }
+                    <textarea
+                      ref={contactsBoxRef}
+                      className="fieldbox"
+                      style={{height:detailPanelHeight,minHeight:detailPanelHeight,border:"1px solid #eef2f7",background:"#fff",overflow:"hidden"}}
+                      placeholder="Name, Title, LinkedIn URL"
+                      value={contactsDraft}
+                      onChange={e=>setContactsDraft(e.target.value)}
+                      onInput={syncDetailPanelHeight}
+                      onBlur={()=>saveContacts(contactsDraft)}
+                    />
+                    <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:6}}>One per line: Name, Title, LinkedIn</div>
                   </div>
                 </div>
               </> : (
