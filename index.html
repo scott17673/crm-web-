@@ -333,6 +333,18 @@ const replaceManufacturerContacts = async (manufacturerId, contacts) => {
   ));
 };
 
+const LinkifiedText = ({ text, style }) => {
+  const parts = String(text || "").split(/(https?:\/\/[^\s]+)/g);
+  return (
+    <div style={{whiteSpace:"pre-wrap",wordBreak:"break-word",...style}}>
+      {parts.map((part, index) => /^https?:\/\//i.test(part)
+        ? <a key={index} href={part} target="_blank" rel="noreferrer" style={{color:"#1d4ed8",textDecoration:"underline",wordBreak:"break-all"}}>{part}</a>
+        : <React.Fragment key={index}>{part}</React.Fragment>
+      )}
+    </div>
+  );
+};
+
 const Pill = ({ label, color }) => <span className="mono" style={pillStyle(color || "#64748b")}>{label}</span>;
 const Tag = ({ label, color }) => <span className="mono" style={tagStyle(color || "#1e3a8a")}>{label}</span>;
 
@@ -988,6 +1000,12 @@ function App(){
                 <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>NOTES</div>
                   <textarea className="fieldbox" style={{minHeight:392,border:"1px solid #eef2f7",background:"#fff"}} placeholder="Internal notes, follow-up reminders..." value={selected.notes||""} onChange={e=>setSelected(cur=>({...cur,notes:e.target.value}))} onBlur={e=>saveMfrField("notes",e.target.value)} />
+                  {!!selected.notes && <>
+                    <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",margin:"10px 0 6px"}}>LINK PREVIEW</div>
+                    <div style={{padding:"10px 12px",border:"1px solid #eef2f7",borderRadius:4,background:"#fff"}}>
+                      <LinkifiedText text={selected.notes} style={{fontSize:13,color:"#475569",lineHeight:1.6}} />
+                    </div>
+                  </>}
                 </div>
                 <div style={{display:"grid",gap:20}}>
                   <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
@@ -1001,7 +1019,7 @@ function App(){
                   {[["Name",selected.name],["Title",selected.title],["Email",selected.email],["Phone",selected.phone],["Industry",selected.industry],["Region",selected.region],selected.type==="lost"?["Loss Reason",selected.lostReason]:null].filter(Boolean).map(([k,v])=>(
                     <div key={k}><div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:5}}>{k}</div><div style={{fontSize:13,color:k==="Loss Reason"?"#ef4444":"#334155"}}>{v||"—"}</div></div>
                   ))}
-                  {selected.notes && <div style={{gridColumn:"1 / -1"}}><div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:5}}>NOTES</div><div style={{fontSize:13,color:"#334155",lineHeight:1.6}}>{selected.notes}</div></div>}
+                  {selected.notes && <div style={{gridColumn:"1 / -1"}}><div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:5}}>NOTES</div><LinkifiedText text={selected.notes} style={{fontSize:13,color:"#334155",lineHeight:1.6}} /></div>}
                 </div>
               )}
               <div style={{gridColumn:"1 / -1",display:"grid",gap:18}}>
@@ -1025,7 +1043,7 @@ function App(){
                   {detailActs.map(a=>(
                     <div key={a.id} style={{padding:"10px 0",borderBottom:"1px solid #f1f5f9"}}>
                       <div style={{fontSize:12}}><span className="condensed" style={{fontWeight:700,color:"#1e3a8a",textTransform:"uppercase"}}>{a.type}</span><span style={{color:"#cbd5e1"}}> · </span><span className="mono" style={{fontSize:10,color:"#94a3b8"}}>{a.date}</span></div>
-                      <div style={{fontSize:13,color:"#475569"}}>{a.note}</div>
+                      <LinkifiedText text={a.note} style={{fontSize:13,color:"#475569",lineHeight:1.6}} />
                     </div>
                   ))}
                 </div>
