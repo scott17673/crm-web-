@@ -373,8 +373,8 @@ function App(){
   const toast2 = msg => { setToast(msg); setTimeout(()=>setToast(""),3000); };
   const saveTasks = next => { setTasks(next); localStorage.setItem("ed_tasks",JSON.stringify(next)); };
 
-  const hydrate = useCallback(async ()=>{
-    setLoading(true);
+  const hydrate = useCallback(async (withSpinner=false)=>{
+    if(withSpinner) setLoading(true);
     try{
       const [mr,cr,vr,lr,ar] = await Promise.all([
         sb.from("manufacturers").select("*").order("created_at",{ascending:false}),
@@ -393,10 +393,10 @@ function App(){
       setActs((ar.data||[]).map(row => ({...row,contactId:row.contact_id})));
       setSelected(cur => !cur ? null : m.find(x=>x.id===cur.id) || v.find(x=>x.id===cur.id) || l.find(x=>x.id===cur.id) || cur);
     }catch(err){ toast2("Load error: "+err.message); }
-    setLoading(false);
+    if(withSpinner) setLoading(false);
   },[]);
 
-  useEffect(()=>{ hydrate(); },[hydrate]);
+  useEffect(()=>{ hydrate(true); },[hydrate]);
 
   const all = [...mfrs,...vendors,...lost];
   const detailActs = selected ? acts.filter(a=>a.contactId===selected.id) : [];
@@ -1103,7 +1103,7 @@ function App(){
         </div>
       )}
 
-      <div style={{position:"fixed",right:24,bottom:24,zIndex:90,display:"grid",gap:8,justifyItems:"end"}}>
+      <div style={{position:"fixed",right:24,bottom:24,zIndex:140,display:"grid",gap:8,justifyItems:"end"}}>
         {showEmailFmt && (
           <div className="slide" style={{width:300,background:"#fff",border:"1px solid #e2e8f0",borderRadius:8,padding:16,boxShadow:"0 8px 30px rgba(0,0,0,.15)"}}>
             <div className="mono" style={{fontSize:11,color:"#16a34a",letterSpacing:".08em",marginBottom:10}}>EMAIL FORMATTER</div>
