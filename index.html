@@ -338,12 +338,22 @@ const replaceManufacturerContacts = async (manufacturerId, contacts) => {
   ));
 };
 
+const EXTERNAL_LINK_RE = /((?:https?:\/\/|www\.|(?:[a-z0-9-]+\.)+[a-z]{2,}\/)[^\s<]+)/gi;
+const isExternalLinkText = value => /^(?:https?:\/\/|www\.|(?:[a-z0-9-]+\.)+[a-z]{2,}\/)[^\s<]*$/i.test(String(value || "").trim());
+const normalizeExternalUrl = value => {
+  const raw = String(value || "").trim();
+  if(!raw) return "";
+  if(/^https?:\/\//i.test(raw)) return raw;
+  return "https://" + raw.replace(/^\/+/, "");
+};
+const estimateVisualLineCount = (text, charsPerLine=96) => String(text || "").split(/\r?\n/).reduce((total, line) => total + Math.max(1, Math.ceil(String(line || "").length / charsPerLine)), 0);
+
 const LinkifiedText = ({ text, style }) => {
-  const parts = String(text || "").split(/(https?:\/\/[^\s]+)/g);
+  const parts = String(text || "").split(EXTERNAL_LINK_RE);
   return (
     <div style={{whiteSpace:"pre-wrap",wordBreak:"break-word",...style}}>
-      {parts.map((part, index) => /^https?:\/\//i.test(part)
-        ? <a key={index} href={part} target="_blank" rel="noreferrer" onMouseDown={e=>e.stopPropagation()} onPointerDown={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} style={{color:"#1d4ed8",textDecoration:"underline",wordBreak:"break-all",cursor:"pointer"}}>{part}</a>
+      {parts.map((part, index) => isExternalLinkText(part)
+        ? <a key={index} href={normalizeExternalUrl(part)} target="_blank" rel="noreferrer" onMouseDown={e=>e.stopPropagation()} onPointerDown={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} style={{color:"#1d4ed8",textDecoration:"underline",wordBreak:"break-all",cursor:"pointer"}}>{part}</a>
         : <React.Fragment key={index}>{part}</React.Fragment>
       )}
     </div>
@@ -500,7 +510,7 @@ function App(){
     const { error } = await sb.from("manufacturers").update({[dbField]:value}).eq("id",selected.id);
     if(error){ toast2("Save error: "+error.message); return false; }
     const patch = dbField===field ? {[field]:value} : {[field]:value,[dbField]:value};
-    setSelected(cur => ({...cur,...patch}));
+    setSelected(cur => cur ? {...cur,...patch} : cur);
     setMfrs(list => list.map(m => m.id===selected.id ? {...m,...patch} : m));
     toast2("Saved");
     return true;
@@ -541,7 +551,7 @@ function App(){
     setNewAct({type:"Call",note:""});
     if(selected.type==="manufacturer"){
       await sb.from("manufacturers").update({last_contact:today()}).eq("id",selected.id);
-      setSelected(cur => ({...cur,lastContact:today()}));
+      setSelected(cur => cur ? {...cur,lastContact:today()} : cur);
       setMfrs(list => list.map(m=>m.id===selected.id?{...m,lastContact:today()}:m));
     }
     setSaving(false);
@@ -737,7 +747,14 @@ function App(){
   const allVisibleSelected = visibleKeys.length>0 && visibleKeys.every(key => selectedKeys.includes(key));
   const exportRecords = selectedVisibleRecords.length ? selectedVisibleRecords : list;
   const exportFileName = `${tab}${selectedVisibleRecords.length ? "-selected" : ""}.csv`;
-  const contactPanelMinHeight = Math.max(360, (selected?.contacts?.length || 0) * 82);
+  const notesPanelMinHeight = Math.max(392, estimateVisualLineCount(notesEditing ? notesDraft : (selected?.notes || ""), 94) * 26 + 88);
+  const contactsPanelMinHeight = Math.max(
+    392,
+    contactsEditing
+      ? estimateVisualLineCount(contactsDraft, 56) * 24 + 120
+      : ((selected?.contacts || []).reduce((total, contact) => total + estimateVisualLineCount([contact.name, contact.title, contact.linkedin].filter(Boolean).join("\n"), 42), 0) * 24 + 84)
+  );
+  const detailPanelMinHeight = Math.max(notesPanelMinHeight, contactsPanelMinHeight);
 
   useEffect(()=>{
     setSelectedKeys(keys => {
@@ -1010,34 +1027,34 @@ function App(){
                 <button onClick={()=>setSelected(null)} style={{width:30,height:30,border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",cursor:"pointer",color:"#94a3b8"}}>×</button>
               </div>
             </div>
-            <div style={{padding:"22px 28px 24px",display:"grid",gridTemplateColumns:selected.type==="manufacturer"?"minmax(0,1fr) minmax(340px,420px)":"1fr",gap:20,alignItems:"start"}}>
+            <div style={{padding:"22px 28px 24px",display:"grid",gridTemplateColumns:selected.type==="manufacturer"?"minmax(0,1fr) minmax(360px,440px)":"1fr",gap:20,alignItems:"stretch"}}>
               {selected.type==="manufacturer" ? <>
                 <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>NOTES</div>
                   {notesEditing
-                    ? <textarea className="fieldbox" autoFocus style={{minHeight:392,border:"1px solid #eef2f7",background:"#fff"}} placeholder="Internal notes, follow-up reminders..." value={notesDraft} onChange={e=>setNotesDraft(e.target.value)} onBlur={async ()=>{ const ok = await saveMfrField("notes", notesDraft); if(ok){ setNotesEditing(false); } }} />
-                    : <div style={{minHeight:392,padding:"10px 12px",border:"1px solid #eef2f7",borderRadius:4,background:"#fff",cursor:"text"}} onClick={e=>{ if(isAnchorTarget(e.target)) return; setNotesDraft(selected.notes || ""); setNotesEditing(true); }}>
+                    ? <textarea className="fieldbox" autoFocus style={{minHeight:detailPanelMinHeight,border:"1px solid #eef2f7",background:"#fff"}} placeholder="Internal notes, follow-up reminders..." value={notesDraft} onChange={e=>setNotesDraft(e.target.value)} onBlur={async ()=>{ const ok = await saveMfrField("notes", notesDraft); if(ok){ setNotesEditing(false); } }} />
+                    : <div style={{minHeight:detailPanelMinHeight,padding:"10px 12px",border:"1px solid #eef2f7",borderRadius:4,background:"#fff",cursor:"text"}} onClick={e=>{ if(isAnchorTarget(e.target)) return; setNotesDraft(selected.notes || ""); setNotesEditing(true); }}>
                         {selected.notes
                           ? <LinkifiedText text={selected.notes} style={{fontSize:13,color:"#475569",lineHeight:1.7}} />
                           : <div style={{fontSize:13,color:"#94a3b8"}}>Internal notes, follow-up reminders...</div>}
                       </div>
                   }
                 </div>
-                <div style={{display:"grid",gap:20}}>
+                <div style={{display:"grid",gap:20,alignContent:"start"}}>
                   <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
                     <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>CONTACTS</div>
                     {contactsEditing
                       ? <>
-                          <textarea className="fieldbox" autoFocus style={{minHeight:Math.max(contactPanelMinHeight, contactsDraft.split("\n").filter(Boolean).length * 28 + 100),border:"1px solid #eef2f7",background:"#fff"}} placeholder="Name, Title, LinkedIn URL" value={contactsDraft} onChange={e=>setContactsDraft(e.target.value)} onBlur={async ()=>{ const ok = await saveContacts(contactsDraft); if(ok) setContactsEditing(false); }} />
+                          <textarea className="fieldbox" autoFocus style={{minHeight:detailPanelMinHeight,border:"1px solid #eef2f7",background:"#fff"}} placeholder="Name, Title, LinkedIn URL" value={contactsDraft} onChange={e=>setContactsDraft(e.target.value)} onBlur={async ()=>{ const ok = await saveContacts(contactsDraft); if(ok) setContactsEditing(false); }} />
                           <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:6}}>One per line: Name, Title, LinkedIn</div>
                         </>
-                      : <div style={{minHeight:contactPanelMinHeight,padding:"10px 12px",border:"1px solid #eef2f7",borderRadius:4,background:"#fff",display:"grid",gap:12,alignContent:"start",cursor:"text"}} onClick={e=>{ if(isAnchorTarget(e.target)) return; setContactsDraft(contactsTextFromRecord(selected)); setContactsEditing(true); }}>
+                      : <div style={{minHeight:detailPanelMinHeight,padding:"10px 12px",border:"1px solid #eef2f7",borderRadius:4,background:"#fff",display:"grid",gap:12,alignContent:"start",cursor:"text"}} onClick={e=>{ if(isAnchorTarget(e.target)) return; setContactsDraft(contactsTextFromRecord(selected)); setContactsEditing(true); }}>
                           {(selected.contacts || []).length
                             ? selected.contacts.map((contact, index)=>(
                                 <div key={[contact.name,contact.title,contact.linkedin,index].join("|")} style={{paddingBottom:10,borderBottom:index < selected.contacts.length-1 ? "1px solid #f1f5f9" : "none"}}>
                                   <div style={{fontSize:13,fontWeight:700,color:"#172033"}}>{contact.name}</div>
                                   {contact.title && <div style={{fontSize:12,color:"#64748b",marginTop:2}}>{contact.title}</div>}
-                                  {contact.linkedin && <a href={contact.linkedin} target="_blank" rel="noreferrer" onMouseDown={e=>e.stopPropagation()} onPointerDown={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} style={{display:"inline-block",marginTop:4,color:"#1d4ed8",textDecoration:"underline",wordBreak:"break-all",fontSize:12,cursor:"pointer"}}>{contact.linkedin}</a>}
+                                  {contact.linkedin && <a href={normalizeExternalUrl(contact.linkedin)} target="_blank" rel="noreferrer" onMouseDown={e=>e.stopPropagation()} onPointerDown={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} style={{display:"inline-block",marginTop:4,color:"#1d4ed8",textDecoration:"underline",wordBreak:"break-all",fontSize:12,cursor:"pointer"}}>{contact.linkedin}</a>}
                                 </div>
                               ))
                             : <div style={{fontSize:13,color:"#94a3b8"}}>No contacts yet.</div>}
