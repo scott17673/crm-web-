@@ -370,43 +370,11 @@ const insertHtmlAtSelection = html => {
     selection.addRange(range);
   }
 };
-const rangeFromPoint = (x, y) => {
-  if(document.caretRangeFromPoint) return document.caretRangeFromPoint(x, y);
-  if(document.caretPositionFromPoint){
-    const position = document.caretPositionFromPoint(x, y);
-    if(!position) return null;
-    const range = document.createRange();
-    range.setStart(position.offsetNode, position.offset);
-    range.collapse(true);
-    return range;
-  }
-  return null;
-};
-const stripEdgePunctuation = token => {
-  let out = String(token || "");
-  while(out && " \t\r\n(\"'[".includes(out[0])) out = out.slice(1);
-  while(out && " )\"'],.;:!?".includes(out[out.length - 1])) out = out.slice(0, -1);
-  return out;
-};
 const clickedExternalUrl = (event, root) => {
-  const tagged = event.target?.closest?.("[data-external-url]");
+  const node = event.target && (event.target.nodeType === 1 ? event.target : event.target.parentElement);
+  const tagged = node?.closest?.("[data-external-url]");
   if(tagged) return tagged.getAttribute("data-external-url") || "";
-  const range = rangeFromPoint(event.clientX, event.clientY);
-  if(!range) return "";
-  let node = range.startContainer;
-  let offset = range.startOffset;
-  if(node?.nodeType===1){
-    node = node.childNodes[Math.max(0, Math.min(offset, node.childNodes.length - 1))] || node.firstChild;
-    offset = 0;
-  }
-  if(!node || node.nodeType!==3 || !root?.contains(node)) return "";
-  const text = node.textContent || "";
-  let start = Math.max(0, Math.min(offset, text.length));
-  let end = start;
-  while(start>0 && !/\s/.test(text[start-1])) start--;
-  while(end<text.length && !/\s/.test(text[end])) end++;
-  const token = stripEdgePunctuation(text.slice(start, end));
-  return isExternalLinkText(token) ? normalizeExternalUrl(token) : "";
+  return "";
 };
 const LinkifiedText = ({ text, style }) => {
   const parts = String(text || "").split(EXTERNAL_LINK_RE);
