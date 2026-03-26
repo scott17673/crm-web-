@@ -109,6 +109,10 @@ const isKnownIndustry = value => INDUSTRIES.includes(normalizeIndustry(value));
 const getIndustryBucket = value => isKnownIndustry(value) ? normalizeIndustry(value) : OTHER_INDUSTRY_LABEL;
 const matchesIndustryFilter = (value, filter) => filter==="All" || (filter===OTHER_INDUSTRY_LABEL ? !isKnownIndustry(value) : normalizeIndustry(value)===filter);
 const normalizeCompanyKey = value => String(value || "").toLowerCase().replace(/[^a-z0-9]/g,"");
+const isAnchorTarget = target => {
+  const node = target && (target.nodeType === 1 ? target : target.parentElement);
+  return !!node?.closest?.("a");
+};
 const stageMap = Object.fromEntries(STAGES.map(stage => [stage.toLowerCase(), stage]));
 const normalizeStage = raw => {
   const key = String(raw || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -339,7 +343,7 @@ const LinkifiedText = ({ text, style }) => {
   return (
     <div style={{whiteSpace:"pre-wrap",wordBreak:"break-word",...style}}>
       {parts.map((part, index) => /^https?:\/\//i.test(part)
-        ? <a key={index} href={part} target="_blank" rel="noreferrer" style={{color:"#1d4ed8",textDecoration:"underline",wordBreak:"break-all"}}>{part}</a>
+        ? <a key={index} href={part} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} style={{color:"#1d4ed8",textDecoration:"underline",wordBreak:"break-all"}}>{part}</a>
         : <React.Fragment key={index}>{part}</React.Fragment>
       )}
     </div>
@@ -1011,7 +1015,7 @@ function App(){
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>NOTES</div>
                   {notesEditing
                     ? <textarea className="fieldbox" autoFocus style={{minHeight:392,border:"1px solid #eef2f7",background:"#fff"}} placeholder="Internal notes, follow-up reminders..." value={notesDraft} onChange={e=>setNotesDraft(e.target.value)} onBlur={async ()=>{ const ok = await saveMfrField("notes", notesDraft); if(ok){ setNotesEditing(false); } }} />
-                    : <div style={{minHeight:392,padding:"10px 12px",border:"1px solid #eef2f7",borderRadius:4,background:"#fff",cursor:"text"}} onClick={e=>{ if(e.target.closest("a")) return; setNotesDraft(selected.notes || ""); setNotesEditing(true); }}>
+                    : <div style={{minHeight:392,padding:"10px 12px",border:"1px solid #eef2f7",borderRadius:4,background:"#fff",cursor:"text"}} onClick={e=>{ if(isAnchorTarget(e.target)) return; setNotesDraft(selected.notes || ""); setNotesEditing(true); }}>
                         {selected.notes
                           ? <LinkifiedText text={selected.notes} style={{fontSize:13,color:"#475569",lineHeight:1.7}} />
                           : <div style={{fontSize:13,color:"#94a3b8"}}>Internal notes, follow-up reminders...</div>}
@@ -1026,13 +1030,13 @@ function App(){
                           <textarea className="fieldbox" autoFocus style={{minHeight:360,border:"1px solid #eef2f7",background:"#fff"}} placeholder="Name, Title, LinkedIn URL" value={contactsDraft} onChange={e=>setContactsDraft(e.target.value)} onBlur={async ()=>{ const ok = await saveContacts(contactsDraft); if(ok) setContactsEditing(false); }} />
                           <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:6}}>One per line: Name, Title, LinkedIn</div>
                         </>
-                      : <div style={{minHeight:360,padding:"10px 12px",border:"1px solid #eef2f7",borderRadius:4,background:"#fff",display:"grid",gap:12,alignContent:"start",cursor:"text"}} onClick={e=>{ if(e.target.closest("a")) return; setContactsDraft(contactsTextFromRecord(selected)); setContactsEditing(true); }}>
+                      : <div style={{minHeight:360,padding:"10px 12px",border:"1px solid #eef2f7",borderRadius:4,background:"#fff",display:"grid",gap:12,alignContent:"start",cursor:"text"}} onClick={e=>{ if(isAnchorTarget(e.target)) return; setContactsDraft(contactsTextFromRecord(selected)); setContactsEditing(true); }}>
                           {(selected.contacts || []).length
                             ? selected.contacts.map((contact, index)=>(
                                 <div key={[contact.name,contact.title,contact.linkedin,index].join("|")} style={{paddingBottom:10,borderBottom:index < selected.contacts.length-1 ? "1px solid #f1f5f9" : "none"}}>
                                   <div style={{fontSize:13,fontWeight:700,color:"#172033"}}>{contact.name}</div>
                                   {contact.title && <div style={{fontSize:12,color:"#64748b",marginTop:2}}>{contact.title}</div>}
-                                  {contact.linkedin && <a href={contact.linkedin} target="_blank" rel="noreferrer" style={{display:"inline-block",marginTop:4,color:"#1d4ed8",textDecoration:"underline",wordBreak:"break-all",fontSize:12}}>{contact.linkedin}</a>}
+                                  {contact.linkedin && <a href={contact.linkedin} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} style={{display:"inline-block",marginTop:4,color:"#1d4ed8",textDecoration:"underline",wordBreak:"break-all",fontSize:12}}>{contact.linkedin}</a>}
                                 </div>
                               ))
                             : <div style={{fontSize:13,color:"#94a3b8"}}>No contacts yet.</div>}
