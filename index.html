@@ -1,0 +1,1128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Ed Industrial CRM</title>
+<script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.23.5/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.3/dist/umd/supabase.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Barlow+Condensed:wght@400;500;600;700;800&family=Barlow:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#f1f5f9;font-family:'Barlow',sans-serif;color:#1e293b}
+  button,input,select,textarea{font:inherit}
+  input,select,textarea{outline:none}
+  input::placeholder,textarea::placeholder{color:#94a3b8}
+  .fade{animation:fade .18s ease}
+  .slide{animation:slide .2s ease}
+  .row:hover{background:#f8fbff;cursor:pointer}
+  .mono{font-family:'IBM Plex Mono',monospace}
+  .condensed{font-family:'Barlow Condensed',sans-serif}
+  .spinner{width:34px;height:34px;border:3px solid #e2e8f0;border-top-color:#1e3a8a;border-radius:50%;animation:spin .75s linear infinite}
+  .field{width:100%;padding:9px 11px;border:1px solid #dbe2ea;border-radius:4px;background:#fff}
+  .fieldbox{width:100%;padding:8px 10px;border:1px solid #dbe2ea;border-radius:4px;background:#fff;resize:vertical;min-height:72px}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  @keyframes slide{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { createClient } = supabase.supabase || supabase;
+const sb = createClient(
+  "https://dqqitnvyuebqfvgplcba.supabase.co",
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxcWl0bnZ5dWVicWZ2Z3BsY2JhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxNDcwNDUsImV4cCI6MjA4ODcyMzA0NX0.15H-Ry876rY-Hl4vPzY5DZ95th_qqjDAqqVKlTSMeXY"
+);
+
+const { useState, useEffect, useMemo, useCallback } = React;
+const STAGES = ["Unqualified","Prospect","Outreach","Qualified","Proposal","Negotiation","Closed Won","Closed Lost"];
+const LOST_REASONS = ["Price","Competitor","No Budget","No Decision","Bad Fit","Timing","Other"];
+const INDUSTRIES = ["Food and Beverage","Concrete","Metal Refineries","Recycling","Mining/Aggregate","Asphalt Plants","Building Products"];
+const OTHER_INDUSTRY_LABEL = "Others";
+const INDUSTRY_OPTIONS = [...INDUSTRIES, OTHER_INDUSTRY_LABEL];
+const IND_COLORS = {"Food and Beverage":"#f97316","Concrete":"#78716c","Metal Refineries":"#64748b","Recycling":"#22c55e","Mining/Aggregate":"#a16207","Asphalt Plants":"#334155","Building Products":"#1d4ed8","Others":"#475569"};
+const IND_ICONS = {"Food and Beverage":"◍","Concrete":"▦","Metal Refineries":"◉","Recycling":"↻","Mining/Aggregate":"⛏","Asphalt Plants":"▣","Building Products":"▥","Others":"◧"};
+const TYPE_CFG = {
+  manufacturer: { label: "Manufacturers", color: "#1e3a8a", icon: "⬡" },
+  vendor: { label: "Vendors", color: "#ef4444", icon: "◈" },
+  lost: { label: "Lost", color: "#94a3b8", icon: "✕" },
+};
+const STAGE_COLORS = {Unqualified:"#64748b",Prospect:"#94a3b8",Outreach:"#1e40af",Qualified:"#1e3a8a",Proposal:"#ef4444",Negotiation:"#f97316","Closed Won":"#22c55e","Closed Lost":"#64748b"};
+
+const today = () => new Date().toISOString().slice(0,10);
+const safeJson = (v, fallback) => { try { return JSON.parse(v || ""); } catch { return fallback; } };
+const pillStyle = color => ({fontSize:10,fontWeight:700,letterSpacing:".05em",padding:"3px 8px",borderRadius:2,color,background:color+"14",border:"1px solid "+color+"33",whiteSpace:"nowrap"});
+const tagStyle = color => ({fontSize:10,fontWeight:600,letterSpacing:".05em",padding:"2px 7px",borderRadius:2,color,background:color+"18",border:"1px solid "+color+"33"});
+const splitCsv = line => { const out=[]; let cur="",q=false; for(let i=0;i<line.length;i++){ const ch=line[i]; if(ch=='"'&&!q){q=true;continue;} if(ch=='"'&&q&&line[i+1]=='"'){cur+='"';i++;continue;} if(ch=='"'&&q){q=false;continue;} if(ch===","&&!q){out.push(cur);cur="";continue;} cur+=ch; } out.push(cur); return out; };
+const normalizeCsvHeader = value => String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,"");
+const parseCsv = text => {
+  const rows = [];
+  let row = [];
+  let cur = "";
+  let inQuotes = false;
+  const input = String(text || "");
+  for(let i=0;i<input.length;i++){
+    const ch = input[i];
+    if(ch === '"'){
+      if(inQuotes && input[i+1] === '"'){
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if(ch === ',' && !inQuotes){
+      row.push(cur);
+      cur = "";
+      continue;
+    }
+    if((ch === '\n' || ch === '\r') && !inQuotes){
+      if(ch === '\r' && input[i+1] === '\n') i++;
+      row.push(cur);
+      if(row.some(value => String(value).trim() !== "")) rows.push(row);
+      row = [];
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  row.push(cur);
+  if(row.some(value => String(value).trim() !== "")) rows.push(row);
+  if(rows.length < 2) return [];
+  const headers = rows[0].map(normalizeCsvHeader);
+  return rows.slice(1).map(values => {
+    const record = {};
+    headers.forEach((header, index) => { record[header] = (values[index] || "").trim(); });
+    return record;
+  });
+};
+const csvValue = v => { const s=String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s; };
+const downloadCsv = (rows, name) => { if(!rows.length) return; const keys=Object.keys(rows[0]); const lines=[keys.join(","),...rows.map(row=>keys.map(k=>csvValue(row[k])).join(","))]; const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([lines.join("\n")],{type:"text/csv"})); a.download=name; a.click(); };
+const fmtEmail = (name, domain, fmt) => { const parts=(name||"").trim().split(/\s+/); const first=(parts[0]||"").toLowerCase(); const last=(parts[parts.length-1]||"").toLowerCase(); const f=first[0]||""; return fmt.replace("{first}",first).replace("{last}",last).replace("{f}",f)+"@"+domain; };
+const firstFilled = (...vals) => vals.find(v => String(v ?? "").trim()) || "";
+const normalizeIndustry = value => String(value || "").trim();
+const isKnownIndustry = value => INDUSTRIES.includes(normalizeIndustry(value));
+const getIndustryBucket = value => isKnownIndustry(value) ? normalizeIndustry(value) : OTHER_INDUSTRY_LABEL;
+const matchesIndustryFilter = (value, filter) => filter==="All" || (filter===OTHER_INDUSTRY_LABEL ? !isKnownIndustry(value) : normalizeIndustry(value)===filter);
+const normalizeCompanyKey = value => String(value || "").toLowerCase().replace(/[^a-z0-9]/g,"");
+const stageMap = Object.fromEntries(STAGES.map(stage => [stage.toLowerCase(), stage]));
+const normalizeStage = raw => {
+  const key = String(raw || "").trim().toLowerCase().replace(/\s+/g, " ");
+  return stageMap[key] || "Prospect";
+};
+const recordKey = rec => `${rec.type}:${rec.id}`;
+const extractLinkedinUrl = text => (String(text || "").match(/https?:\/\/[^\s|,]+/i) || [])[0] || "";
+const looksLikeResearchNoise = text => /linkedin snippet|public trace|public traces|announced|common plant problems|maintenance\s*\/\s*operations leadership|recent signals|based on the|i did not|i could not|unlike |have no linkedin|manufacturing \/ eastern operations site|machine operator|inventory control|purchaser, food manufacturing|cookers|equipment|address|phone \d/i.test(String(text || "").toLowerCase());
+const looksLikeBogusImportCompany = text => /^system\.[a-z0-9_.]+$/i.test(String(text || "").trim());
+const looksLikePersonName = text => /^[A-Z][A-Za-z'.&-]+(?:\s+[A-Z][A-Za-z'.&-]+){1,4}$/.test(String(text || "").trim());
+const extractImportCompanyName = row => firstFilled(row.company, row.company_name);
+const isLikelyCompanyName = raw => {
+  const text = String(raw || "").replace(/\s+/g," ").trim();
+  if(!text) return false;
+  if(text.length < 2 || text.length > 110) return false;
+  if(looksLikeBogusImportCompany(text)) return false;
+  if(/https?:\/\//i.test(text) || /\blinkedin\b/i.test(text)) return false;
+  if(/^\(\d{4}[\/-]\d{2}[\/-]\d{2}\)/.test(text)) return false;
+  if(text.includes("|")) return false;
+  if(/\b(blvd|boulevard|parkway|pkwy|road|rd|street|st|avenue|ave|drive|dr|suite|unit)\b/i.test(text) && /\d/.test(text)) return false;
+  if(/^(common plant problems|maintenance \/ operations leadership|recent signals|fabrication|machines|equipment|cookers|address|phone)\b/i.test(text.toLowerCase())) return false;
+  if(/^(based on|i did not|i could not|unlike|have no)\b/i.test(text)) return false;
+  if(looksLikeResearchNoise(text)) return false;
+  if(text.split(/\s+/).length > 12) return false;
+  return true;
+};
+const matchesActivityDate = (lastContact, targetDate, mode) => {
+  if(!targetDate) return true;
+  if(!lastContact) return false;
+  if(mode==="on") return lastContact===targetDate;
+  if(mode==="on_or_before") return lastContact<=targetDate;
+  return lastContact>=targetDate;
+};
+const sortRecordsByActivity = (records, sortBy) => {
+  if(sortBy==="activity_asc") return [...records].sort((a,b)=>(a.lastContact||"9999").localeCompare(b.lastContact||"9999"));
+  if(sortBy==="activity_desc") return [...records].sort((a,b)=>(b.lastContact||"").localeCompare(a.lastContact||""));
+  return records;
+};
+const taskMatchesRecord = (task, rec) => task.contact_id===rec.id && (!task.contact_type || task.contact_type===rec.type || task.company===rec.company);
+const manufacturerDbField = field => ({ notes: "signals" }[field] || field);
+const ensureOk = result => {
+  if(result?.error) throw result.error;
+  return result;
+};
+const dedupeContacts = contacts => {
+  const seen = new Set();
+  return contacts.filter(contact => {
+    const name = String(contact?.name || "").trim();
+    const title = String(contact?.title || "").trim();
+    const linkedin = String(contact?.linkedin || "").trim();
+    if(!name) return false;
+    const key = [name.toLowerCase(), title.toLowerCase(), linkedin.toLowerCase()].join("|");
+    if(seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).map(contact => ({
+    name: String(contact.name || "").trim(),
+    title: String(contact.title || "").trim(),
+    linkedin: String(contact.linkedin || "").trim(),
+  }));
+};
+const parseLinkedinContactLine = line => {
+  const linkedin = extractLinkedinUrl(line);
+  if(!linkedin && !/\blinkedin\b/i.test(String(line || ""))) return null;
+  const cleaned = String(line || "")
+    .replace(/https?:\/\/[^\s|,]+/ig, "")
+    .replace(/\bLinkedIn\b/ig, "")
+    .replace(/\u00e2\u20ac\u201c|\u00e2\u20ac\u201d|[\u2012-\u2015]/g, " - ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const primaryBlock = cleaned.split(/\s*\|\s*/)[0].trim();
+  const dash = primaryBlock.match(/^(.*?)\s+-\s+(.*)$/);
+  if(!dash) return null;
+  const name = dash[1].trim().replace(/^[,;:\-\s]+|[,;:\-\s]+$/g, "");
+  const title = dash[2].trim().replace(/^[,;:\-\s]+|[,;:\-\s]+$/g, "");
+  if(!looksLikePersonName(name) || looksLikeResearchNoise(name)) return null;
+  return { name, title, linkedin };
+};
+const parseStructuredContactsField = raw => dedupeContacts(
+  String(raw || "")
+    .split(/(?:;;|\r?\n)+/)
+    .flatMap(entry => {
+      const linkedin = extractLinkedinUrl(entry);
+      const cleaned = entry
+        .replace(/https?:\/\/[^\s|,]+/ig, "")
+        .replace(/\bLinkedIn\b/ig, "")
+        .replace(/[–—]/g, " - ")
+        .trim()
+        .replace(/^[|,\s]+|[|,\s]+$/g, "");
+      const blocks = (cleaned.includes("|") ? cleaned.split(/\s*\|\s*/) : [cleaned])
+        .flatMap(part => part.split(/,\s*(?=[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\s+-)/))
+        .map(part => part.trim())
+        .filter(Boolean);
+      return blocks.map(part => {
+        const dash = part.match(/^(.*?)\s+-\s+(.*)$/);
+        return {
+          name: dash ? dash[1] : part,
+          title: dash ? dash[2] : "",
+          linkedin,
+        };
+      });
+    })
+    .filter(contact => contact.name && !looksLikeResearchNoise(contact.name) && !/^https?:\/\//i.test(contact.name))
+);
+const extractContactsFromNotes = notes => {
+  const matches = [...String(notes || "").matchAll(/RE contact:\s*([^;]+)/gi)].map(match => match[1].trim()).filter(Boolean);
+  const contacts = matches.flatMap(block =>
+    block
+      .split(/\s*\|\s*|\s*\/\s*|,\s*(?=[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/)
+      .map(piece => piece.trim())
+      .filter(Boolean)
+      .map(piece => {
+        const dash = piece.match(/^(.*?)\s+-\s+(.*)$/);
+        if(dash){
+          return { name: dash[1], title: dash[2], linkedin: "" };
+        }
+        return { name: piece, title: "", linkedin: "" };
+      })
+  );
+  const linkedinContacts = String(notes || "")
+    .split(/\r?\n+/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(parseLinkedinContactLine)
+    .filter(Boolean);
+  return dedupeContacts([...contacts, ...linkedinContacts]);
+};
+const buildImportNotes = row => [firstFilled(row.notes, row.note, row.internal_notes), firstFilled(row.chat_gpt_search_result, row.search_result, row.research_notes, row.research_result)].filter(Boolean).join("\n\n");
+const normalizeImportDate = raw => {
+  const text = String(raw || "").trim();
+  if(!text) return "";
+  if(/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const parts = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if(!parts) return "";
+  const month = parts[1].padStart(2, "0");
+  const day = parts[2].padStart(2, "0");
+  const year = parts[3].length===2 ? `20${parts[3]}` : parts[3];
+  return `${year}-${month}-${day}`;
+};
+const normalizeImportRow = row => ({
+  company: extractImportCompanyName(row),
+  stage: firstFilled(row.stage, row.pipeline, row.pipeline_stage),
+  industry: firstFilled(row.industry),
+  date: firstFilled(row.date, row.last_contact, row.re_date),
+  notes: buildImportNotes(row),
+  contacts: firstFilled(row.contacts, row.contact, row.contact_list, row.contact_lines, row.contact_name_position_linked_in),
+  contact_name: firstFilled(row.contact_name, row.primary_contact, row.contact_person),
+  contact_title: firstFilled(row.contact_title, row.position, row.role),
+  contact_linkedin: firstFilled(row.contact_linkedin, row.linkedin),
+  phone: firstFilled(row.phone, row.phone_number, row.phones),
+  emails: firstFilled(row.email, row.emails),
+  end_product: firstFilled(row.end_product, row.product, row.products),
+  raw: row,
+});
+const exportRecordRows = (records, tab) => {
+  if(tab==="manufacturer"){
+    return records.map(record => ({
+      company: record.company || "",
+      stage: record.stage || "",
+      industry: record.industry || "",
+      notes: record.notes || "",
+      contacts: (record.contacts || []).map(contact => [contact.name, contact.title, contact.linkedin].filter(Boolean).join(" | ")).join(" ;; "),
+      tags: (record.tags || []).join(", "),
+      last_activity: record.lastContact || "",
+    }));
+  }
+  if(tab==="vendor"){
+    return records.map(record => ({
+      company: record.company || "",
+      name: record.name || "",
+      title: record.title || "",
+      email: record.email || "",
+      phone: record.phone || "",
+      industry: record.industry || "",
+      region: record.region || "",
+      stage: record.stage || "",
+      notes: record.notes || "",
+      tags: (record.tags || []).join(", "),
+      last_activity: record.lastContact || "",
+    }));
+  }
+  return records.map(record => ({
+    company: record.company || "",
+    name: record.name || "",
+    title: record.title || "",
+    email: record.email || "",
+    phone: record.phone || "",
+    industry: record.industry || "",
+    region: record.region || "",
+    loss_reason: record.lostReason || "",
+    value: record.value || "",
+    notes: record.notes || "",
+    tags: (record.tags || []).join(", "),
+    last_activity: record.lastContact || "",
+  }));
+};
+const deriveImportedContacts = row => {
+  const explicitContacts = firstFilled(row.contacts, row.contact, row.contact_list, row.contact_lines);
+  const namedContact = firstFilled(row.contact_name, row.primary_contact, row.contact_person)
+    ? [{
+        name: firstFilled(row.contact_name, row.primary_contact, row.contact_person),
+        title: firstFilled(row.contact_title, row.title),
+        linkedin: firstFilled(row.contact_linkedin, row.linkedin),
+      }]
+    : [];
+  return dedupeContacts([
+    ...namedContact,
+    ...(explicitContacts ? parseStructuredContactsField(explicitContacts) : []),
+    ...extractContactsFromNotes(firstFilled(row.notes, row.note, row.internal_notes)),
+  ]);
+};
+const replaceManufacturerContacts = async (manufacturerId, contacts) => {
+  ensureOk(await sb.from("manufacturer_contacts").delete().eq("manufacturer_id", manufacturerId));
+  if(!contacts.length) return;
+  ensureOk(await sb.from("manufacturer_contacts").insert(
+    contacts.map(contact => ({
+      manufacturer_id: manufacturerId,
+      name: contact.name,
+      title: contact.title,
+      linkedin: contact.linkedin,
+    }))
+  ));
+};
+
+const Pill = ({ label, color }) => <span className="mono" style={pillStyle(color || "#64748b")}>{label}</span>;
+const Tag = ({ label, color }) => <span className="mono" style={tagStyle(color || "#1e3a8a")}>{label}</span>;
+
+function App(){
+  const [mfrs,setMfrs] = useState([]);
+  const [vendors,setVendors] = useState([]);
+  const [lost,setLost] = useState([]);
+  const [acts,setActs] = useState([]);
+  const [loading,setLoading] = useState(true);
+  const [saving,setSaving] = useState(false);
+  const [toast,setToast] = useState("");
+  const [view,setView] = useState("dashboard");
+  const [tab,setTab] = useState("manufacturer");
+  const [search,setSearch] = useState("");
+  const [stageF,setStageF] = useState("All");
+  const [indF,setIndF] = useState("All");
+  const [reasonF,setReasonF] = useState("All");
+  const [sortBy,setSortBy] = useState("default");
+  const [activityDate,setActivityDate] = useState("");
+  const [activityMode,setActivityMode] = useState("on_or_after");
+  const [selectedKeys,setSelectedKeys] = useState([]);
+  const [selected,setSelected] = useState(null);
+  const [showForm,setShowForm] = useState(false);
+  const [formType,setFormType] = useState("manufacturer");
+  const [form,setForm] = useState({});
+  const [newAct,setNewAct] = useState({type:"Call",note:""});
+  const [tasks,setTasks] = useState(()=>safeJson(localStorage.getItem("ed_tasks"),[]));
+  const [taskTitle,setTaskTitle] = useState("");
+  const [taskDate,setTaskDate] = useState("");
+  const [contactsDraft,setContactsDraft] = useState("");
+  const [showEmailFmt,setShowEmailFmt] = useState(false);
+  const [efName,setEfName] = useState("");
+  const [efDomain,setEfDomain] = useState("");
+  const [efFmt,setEfFmt] = useState("{first}.{last}");
+  const [importRows,setImportRows] = useState(null);
+  const [importMode,setImportMode] = useState("merge");
+
+  const toast2 = msg => { setToast(msg); setTimeout(()=>setToast(""),3000); };
+  const saveTasks = next => { setTasks(next); localStorage.setItem("ed_tasks",JSON.stringify(next)); };
+
+  const hydrate = useCallback(async ()=>{
+    setLoading(true);
+    try{
+      const [mr,cr,vr,lr,ar] = await Promise.all([
+        sb.from("manufacturers").select("*").order("created_at",{ascending:false}),
+        sb.from("manufacturer_contacts").select("*"),
+        sb.from("vendors").select("*").order("created_at",{ascending:false}),
+        sb.from("lost_contacts").select("*").order("created_at",{ascending:false}),
+        sb.from("activities").select("*").order("date",{ascending:false}),
+      ]);
+      const contacts = cr.data || [];
+      const m = (mr.data||[]).map(row => ({...row,type:"manufacturer",tags:row.tags||[],lastContact:row.last_contact,industry:row.industry||"",notes:row.signals||"",contacts:contacts.filter(c=>c.manufacturer_id===row.id)}));
+      const v = (vr.data||[]).map(row => ({...row,type:"vendor",tags:row.tags||[],lastContact:row.last_contact}));
+      const l = (lr.data||[]).map(row => ({...row,type:"lost",tags:row.tags||[],lastContact:row.last_contact,lostReason:row.lost_reason,value:row.deal_value}));
+      setMfrs(m);
+      setVendors(v);
+      setLost(l);
+      setActs((ar.data||[]).map(row => ({...row,contactId:row.contact_id})));
+      setSelected(cur => !cur ? null : m.find(x=>x.id===cur.id) || v.find(x=>x.id===cur.id) || l.find(x=>x.id===cur.id) || cur);
+    }catch(err){ toast2("Load error: "+err.message); }
+    setLoading(false);
+  },[]);
+
+  useEffect(()=>{ hydrate(); },[hydrate]);
+
+  const all = [...mfrs,...vendors,...lost];
+  const detailActs = selected ? acts.filter(a=>a.contactId===selected.id) : [];
+  const activitySearchByRecord = useMemo(()=>{
+    const map = new Map();
+    acts.forEach(act => {
+      const key = `${act.contact_type || "manufacturer"}:${act.contactId}`;
+      const chunk = [act.type, act.note, act.date, act.created_by].filter(Boolean).join(" ");
+      map.set(key, `${map.get(key) || ""} ${chunk}`.trim());
+    });
+    return map;
+  },[acts]);
+  const taskSearchByRecord = useMemo(()=>{
+    const map = new Map();
+    tasks.forEach(task => {
+      const key = `${task.contact_type || "manufacturer"}:${task.contact_id}`;
+      const chunk = [task.title, task.due_date, task.company].filter(Boolean).join(" ");
+      map.set(key, `${map.get(key) || ""} ${chunk}`.trim());
+    });
+    return map;
+  },[tasks]);
+  const matchesManufacturerSearch = useCallback((record, query) => {
+    if(!query) return true;
+    const haystack = [
+      record.company,
+      record.stage,
+      record.industry,
+      record.notes,
+      record.end_product,
+      ...(record.tags || []),
+      ...(record.contacts || []).flatMap(contact => [contact.name, contact.title, contact.linkedin]),
+      activitySearchByRecord.get(recordKey(record)),
+      taskSearchByRecord.get(recordKey(record)),
+    ].filter(Boolean).join(" ").toLowerCase();
+    return haystack.includes(query);
+  },[activitySearchByRecord, taskSearchByRecord]);
+  const matchesOtherSearch = useCallback((record, query) => {
+    if(!query) return true;
+    const haystack = [
+      record.company,
+      record.name,
+      record.title,
+      record.email,
+      record.phone,
+      record.industry,
+      record.region,
+      record.stage,
+      record.lostReason,
+      record.notes,
+      ...(record.tags || []),
+      activitySearchByRecord.get(recordKey(record)),
+      taskSearchByRecord.get(recordKey(record)),
+    ].filter(Boolean).join(" ").toLowerCase();
+    return haystack.includes(query);
+  },[activitySearchByRecord, taskSearchByRecord]);
+  const filteredMfrs = useMemo(()=>{
+    const q=search.trim().toLowerCase();
+    const base=mfrs.filter(m=>matchesManufacturerSearch(m, q)&&(stageF==="All"||m.stage===stageF)&&matchesIndustryFilter(m.industry, indF)&&matchesActivityDate(m.lastContact, activityDate, activityMode));
+    return sortRecordsByActivity(base, sortBy);
+  },[mfrs,search,stageF,indF,sortBy,activityDate,activityMode,matchesManufacturerSearch]);
+  const filteredOthers = useMemo(()=>{
+    const q=search.trim().toLowerCase();
+    const base=(tab==="vendor"?vendors:lost).filter(r=>matchesOtherSearch(r, q)&&(tab!=="lost"?(stageF==="All"||r.stage===stageF):(reasonF==="All"||r.lostReason===reasonF))&&matchesActivityDate(r.lastContact, activityDate, activityMode));
+    return sortRecordsByActivity(base, sortBy);
+  },[vendors,lost,tab,search,stageF,reasonF,sortBy,activityDate,activityMode,matchesOtherSearch]);
+
+  const openRecord = rec => {
+    setSelected(rec);
+    setContactsDraft((rec.contacts||[]).map(c=>[c.name,c.title,c.linkedin].filter(Boolean).join(", ")).join("\n"));
+    setTaskTitle("");
+    setTaskDate("");
+    setNewAct({type:"Call",note:""});
+  };
+
+  const saveMfrField = async (field, value) => {
+    if(!selected || selected.type!=="manufacturer") return;
+    const dbField = manufacturerDbField(field);
+    const { error } = await sb.from("manufacturers").update({[dbField]:value}).eq("id",selected.id);
+    if(error) return toast2("Save error: "+error.message);
+    const patch = dbField===field ? {[field]:value} : {[field]:value,[dbField]:value};
+    setSelected(cur => ({...cur,...patch}));
+    setMfrs(list => list.map(m => m.id===selected.id ? {...m,...patch} : m));
+    toast2("Saved");
+  };
+
+  const saveContacts = async raw => {
+    if(!selected || selected.type!=="manufacturer") return;
+    try{
+      const rows=raw.split("\n").map(line=>line.trim()).filter(Boolean).map(line=>{ const p=line.split(",").map(x=>x.trim()); return {manufacturer_id:selected.id,name:p[0]||"",title:p[1]||"",linkedin:p[2]||""}; }).filter(c=>c.name);
+      ensureOk(await sb.from("manufacturer_contacts").delete().eq("manufacturer_id",selected.id));
+      if(rows.length) ensureOk(await sb.from("manufacturer_contacts").insert(rows));
+      await hydrate();
+      setContactsDraft(raw);
+      toast2("Saved");
+    }catch(err){
+      toast2("Save error: "+err.message);
+    }
+  };
+
+  const addTask = () => {
+    if(!selected || !taskTitle.trim()) return;
+    saveTasks([{id:Date.now(),contact_id:selected.id,contact_type:selected.type,company:selected.company,title:taskTitle,due_date:taskDate,done:false},...tasks]);
+    setTaskTitle("");
+    setTaskDate("");
+  };
+  const toggleTask = id => saveTasks(tasks.map(t=>t.id===id?{...t,done:!t.done}:t));
+  const deleteTask = id => saveTasks(tasks.filter(t=>t.id!==id));
+
+  const logActivity = async () => {
+    if(!selected || !newAct.note.trim()) return;
+    setSaving(true);
+    const payload={contact_id:selected.id,contact_type:selected.type,type:newAct.type,note:newAct.note,date:today(),created_by:"You"};
+    const { data, error } = await sb.from("activities").insert(payload).select().single();
+    if(error){ setSaving(false); return toast2("Log error: "+error.message); }
+    setActs(cur => [{...data,contactId:data.contact_id},...cur]);
+    setNewAct({type:"Call",note:""});
+    if(selected.type==="manufacturer"){
+      await sb.from("manufacturers").update({last_contact:today()}).eq("id",selected.id);
+      setSelected(cur => ({...cur,lastContact:today()}));
+      setMfrs(list => list.map(m=>m.id===selected.id?{...m,lastContact:today()}:m));
+    }
+    setSaving(false);
+    toast2("Logged");
+  };
+
+  const deleteRecords = async records => {
+    if(!records.length) return;
+    setSaving(true);
+    try{
+      const run = async query => {
+        const { error } = await query;
+        if(error) throw error;
+      };
+      const manufacturerIds = records.filter(r=>r.type==="manufacturer").map(r=>r.id);
+      const vendorIds = records.filter(r=>r.type==="vendor").map(r=>r.id);
+      const lostIds = records.filter(r=>r.type==="lost").map(r=>r.id);
+
+      if(manufacturerIds.length){
+        await run(sb.from("manufacturer_contacts").delete().in("manufacturer_id", manufacturerIds));
+        await run(sb.from("activities").delete().eq("contact_type","manufacturer").in("contact_id", manufacturerIds));
+        await run(sb.from("manufacturers").delete().in("id", manufacturerIds));
+      }
+      if(vendorIds.length){
+        await run(sb.from("activities").delete().eq("contact_type","vendor").in("contact_id", vendorIds));
+        await run(sb.from("vendors").delete().in("id", vendorIds));
+      }
+      if(lostIds.length){
+        await run(sb.from("activities").delete().eq("contact_type","lost").in("contact_id", lostIds));
+        await run(sb.from("lost_contacts").delete().in("id", lostIds));
+      }
+
+      if(selected && records.some(rec => rec.id===selected.id && rec.type===selected.type)) setSelected(null);
+      setSelectedKeys(keys => keys.filter(key => !records.some(rec => recordKey(rec)===key)));
+      saveTasks(tasks.filter(task => !records.some(rec => taskMatchesRecord(task, rec))));
+      await hydrate();
+      toast2(records.length===1 ? "Deleted" : `Deleted ${records.length} records`);
+    }catch(err){
+      toast2("Delete error: "+err.message);
+    }
+    setSaving(false);
+  };
+
+  const deleteRecord = async rec => {
+    if(!window.confirm("Delete "+rec.company+"?")) return;
+    await deleteRecords([rec]);
+  };
+
+  const deleteManufacturersByIds = async manufacturerIds => {
+    const uniqueIds = [...new Set((manufacturerIds || []).filter(Boolean))];
+    if(!uniqueIds.length) return;
+    const idSet = new Set(uniqueIds);
+    const companySet = new Set(mfrs.filter(record => idSet.has(record.id)).map(record => record.company));
+    ensureOk(await sb.from("manufacturer_contacts").delete().in("manufacturer_id", uniqueIds));
+    ensureOk(await sb.from("activities").delete().eq("contact_type","manufacturer").in("contact_id", uniqueIds));
+    ensureOk(await sb.from("manufacturers").delete().in("id", uniqueIds));
+    if(selected && selected.type==="manufacturer" && idSet.has(selected.id)) setSelected(null);
+    setSelectedKeys(keys => keys.filter(key => !uniqueIds.some(id => key===`manufacturer:${id}`)));
+    saveTasks(tasks.filter(task => {
+      if(idSet.has(task.contact_id)) return false;
+      if(task.company && companySet.has(task.company)) return false;
+      return true;
+    }));
+  };
+
+  const openForm = (type=tab, rec=null) => {
+    setFormType(type);
+      setForm(rec ? {...rec, tags:(rec.tags||[]).join(", "), contactsText:(rec.contacts||[]).map(c=>[c.name,c.title,c.linkedin].filter(Boolean).join(", ")).join("\n")} : {
+      company:"",name:"",title:"",email:"",phone:"",industry:"",region:"",stage:"Prospect",lostReason:"",value:"",tags:"",notes:"",contactsText:""
+    });
+    setShowForm(true);
+  };
+
+  const saveForm = async () => {
+    setSaving(true);
+    try{
+      const tags=(form.tags||"").split(",").map(x=>x.trim()).filter(Boolean);
+      if(formType==="manufacturer"){
+        const row={company:form.company,stage:form.stage||"Prospect",industry:form.industry||"",signals:form.notes||"",tags,last_contact:today()};
+        let id=form.id;
+        if(id) ensureOk(await sb.from("manufacturers").update(row).eq("id",id));
+        else { const { data, error } = await sb.from("manufacturers").insert(row).select().single(); ensureOk({ error }); id=data?.id; }
+        await replaceManufacturerContacts(id, (form.contactsText||"").split("\n").map(line=>line.trim()).filter(Boolean).map(line=>{ const p=line.split(",").map(x=>x.trim()); return {name:p[0]||"",title:p[1]||"",linkedin:p[2]||""}; }));
+      } else if(formType==="vendor"){
+        const row={company:form.company,name:form.name,title:form.title,email:form.email,phone:form.phone,industry:form.industry,region:form.region,stage:form.stage||"Prospect",tags,notes:form.notes,last_contact:today()};
+        if(form.id) ensureOk(await sb.from("vendors").update(row).eq("id",form.id)); else ensureOk(await sb.from("vendors").insert(row));
+      } else {
+        const row={company:form.company,name:form.name,title:form.title,email:form.email,phone:form.phone,industry:form.industry,region:form.region,lost_reason:form.lostReason,deal_value:parseInt(form.value||0,10)||0,tags,notes:form.notes,last_contact:today()};
+        if(form.id) ensureOk(await sb.from("lost_contacts").update(row).eq("id",form.id)); else ensureOk(await sb.from("lost_contacts").insert(row));
+      }
+      await hydrate();
+      setShowForm(false);
+      toast2(form.id ? "Updated" : "Added");
+    }catch(err){
+      toast2("Save error: "+err.message);
+    }
+    setSaving(false);
+  };
+
+  const handleImport = async file => {
+    const text = await file.text();
+    const rows = parseCsv(text);
+    if(!rows.length) return toast2("No rows found");
+    setImportMode("merge");
+    setImportRows(rows);
+  };
+
+  const commitImport = async () => {
+    if(!importRows?.length) return;
+    setSaving(true);
+    try{
+      const incomingByKey = new Map();
+      for(const rawRow of importRows){
+        const row = normalizeImportRow(rawRow);
+        if(!isLikelyCompanyName(row.company)) continue;
+        incomingByKey.set(normalizeCompanyKey(row.company), row);
+      }
+
+      const existingByKey = new Map();
+      for(const record of mfrs){
+        const key = normalizeCompanyKey(record.company);
+        if(!key) continue;
+        if(!existingByKey.has(key)) existingByKey.set(key, []);
+        existingByKey.get(key).push(record);
+      }
+
+      const manufacturerIdsToDelete = [];
+
+      for(const [key, row] of incomingByKey.entries()){
+        const importStage = normalizeStage(row.stage);
+        const importContacts = deriveImportedContacts(row);
+        const payload={
+          company: row.company,
+          stage: importStage,
+          industry: row.industry || "",
+          end_product: row.end_product || "",
+          signals: row.notes,
+          tags: (row.raw?.tags || "").split(/[;,]/).map(x=>x.trim()).filter(Boolean),
+          last_contact: normalizeImportDate(row.date) || today()
+        };
+        const existingMatches = existingByKey.get(key) || [];
+        const keepRecord = existingMatches.find(record => String(record.company || "").trim().toLowerCase()===String(row.company || "").trim().toLowerCase()) || existingMatches[0];
+
+        if(keepRecord){
+          ensureOk(await sb.from("manufacturers").update(payload).eq("id",keepRecord.id));
+          if(importMode==="replace" || importContacts.length) await replaceManufacturerContacts(keepRecord.id, importContacts);
+          if(importMode==="replace") manufacturerIdsToDelete.push(...existingMatches.filter(record => record.id!==keepRecord.id).map(record => record.id));
+        } else {
+          const insertedResult = await sb.from("manufacturers").insert(payload).select("id").single();
+          ensureOk(insertedResult);
+          if(insertedResult.data?.id && importContacts.length) await replaceManufacturerContacts(insertedResult.data.id, importContacts);
+        }
+      }
+
+      if(importMode==="replace"){
+        for(const [key, records] of existingByKey.entries()){
+          if(!incomingByKey.has(key)) manufacturerIdsToDelete.push(...records.map(record => record.id));
+        }
+      }
+
+      await deleteManufacturersByIds(manufacturerIdsToDelete);
+      setImportRows(null);
+      await hydrate();
+      toast2(importMode==="replace" ? "Import complete. Manufacturers synced to CSV." : "Import complete");
+    }catch(err){
+      toast2("Import error: "+err.message);
+    }
+    setSaving(false);
+  };
+
+  const list = tab==="manufacturer" ? filteredMfrs : filteredOthers;
+  const importPreviewRows = (importRows || []).map(normalizeImportRow);
+  const validImportRows = importPreviewRows.filter(row => isLikelyCompanyName(row.company));
+  const importRowsByKey = new Map();
+  validImportRows.forEach(row => importRowsByKey.set(normalizeCompanyKey(row.company), row));
+  const importUniqueRows = [...importRowsByKey.values()];
+  const existingManufacturerByKey = new Map();
+  mfrs.forEach(record => {
+    const key = normalizeCompanyKey(record.company);
+    if(!key) return;
+    if(!existingManufacturerByKey.has(key)) existingManufacturerByKey.set(key, []);
+    existingManufacturerByKey.get(key).push(record);
+  });
+  const importAddCount = importUniqueRows.filter(row => !existingManufacturerByKey.has(normalizeCompanyKey(row.company))).length;
+  const importUpdateCount = importUniqueRows.length - importAddCount;
+  const importDeleteCount = importMode==="replace"
+    ? [...existingManufacturerByKey.entries()].reduce((sum,[key,records]) => sum + (!importRowsByKey.has(key) ? records.length : Math.max(0, records.length - 1)), 0)
+    : 0;
+  const importSkipCount = importPreviewRows.length - validImportRows.length;
+  const visibleKeys = list.map(recordKey);
+  const visibleKeySet = new Set(visibleKeys);
+  const selectedVisibleRecords = list.filter(rec => selectedKeys.includes(recordKey(rec)));
+  const allVisibleSelected = visibleKeys.length>0 && visibleKeys.every(key => selectedKeys.includes(key));
+  const exportRecords = selectedVisibleRecords.length ? selectedVisibleRecords : list;
+  const exportFileName = `${tab}${selectedVisibleRecords.length ? "-selected" : ""}.csv`;
+
+  useEffect(()=>{
+    setSelectedKeys(keys => {
+      const next = keys.filter(key => visibleKeySet.has(key));
+      return next.length===keys.length ? keys : next;
+    });
+  },[visibleKeys.join("|")]);
+
+  const toggleSelectRecord = rec => {
+    const key = recordKey(rec);
+    setSelectedKeys(keys => keys.includes(key) ? keys.filter(k=>k!==key) : [...keys,key]);
+  };
+
+  const toggleSelectAllVisible = () => {
+    setSelectedKeys(keys => {
+      if(allVisibleSelected) return keys.filter(key => !visibleKeySet.has(key));
+      return [...keys.filter(key => !visibleKeySet.has(key)), ...visibleKeys];
+    });
+  };
+
+  const bulkDeleteSelected = async () => {
+    if(!selectedVisibleRecords.length) return;
+    if(!window.confirm(`Delete ${selectedVisibleRecords.length} selected record${selectedVisibleRecords.length===1?"":"s"}?`)) return;
+    await deleteRecords(selectedVisibleRecords);
+  };
+
+  if(loading) return <div style={{minHeight:"100vh",display:"grid",placeItems:"center"}}><div style={{display:"grid",gap:14,justifyItems:"center"}}><div className="spinner"/><div className="condensed" style={{letterSpacing:".1em",fontWeight:700,color:"#64748b"}}>LOADING</div></div></div>;
+
+  const overdue = tasks.filter(t=>!t.done&&t.due_date&&t.due_date<today());
+  const upcoming = tasks.filter(t=>!t.done&&(!t.due_date||t.due_date>=today()));
+  const pipe = mfrs.filter(m=>!["Closed Won","Closed Lost"].includes(m.stage)).length;
+  const hot = mfrs.filter(m=>(m.tags||[]).includes("Hot")).length;
+  const lostValue = lost.reduce((sum,r)=>sum+(r.value||0),0);
+  const soFacilities = mfrs.filter(m=>m.has_so_facilities).length;
+  const preferredVendors = vendors.filter(v=>(v.tags||[]).includes("Preferred")).length;
+  const industryStats = INDUSTRY_OPTIONS.map(industry => ({ industry, count: mfrs.filter(m=>getIndustryBucket(m.industry)===industry).length }));
+  const stageStats = STAGES.map(stage => ({ stage, count: mfrs.filter(m=>m.stage===stage).length }));
+  const maxIndustryCount = Math.max(1, ...industryStats.map(item => item.count));
+  const maxStageCount = Math.max(1, ...stageStats.map(item => item.count));
+  const stagePriority = {Negotiation:0,Proposal:1,Qualified:2,Outreach:3,Prospect:4,Unqualified:5};
+  const hotProspects = [...mfrs]
+    .filter(m=>!["Closed Won","Closed Lost"].includes(m.stage))
+    .sort((a,b)=>{
+      const stageDiff = (stagePriority[a.stage] ?? 99) - (stagePriority[b.stage] ?? 99);
+      if(stageDiff!==0) return stageDiff;
+      return (a.lastContact || "9999-12-31").localeCompare(b.lastContact || "9999-12-31");
+    })
+    .slice(0,8);
+
+  return (
+    <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
+      <header style={{height:58,padding:"0 28px",display:"flex",alignItems:"center",justifyContent:"space-between",background:"#fff",borderBottom:"3px solid #ef4444",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
+        <div className="condensed" style={{fontSize:22,fontWeight:800,letterSpacing:".04em"}}><span style={{color:"#ef4444"}}>ED</span> <span style={{color:"#1e3a8a"}}>INDUSTRIAL</span><span style={{fontSize:14,color:"#94a3b8",marginLeft:8,letterSpacing:".12em"}}>CRM</span></div>
+        <div style={{display:"flex",gap:6}}>
+          {["dashboard","contacts"].map(v=><button key={v} onClick={()=>setView(v)} style={{padding:"7px 16px",border:"none",borderRadius:3,background:view===v?"#1e3a8a":"transparent",color:view===v?"#fff":"#64748b",cursor:"pointer"}}>{v==="dashboard"?"Dashboard":"Contacts"}</button>)}
+        </div>
+        <button onClick={()=>openForm(tab)} style={{padding:"8px 18px",border:"none",borderRadius:3,background:"#ef4444",color:"#fff",fontWeight:700,cursor:"pointer"}}>+ Add Company</button>
+      </header>
+
+      <main style={{flex:1,padding:28}}>
+        {view==="dashboard" && (
+          <div className="fade" style={{display:"grid",gap:20}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:16}}>
+              {[
+                ["Manufacturers",mfrs.length,soFacilities+" with S.Ont facilities","#1e3a8a","◌"],
+                ["In Pipeline",pipe,hot+" hot accounts","#ef4444","◈"],
+                ["Vendors",vendors.length,preferredVendors+" preferred","#1d4ed8","◉"],
+                ["Lost Value","$"+(lostValue/1000).toFixed(0)+"k",lost.length+" lost contacts","#94a3b8","✕"],
+              ].map(([label,value,sub,color,icon])=>(
+                <div key={label} style={{background:"#fff",border:"1px solid #d8e2ef",borderTop:"3px solid "+color,borderRadius:7,padding:"18px 20px",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+                    <span style={{color,fontSize:11}}>{icon}</span>
+                    <div className="mono" style={{fontSize:10,letterSpacing:".14em",color:"#7f92b0",textTransform:"uppercase"}}>{label}</div>
+                  </div>
+                  <div className="condensed" style={{fontSize:34,fontWeight:800,color:"#18233a",lineHeight:1,marginBottom:8}}>{value}</div>
+                  <div style={{fontSize:12,color:"#8fa0b8"}}>{sub}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1.4fr 1fr",gap:20,alignItems:"stretch"}}>
+              <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+                <div className="mono" style={{padding:"14px 18px",fontSize:11,letterSpacing:".16em",color:"#6f84a6",textTransform:"uppercase",borderBottom:"1px solid #d8e2ef",background:"#f8fbff"}}>By Industry</div>
+                <div style={{padding:"16px 18px",display:"grid",gap:10}}>
+                  {industryStats.map(item=>(
+                    <div key={item.industry} onClick={()=>{setView("contacts"); setTab("manufacturer"); setIndF(item.industry); setStageF("All");}} style={{cursor:"pointer"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                        <div style={{display:"flex",alignItems:"center",gap:7,color:IND_COLORS[item.industry]||"#64748b",fontSize:12,fontWeight:700,textTransform:"uppercase"}}>
+                          <span>{IND_ICONS[item.industry]||"•"}</span>
+                          <span className="condensed" style={{letterSpacing:".03em"}}>{item.industry}</span>
+                        </div>
+                        <span className="mono" style={{fontSize:11,color:"#8ea0bd"}}>{item.count}</span>
+                      </div>
+                      <div style={{height:4,borderRadius:999,background:"#eef3f9"}}>
+                        <div style={{height:"100%",width:(item.count/maxIndustryCount*100)+"%",background:IND_COLORS[item.industry]||"#64748b",borderRadius:999}} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+                <div className="mono" style={{padding:"14px 18px",fontSize:11,letterSpacing:".16em",color:"#6f84a6",textTransform:"uppercase",borderBottom:"1px solid #d8e2ef",background:"#f8fbff"}}>Pipeline by Stage</div>
+                <div style={{padding:"16px 18px",display:"grid",gap:10}}>
+                  {stageStats.map(item=>(
+                    <div key={item.stage} onClick={()=>{setView("contacts"); setTab("manufacturer"); setStageF(item.stage); setIndF("All");}} style={{cursor:"pointer"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                        <span className="condensed" style={{fontSize:12,fontWeight:700,letterSpacing:".04em",color:STAGE_COLORS[item.stage]||"#64748b",textTransform:"uppercase"}}>{item.stage}</span>
+                        <span className="mono" style={{fontSize:11,color:"#8ea0bd"}}>{item.count}</span>
+                      </div>
+                      <div style={{height:4,borderRadius:999,background:"#eef3f9"}}>
+                        <div style={{height:"100%",width:(item.count/maxStageCount*100)+"%",background:STAGE_COLORS[item.stage]||"#64748b",borderRadius:999}} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+                <div className="mono" style={{padding:"14px 18px",fontSize:11,letterSpacing:".16em",color:"#6f84a6",textTransform:"uppercase",borderBottom:"1px solid #d8e2ef",background:"#f8fbff"}}>⚠ Overdue</div>
+                <div style={{minHeight:302}}>
+                  {overdue.length===0
+                    ? <div className="mono" style={{padding:"18px 20px",fontSize:12,color:"#8ea0bd"}}>No overdue tasks.</div>
+                    : overdue.map(t=>(
+                      <div key={t.id} style={{padding:"12px 18px",borderBottom:"1px solid #eef3f9",display:"flex",gap:10,alignItems:"flex-start"}}>
+                        <input type="checkbox" checked={t.done} onChange={()=>toggleTask(t.id)} style={{marginTop:2}} />
+                        <div style={{minWidth:0}}>
+                          <div style={{fontSize:13,fontWeight:700,color:"#18233a"}}>{t.title}</div>
+                          <div className="mono" style={{fontSize:11,color:"#ef4444",marginTop:3}}>{t.company}{t.due_date?" · "+t.due_date:""}</div>
+                        </div>
+                      </div>
+                    ))
+                  }
+                </div>
+              </section>
+
+              <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+                <div className="mono" style={{padding:"14px 18px",fontSize:11,letterSpacing:".16em",color:"#6f84a6",textTransform:"uppercase",borderBottom:"1px solid #d8e2ef",background:"#f8fbff"}}>📋 Upcoming Tasks</div>
+                <div style={{minHeight:302}}>
+                  {upcoming.length===0
+                    ? <div className="mono" style={{padding:"18px 20px",fontSize:12,color:"#8ea0bd"}}>No upcoming tasks.</div>
+                    : upcoming.slice(0,8).map(t=>(
+                      <div key={t.id} style={{padding:"12px 18px",borderBottom:"1px solid #eef3f9",display:"flex",gap:10,alignItems:"flex-start"}}>
+                        <input type="checkbox" checked={t.done} onChange={()=>toggleTask(t.id)} style={{marginTop:2}} />
+                        <div style={{minWidth:0}}>
+                          <div style={{fontSize:13,fontWeight:700,color:"#18233a"}}>{t.title}</div>
+                          <div className="mono" style={{fontSize:11,color:"#7f92b0",marginTop:3}}>{t.company}{t.due_date?" · "+t.due_date:""}</div>
+                        </div>
+                      </div>
+                    ))
+                  }
+                </div>
+              </section>
+            </div>
+
+            <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+              <div style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #d8e2ef",background:"#f8fbff",gap:12}}>
+                <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase"}}>🔥 Hot Prospects — Needs Follow-up</div>
+                <div className="mono" style={{fontSize:10,color:"#8ea0bd"}}>Active pipeline · sorted by oldest activity</div>
+              </div>
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse"}}>
+                  <thead>
+                    <tr style={{background:"#fbfdff"}}>
+                      {["Company","Stage","Industry","Contacts","Last Activity","Notes"].map((label,index)=><th key={label} className="mono" style={{padding:"10px 16px",fontSize:10,letterSpacing:".12em",textAlign:"left",color:index===4?"#ef4444":"#8ea0bd",borderBottom:"2px solid #d8e2ef",textTransform:"uppercase"}}>{label}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {hotProspects.length===0 && <tr><td colSpan="6" className="mono" style={{padding:20,color:"#8ea0bd"}}>No active prospects yet.</td></tr>}
+                    {hotProspects.map(record=>{
+                      const daysSince = record.lastContact ? Math.floor((new Date() - new Date(record.lastContact + "T00:00:00")) / 86400000) : null;
+                      const activityColor = daysSince==null ? "#8ea0bd" : daysSince>30 ? "#ef4444" : daysSince>14 ? "#f97316" : "#22c55e";
+                      return (
+                        <tr key={record.id} className="row" onClick={()=>{setView("contacts"); openRecord(record);}}>
+                          <td style={{padding:"12px 16px",borderBottom:"1px solid #eef3f9",fontWeight:700,color:"#18233a"}}>{record.company}</td>
+                          <td style={{padding:"12px 16px",borderBottom:"1px solid #eef3f9"}}><Pill label={record.stage} color={STAGE_COLORS[record.stage]||"#64748b"} /></td>
+                          <td style={{padding:"12px 16px",borderBottom:"1px solid #eef3f9",fontSize:12,color:IND_COLORS[getIndustryBucket(record.industry)]||"#64748b",fontWeight:700}}>{isKnownIndustry(record.industry) ? record.industry : (record.industry || OTHER_INDUSTRY_LABEL)}</td>
+                          <td style={{padding:"12px 16px",borderBottom:"1px solid #eef3f9",fontSize:12,color:"#64748b"}}>{(record.contacts||[]).map(contact=>contact.name).filter(Boolean).join(", ")||"—"}</td>
+                          <td className="mono" style={{padding:"12px 16px",borderBottom:"1px solid #eef3f9",fontSize:12,color:activityColor,fontWeight:700}}>{record.lastContact||"Never"}{daysSince!=null?` (${daysSince}d)`:""}</td>
+                          <td style={{padding:"12px 16px",borderBottom:"1px solid #eef3f9",fontSize:12,color:"#64748b",maxWidth:260,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{record.notes||"—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        )}
+
+        {view==="contacts" && (
+          <div className="fade" style={{display:"grid",gap:14}}>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",position:"relative",top:"auto"}}>
+              {Object.entries(TYPE_CFG).map(([key,cfg])=>(
+                <button key={key} onClick={()=>{setTab(key);setSearch("");setStageF("All");setReasonF("All");}} style={{padding:"7px 14px",borderRadius:3,border:"2px solid "+(tab===key?cfg.color:"#e2e8f0"),background:tab===key?cfg.color+"15":"#fff",color:tab===key?cfg.color:"#64748b",fontWeight:700,cursor:"pointer"}}>
+                  {cfg.icon} {cfg.label}
+                </button>
+              ))}
+              <input className="field" style={{maxWidth:260}} value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search company, contacts, notes..." />
+              {tab==="manufacturer" && <>
+                <select className="field" style={{maxWidth:150}} value={stageF} onChange={e=>setStageF(e.target.value)}><option value="All">All Stages</option>{STAGES.map(s=><option key={s}>{s}</option>)}</select>
+                <select className="field" style={{maxWidth:180}} value={indF} onChange={e=>setIndF(e.target.value)}><option value="All">All Industries</option>{INDUSTRY_OPTIONS.map(i=><option key={i}>{i}</option>)}</select>
+              </>}
+              {tab==="lost" && <select className="field" style={{maxWidth:160}} value={reasonF} onChange={e=>setReasonF(e.target.value)}><option value="All">All Reasons</option>{LOST_REASONS.map(r=><option key={r}>{r}</option>)}</select>}
+              <select className="field" style={{maxWidth:165}} value={sortBy} onChange={e=>setSortBy(e.target.value)}><option value="default">Sort: Default</option><option value="activity_asc">Oldest Activity</option><option value="activity_desc">Newest Activity</option></select>
+              <select className="field" style={{maxWidth:150}} value={activityMode} onChange={e=>setActivityMode(e.target.value)}>
+                <option value="on_or_after">Activity On/After</option>
+                <option value="on">Activity On</option>
+                <option value="on_or_before">Activity On/Before</option>
+              </select>
+              <input className="field" style={{maxWidth:150}} type="date" value={activityDate} onChange={e=>setActivityDate(e.target.value)} title="Activity date" />
+              {activityDate && <button onClick={()=>setActivityDate("")} style={{padding:"8px 12px",border:"1px solid #cbd5e1",borderRadius:4,background:"#fff",color:"#64748b",cursor:"pointer"}}>Clear Date</button>}
+              <div style={{flex:1}} />
+              <button onClick={toggleSelectAllVisible} disabled={!list.length} style={{padding:"8px 14px",border:"1px solid #cbd5e1",borderRadius:4,background:list.length?"#fff":"#f8fafc",color:list.length?"#334155":"#94a3b8",cursor:list.length?"pointer":"not-allowed"}}>{allVisibleSelected ? "Clear Visible" : "Select All Visible"}</button>
+              <button onClick={bulkDeleteSelected} disabled={!selectedVisibleRecords.length} style={{padding:"8px 14px",border:"none",borderRadius:4,background:selectedVisibleRecords.length?"#ef4444":"#e2e8f0",color:"#fff",cursor:selectedVisibleRecords.length?"pointer":"not-allowed"}}>Delete Selected ({selectedVisibleRecords.length})</button>
+              <button onClick={()=>downloadCsv(exportRecordRows(exportRecords, tab), exportFileName)} disabled={!exportRecords.length} style={{padding:"8px 14px",border:"1px solid #1e3a8a",borderRadius:4,background:exportRecords.length?"#eff6ff":"#f8fafc",color:exportRecords.length?"#1e3a8a":"#94a3b8",cursor:exportRecords.length?"pointer":"not-allowed"}}>{selectedVisibleRecords.length ? `Export Selected (${selectedVisibleRecords.length})` : "Export CSV"}</button>
+              {tab==="manufacturer" && <label style={{padding:"8px 14px",border:"1px solid #22c55e",borderRadius:4,background:"#f0fdf4",color:"#15803d",cursor:"pointer"}}>Import CSV<input type="file" accept=".csv" style={{display:"none"}} onChange={e=>e.target.files?.[0]&&handleImport(e.target.files[0])} /></label>}
+            </div>
+
+            <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:6,overflow:"hidden"}}>
+              <table style={{width:"100%",borderCollapse:"collapse"}}>
+                <thead><tr style={{background:"#f8fafc"}}>
+                  <th style={{padding:"10px 14px",borderBottom:"2px solid #e2e8f0",width:44}}>
+                    <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAllVisible} disabled={!list.length} />
+                  </th>
+                  {["Company",tab==="manufacturer"?"Industry":"Contact",tab==="manufacturer"?"Contacts":"Title",tab==="lost"?"Loss":"Stage","Last Activity","Tags"].map(h=><th key={h} className="mono" style={{padding:"10px 14px",fontSize:10,color:"#94a3b8",textAlign:"left",letterSpacing:".08em",borderBottom:"2px solid #e2e8f0"}}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {!list.length && <tr><td colSpan="7" style={{padding:40,textAlign:"center",color:"#cbd5e1"}}>No records found</td></tr>}
+                  {list.map(rec=>(
+                    <tr key={rec.id} className="row" onClick={()=>openRecord(rec)}>
+                      <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9"}} onClick={e=>e.stopPropagation()}>
+                        <input type="checkbox" checked={selectedKeys.includes(recordKey(rec))} onChange={()=>toggleSelectRecord(rec)} />
+                      </td>
+                      <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9",fontWeight:700,color:"#0f172a"}}>{rec.company}</td>
+                      <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9",fontSize:12,color:"#64748b"}}>{tab==="manufacturer"?(isKnownIndustry(rec.industry) ? rec.industry : (rec.industry || OTHER_INDUSTRY_LABEL)):(rec.name||"—")}</td>
+                      <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9",fontSize:12,color:"#64748b"}}>{tab==="manufacturer"?((rec.contacts||[]).map(c=>c.name).filter(Boolean).slice(0,2).join(", ")||"—"):(rec.title||"—")}</td>
+                      <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9"}}>{tab==="lost"?<Tag label={rec.lostReason||"—"} color="#ef4444" />:<Pill label={rec.stage||"—"} color={STAGE_COLORS[rec.stage]||"#64748b"} />}</td>
+                      <td className="mono" style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9",fontSize:11,color:rec.lastContact?"#64748b":"#cbd5e1"}}>{rec.lastContact||"—"}</td>
+                      <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9"}}><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{(rec.tags||[]).map(t=><Tag key={t} label={t} color={TYPE_CFG[rec.type].color} />)}</div></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </main>
+
+      {selected && (
+        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.5)",display:"grid",placeItems:"center",padding:20,zIndex:100}} onClick={e=>e.target===e.currentTarget&&setSelected(null)}>
+          <div className="slide" style={{width:"min(1380px,100%)",maxHeight:"94vh",overflow:"auto",background:"#fff",borderRadius:8,border:"1px solid #d7dfeb",boxShadow:"0 24px 60px rgba(0,0,0,.18)"}}>
+            <div style={{borderTop:"3px solid #1e3a8a"}} />
+            <div style={{padding:"18px 28px",display:"flex",justifyContent:"space-between",gap:20,borderBottom:"1px solid #e8eef6",alignItems:"flex-start"}}>
+              <div style={{flex:1}}>
+                <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:8}}>
+                  {selected.type==="manufacturer"
+                    ? <input className="field condensed" style={{fontSize:22,fontWeight:800,maxWidth:360,border:"none",padding:0,background:"transparent",color:"#172033"}} value={selected.company||""} onChange={e=>setSelected(cur=>({...cur,company:e.target.value}))} onBlur={e=>saveMfrField("company",e.target.value)} />
+                    : <div className="condensed" style={{fontSize:22,fontWeight:800,color:"#172033"}}>{selected.company}</div>}
+                  <Tag label={TYPE_CFG[selected.type].icon+" "+TYPE_CFG[selected.type].label.slice(0,-1)} color={selected.type==="manufacturer"?"#1e3a8a":TYPE_CFG[selected.type].color} />
+                  {selected.type==="manufacturer" && <>
+                    <select className="field mono" style={{width:"auto",padding:"5px 10px",height:30,fontSize:12,background:"#f8fbff"}} value={selected.stage||"Prospect"} onChange={e=>{ const v=e.target.value; setSelected(cur=>({...cur,stage:v})); saveMfrField("stage",v); }}>{STAGES.map(s=><option key={s}>{s}</option>)}</select>
+                    <select className="field mono" style={{width:"auto",padding:"5px 10px",height:30,fontSize:12,background:"#fffaf5",color:"#f97316"}} value={selected.industry||""} onChange={e=>{ const v=e.target.value; setSelected(cur=>({...cur,industry:v})); saveMfrField("industry",v); }}><option value="">No Industry</option>{INDUSTRIES.map(i=><option key={i}>{i}</option>)}</select>
+                  </>}
+                </div>
+                <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{(selected.tags||[]).map(t=><Tag key={t} label={t} color={TYPE_CFG[selected.type].color} />)}</div>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>deleteRecord(selected)} style={{padding:"10px 18px",border:"none",borderRadius:4,background:"#ef4444",color:"#fff",fontWeight:800,cursor:"pointer",fontSize:12,letterSpacing:".05em"}}>DELETE</button>
+                <button onClick={()=>setSelected(null)} style={{width:30,height:30,border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",cursor:"pointer",color:"#94a3b8"}}>×</button>
+              </div>
+            </div>
+            <div style={{padding:"22px 28px 24px",display:"grid",gridTemplateColumns:selected.type==="manufacturer"?"minmax(0,1fr) 340px":"1fr",gap:20}}>
+              {selected.type==="manufacturer" ? <>
+                <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
+                  <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>NOTES</div>
+                  <textarea className="fieldbox" style={{minHeight:392,border:"1px solid #eef2f7",background:"#fff"}} placeholder="Internal notes, follow-up reminders..." value={selected.notes||""} onChange={e=>setSelected(cur=>({...cur,notes:e.target.value}))} onBlur={e=>saveMfrField("notes",e.target.value)} />
+                </div>
+                <div style={{display:"grid",gap:20}}>
+                  <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
+                    <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>CONTACTS</div>
+                    <textarea className="fieldbox" style={{minHeight:360,border:"1px solid #eef2f7",background:"#fff"}} placeholder="Name, Title, LinkedIn URL" value={contactsDraft} onChange={e=>setContactsDraft(e.target.value)} onBlur={e=>saveContacts(e.target.value)} />
+                    <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:6}}>One per line: Name, Title, LinkedIn</div>
+                  </div>
+                </div>
+              </> : (
+                <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:16,display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14}}>
+                  {[["Name",selected.name],["Title",selected.title],["Email",selected.email],["Phone",selected.phone],["Industry",selected.industry],["Region",selected.region],selected.type==="lost"?["Loss Reason",selected.lostReason]:null].filter(Boolean).map(([k,v])=>(
+                    <div key={k}><div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:5}}>{k}</div><div style={{fontSize:13,color:k==="Loss Reason"?"#ef4444":"#334155"}}>{v||"—"}</div></div>
+                  ))}
+                  {selected.notes && <div style={{gridColumn:"1 / -1"}}><div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:5}}>NOTES</div><div style={{fontSize:13,color:"#334155",lineHeight:1.6}}>{selected.notes}</div></div>}
+                </div>
+              )}
+              <div style={{gridColumn:"1 / -1",display:"grid",gap:18}}>
+                <div style={{paddingTop:18,borderTop:"1px solid #e8eef6"}}>
+                  <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:10}}>TASKS</div>
+                  <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 130px 70px",gap:8,marginBottom:10}}><input className="field" value={taskTitle} onChange={e=>setTaskTitle(e.target.value)} placeholder="Add a task..." style={{background:"#fbfcfe"}} /><input className="field mono" style={{background:"#fff"}} type="date" value={taskDate} onChange={e=>setTaskDate(e.target.value)} /><button onClick={addTask} style={{padding:"8px 14px",border:"none",borderRadius:4,background:"#ef4444",color:"#fff",cursor:"pointer",fontWeight:800,fontSize:12,letterSpacing:".05em"}}>ADD</button></div>
+                  {tasks.filter(t=>taskMatchesRecord(t, selected)).length===0 && <div className="mono" style={{fontSize:11,color:"#8ea0bd"}}>No tasks yet.</div>}
+                  {tasks.filter(t=>taskMatchesRecord(t, selected)).map(t=>(
+                    <div key={t.id} style={{display:"flex",gap:8,alignItems:"center",padding:"8px 0",borderBottom:"1px solid #f1f5f9"}}>
+                      <input type="checkbox" checked={t.done} onChange={()=>toggleTask(t.id)} />
+                      <div style={{flex:1}}><div style={{fontSize:13,textDecoration:t.done?"line-through":"none",color:t.done?"#94a3b8":"#0f172a"}}>{t.title}</div>{t.due_date&&<div className="mono" style={{fontSize:10,color:t.due_date<today()&&!t.done?"#ef4444":"#94a3b8"}}>{t.due_date}</div>}</div>
+                      <button onClick={()=>deleteTask(t.id)} style={{border:"none",background:"transparent",color:"#cbd5e1",fontSize:16,cursor:"pointer"}}>×</button>
+                    </div>
+                  ))}
+                </div>
+                <div style={{paddingTop:18,borderTop:"1px solid #e8eef6"}}>
+                  <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:10}}>LOG ACTIVITY</div>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>{["Call","Email","Meeting","Note"].map(t=><button key={t} onClick={()=>setNewAct(cur=>({...cur,type:t}))} style={{padding:"6px 14px",borderRadius:3,border:"2px solid "+(newAct.type===t?"#1e3a8a":"#d7dfeb"),background:newAct.type===t?"#eef4ff":"#fff",color:newAct.type===t?"#1e3a8a":"#8ea0bd",cursor:"pointer",fontWeight:800,fontSize:12,letterSpacing:".05em"}}>{t.toUpperCase()}</button>)}</div>
+                  <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 64px",gap:8,marginBottom:10}}><input className="field" value={newAct.note} onChange={e=>setNewAct(cur=>({...cur,note:e.target.value}))} placeholder="Add a note..." style={{background:"#fbfcfe"}} onKeyDown={e=>e.key==="Enter"&&logActivity()} /><button onClick={logActivity} style={{padding:"8px 14px",border:"none",borderRadius:4,background:"#ef4444",color:"#fff",cursor:"pointer",fontWeight:800,fontSize:12,letterSpacing:".05em"}}>LOG</button></div>
+                  {!detailActs.length && <div className="mono" style={{fontSize:11,color:"#8ea0bd"}}>No activity yet.</div>}
+                  {detailActs.map(a=>(
+                    <div key={a.id} style={{padding:"10px 0",borderBottom:"1px solid #f1f5f9"}}>
+                      <div style={{fontSize:12}}><span className="condensed" style={{fontWeight:700,color:"#1e3a8a",textTransform:"uppercase"}}>{a.type}</span><span style={{color:"#cbd5e1"}}> · </span><span className="mono" style={{fontSize:10,color:"#94a3b8"}}>{a.date}</span></div>
+                      <div style={{fontSize:13,color:"#475569"}}>{a.note}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showForm && (
+        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.5)",display:"grid",placeItems:"center",padding:20,zIndex:110}} onClick={e=>e.target===e.currentTarget&&setShowForm(false)}>
+          <div className="slide" style={{width:"min(620px,100%)",background:"#fff",border:"1px solid #e2e8f0",borderRadius:8,overflow:"hidden"}}>
+            <div style={{borderTop:"3px solid "+TYPE_CFG[formType].color}} />
+            <div style={{padding:"18px 24px 0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div className="condensed" style={{fontSize:20,fontWeight:800}}>{form.id?"Edit":"New"} {formType==="manufacturer"?"Company":formType==="vendor"?"Vendor":"Lost Contact"}</div>
+              <button onClick={()=>setShowForm(false)} style={{width:30,height:30,border:"1px solid #e2e8f0",borderRadius:4,background:"#fff",cursor:"pointer"}}>×</button>
+            </div>
+            <div style={{padding:24,display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+              <input className="field" style={{gridColumn:"1 / -1"}} placeholder="Company" value={form.company||""} onChange={e=>setForm(cur=>({...cur,company:e.target.value}))} />
+              {formType==="manufacturer" ? <>
+                <select className="field" value={form.stage||"Prospect"} onChange={e=>setForm(cur=>({...cur,stage:e.target.value}))}>{STAGES.map(s=><option key={s}>{s}</option>)}</select>
+                <select className="field" value={form.industry||""} onChange={e=>setForm(cur=>({...cur,industry:e.target.value}))}><option value="">Select industry</option>{INDUSTRIES.map(i=><option key={i}>{i}</option>)}</select>
+                <textarea className="fieldbox" style={{gridColumn:"1 / -1",minHeight:110}} placeholder="Contacts: Name, Title, LinkedIn" value={form.contactsText||""} onChange={e=>setForm(cur=>({...cur,contactsText:e.target.value}))} />
+              </> : <>
+                {["name","title","email","phone","industry","region"].map(k=><input key={k} className="field" placeholder={k[0].toUpperCase()+k.slice(1)} value={form[k]||""} onChange={e=>setForm(cur=>({...cur,[k]:e.target.value}))} />)}
+                {formType==="vendor" && <select className="field" value={form.stage||"Prospect"} onChange={e=>setForm(cur=>({...cur,stage:e.target.value}))}>{STAGES.map(s=><option key={s}>{s}</option>)}</select>}
+                {formType==="lost" && <>
+                  <select className="field" value={form.lostReason||""} onChange={e=>setForm(cur=>({...cur,lostReason:e.target.value}))}><option value="">Loss reason</option>{LOST_REASONS.map(r=><option key={r}>{r}</option>)}</select>
+                  <input className="field" type="number" placeholder="Deal value" value={form.value||""} onChange={e=>setForm(cur=>({...cur,value:e.target.value}))} />
+                </>}
+              </>}
+              <input className="field" style={{gridColumn:"1 / -1"}} placeholder="Tags (comma separated)" value={form.tags||""} onChange={e=>setForm(cur=>({...cur,tags:e.target.value}))} />
+              <textarea className="fieldbox" style={{gridColumn:"1 / -1"}} placeholder="Notes" value={form.notes||""} onChange={e=>setForm(cur=>({...cur,notes:e.target.value}))} />
+              <div style={{gridColumn:"1 / -1",display:"flex",justifyContent:"flex-end",gap:10}}>
+                <button onClick={()=>setShowForm(false)} style={{padding:"8px 14px",border:"none",borderRadius:4,background:"#f1f5f9",color:"#64748b",cursor:"pointer"}}>Cancel</button>
+                <button onClick={saveForm} style={{padding:"8px 14px",border:"none",borderRadius:4,background:"#ef4444",color:"#fff",cursor:"pointer"}}>{saving?"Saving...":(form.id?"Save Changes":"Add")}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {importRows && (
+        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.5)",display:"grid",placeItems:"center",padding:20,zIndex:115}} onClick={e=>e.target===e.currentTarget&&setImportRows(null)}>
+          <div className="slide" style={{width:"min(760px,100%)",background:"#fff",border:"1px solid #e2e8f0",borderRadius:8,overflow:"hidden"}}>
+            <div style={{borderTop:"3px solid #22c55e"}} />
+            <div style={{padding:"18px 24px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #e2e8f0"}}>
+              <div>
+                <div className="condensed" style={{fontSize:20,fontWeight:800}}>Import Preview</div>
+                <div className="mono" style={{fontSize:11,color:"#64748b"}}>{validImportRows.length} valid rows · {importUniqueRows.length} unique companies · {importSkipCount} skipped</div>
+              </div>
+              <button onClick={()=>setImportRows(null)} style={{width:30,height:30,border:"1px solid #e2e8f0",borderRadius:4,background:"#fff",cursor:"pointer"}}>×</button>
+            </div>
+            <div style={{padding:"14px 24px",borderBottom:"1px solid #e2e8f0",display:"grid",gap:12,background:"#fbfdff"}}>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                <button onClick={()=>setImportMode("merge")} style={{padding:"8px 12px",borderRadius:4,border:"1px solid "+(importMode==="merge"?"#1e3a8a":"#d7dfeb"),background:importMode==="merge"?"#eef4ff":"#fff",color:importMode==="merge"?"#1e3a8a":"#64748b",cursor:"pointer",fontWeight:700}}>Add / Update Only</button>
+                <button onClick={()=>setImportMode("replace")} style={{padding:"8px 12px",borderRadius:4,border:"1px solid "+(importMode==="replace"?"#ef4444":"#d7dfeb"),background:importMode==="replace"?"#fef2f2":"#fff",color:importMode==="replace"?"#ef4444":"#64748b",cursor:"pointer",fontWeight:700}}>Replace Manufacturers from CSV</button>
+              </div>
+              <div className="mono" style={{fontSize:11,color:"#64748b",display:"flex",gap:14,flexWrap:"wrap"}}>
+                <span>ADD: {importAddCount}</span>
+                <span>UPDATE: {importUpdateCount}</span>
+                {importMode==="replace" && <span style={{color:"#ef4444"}}>DELETE: {importDeleteCount}</span>}
+              </div>
+              <div style={{fontSize:12,color:"#64748b"}}>Manufacturers are created only from the CSV <span className="mono">company</span> column. Contact names, LinkedIn lines, and notes stay attached to that same company row.</div>
+              {importMode==="replace" && <div style={{fontSize:12,color:"#ef4444"}}>Replace mode makes the `manufacturers` table match this CSV. Manufacturers not in the file, plus duplicate manufacturer rows, will be deleted along with their linked contacts and activities.</div>}
+            </div>
+            <div style={{maxHeight:"50vh",overflow:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#f8fafc"}}>{["Company","Industry","Stage","Status"].map(h=><th key={h} className="mono" style={{padding:"10px 14px",fontSize:10,color:"#94a3b8",textAlign:"left",letterSpacing:".08em",borderBottom:"2px solid #e2e8f0"}}>{h}</th>)}</tr></thead><tbody>{importPreviewRows.map((r,i)=>{const ok=isLikelyCompanyName(r.company); return <tr key={i}><td style={{padding:"10px 14px",borderBottom:"1px solid #f1f5f9",color:ok?"#0f172a":"#ef4444",fontWeight:600}}>{r.company||"SKIPPED"}</td><td style={{padding:"10px 14px",borderBottom:"1px solid #f1f5f9"}}>{r.industry||"—"}</td><td style={{padding:"10px 14px",borderBottom:"1px solid #f1f5f9"}}>{normalizeStage(r.stage)}</td><td style={{padding:"10px 14px",borderBottom:"1px solid #f1f5f9"}}><Tag label={ok?"READY":"SKIP"} color={ok?"#22c55e":"#ef4444"} /></td></tr>;})}</tbody></table>
+            </div>
+            <div style={{padding:"14px 24px",display:"flex",justifyContent:"flex-end",gap:10,borderTop:"1px solid #e2e8f0"}}>
+              <button onClick={()=>setImportRows(null)} style={{padding:"8px 14px",border:"none",borderRadius:4,background:"#f1f5f9",color:"#64748b",cursor:"pointer"}}>Cancel</button>
+              <button onClick={commitImport} style={{padding:"8px 14px",border:"none",borderRadius:4,background:importMode==="replace"?"#ef4444":"#22c55e",color:"#fff",cursor:"pointer"}}>{importMode==="replace"?"Confirm Replace":"Confirm Import"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{position:"fixed",right:24,bottom:24,zIndex:90,display:"grid",gap:8,justifyItems:"end"}}>
+        {showEmailFmt && (
+          <div className="slide" style={{width:300,background:"#fff",border:"1px solid #e2e8f0",borderRadius:8,padding:16,boxShadow:"0 8px 30px rgba(0,0,0,.15)"}}>
+            <div className="mono" style={{fontSize:11,color:"#16a34a",letterSpacing:".08em",marginBottom:10}}>EMAIL FORMATTER</div>
+            <input className="field" style={{marginBottom:8}} placeholder="John Smith" value={efName} onChange={e=>setEfName(e.target.value)} />
+            <input className="field" style={{marginBottom:8}} placeholder="company.com" value={efDomain} onChange={e=>setEfDomain(e.target.value)} />
+            <select className="field" value={efFmt} onChange={e=>setEfFmt(e.target.value)}><option value="{first}.{last}">{"{first}.{last}"}</option><option value="{f}{last}">{"{f}{last}"}</option><option value="{f}.{last}">{"{f}.{last}"}</option><option value="{first}_{last}">{"{first}_{last}"}</option><option value="{last}.{first}">{"{last}.{first}"}</option></select>
+            {efName&&efDomain && <div style={{marginTop:10,padding:"8px 10px",borderRadius:4,background:"#f0fdf4",border:"1px solid #bbf7d0",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}><span className="mono" style={{fontSize:12,color:"#15803d"}}>{fmtEmail(efName,efDomain,efFmt)}</span><button onClick={()=>{navigator.clipboard.writeText(fmtEmail(efName,efDomain,efFmt)); toast2("Copied");}} style={{padding:"4px 8px",border:"1px solid #bbf7d0",borderRadius:4,background:"#fff",cursor:"pointer"}}>Copy</button></div>}
+          </div>
+        )}
+        <button onClick={()=>setShowEmailFmt(v=>!v)} style={{width:46,height:46,border:"none",borderRadius:999,background:showEmailFmt?"#16a34a":"#1e3a8a",color:"#fff",fontSize:18,cursor:"pointer",boxShadow:"0 4px 14px rgba(0,0,0,.2)"}}>✉</button>
+      </div>
+
+      {toast && <div style={{position:"fixed",left:"50%",bottom:24,transform:"translateX(-50%)",background:"#0f172a",color:"#f8fafc",padding:"10px 20px",borderRadius:6,boxShadow:"0 4px 20px rgba(0,0,0,.25)",zIndex:120}}>{toast}</div>}
+      {saving && <div className="mono" style={{position:"fixed",right:24,bottom:24,background:"#1e3a8a",color:"#fff",padding:"8px 14px",borderRadius:6,zIndex:121}}>Saving...</div>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
