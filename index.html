@@ -103,7 +103,6 @@ const parseCsv = text => {
 const csvValue = v => { const s=String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s; };
 const downloadCsv = (rows, name) => { if(!rows.length) return; const keys=Object.keys(rows[0]); const lines=[keys.join(","),...rows.map(row=>keys.map(k=>csvValue(row[k])).join(","))]; const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([lines.join("\n")],{type:"text/csv"})); a.download=name; a.click(); };
 const fmtEmail = (name, domain, fmt) => { const parts=(name||"").trim().split(/\s+/); const first=(parts[0]||"").toLowerCase(); const last=(parts[parts.length-1]||"").toLowerCase(); const f=first[0]||""; return fmt.replace("{first}",first).replace("{last}",last).replace("{f}",f)+"@"+domain; };
-const extractUrls = text => [...new Set((String(text || "").match(/https?:\/\/[^\s]+/g) || []).map(url => url.replace(/[),.;]+$/g, "")))];
 const firstFilled = (...vals) => vals.find(v => String(v ?? "").trim()) || "";
 const normalizeIndustry = value => String(value || "").trim();
 const isKnownIndustry = value => INDUSTRIES.includes(normalizeIndustry(value));
@@ -306,6 +305,7 @@ const exportRecordRows = (records, tab) => {
     last_activity: record.lastContact || "",
   }));
 };
+const contactsTextFromRecord = record => (record?.contacts || []).map(contact => [contact.name, contact.title, contact.linkedin].filter(Boolean).join(", ")).join("\n");
 const deriveImportedContacts = row => {
   const explicitContacts = firstFilled(row.contacts, row.contact, row.contact_list, row.contact_lines);
   const namedContact = firstFilled(row.contact_name, row.primary_contact, row.contact_person)
@@ -375,7 +375,10 @@ function App(){
   const [tasks,setTasks] = useState(()=>safeJson(localStorage.getItem("ed_tasks"),[]));
   const [taskTitle,setTaskTitle] = useState("");
   const [taskDate,setTaskDate] = useState("");
+  const [notesDraft,setNotesDraft] = useState("");
   const [contactsDraft,setContactsDraft] = useState("");
+  const [notesEditing,setNotesEditing] = useState(false);
+  const [contactsEditing,setContactsEditing] = useState(false);
   const [showEmailFmt,setShowEmailFmt] = useState(false);
   const [efName,setEfName] = useState("");
   const [efDomain,setEfDomain] = useState("");
@@ -478,7 +481,10 @@ function App(){
 
   const openRecord = rec => {
     setSelected(rec);
-    setContactsDraft((rec.contacts||[]).map(c=>[c.name,c.title,c.linkedin].filter(Boolean).join(", ")).join("\n"));
+    setNotesDraft(rec.notes || "");
+    setContactsDraft(contactsTextFromRecord(rec));
+    setNotesEditing(false);
+    setContactsEditing(false);
     setTaskTitle("");
     setTaskDate("");
     setNewAct({type:"Call",note:""});
@@ -488,11 +494,12 @@ function App(){
     if(!selected || selected.type!=="manufacturer") return;
     const dbField = manufacturerDbField(field);
     const { error } = await sb.from("manufacturers").update({[dbField]:value}).eq("id",selected.id);
-    if(error) return toast2("Save error: "+error.message);
+    if(error){ toast2("Save error: "+error.message); return false; }
     const patch = dbField===field ? {[field]:value} : {[field]:value,[dbField]:value};
     setSelected(cur => ({...cur,...patch}));
     setMfrs(list => list.map(m => m.id===selected.id ? {...m,...patch} : m));
     toast2("Saved");
+    return true;
   };
 
   const saveContacts = async raw => {
@@ -504,8 +511,10 @@ function App(){
       await hydrate();
       setContactsDraft(raw);
       toast2("Saved");
+      return true;
     }catch(err){
       toast2("Save error: "+err.message);
+      return false;
     }
   };
 
@@ -724,7 +733,6 @@ function App(){
   const allVisibleSelected = visibleKeys.length>0 && visibleKeys.every(key => selectedKeys.includes(key));
   const exportRecords = selectedVisibleRecords.length ? selectedVisibleRecords : list;
   const exportFileName = `${tab}${selectedVisibleRecords.length ? "-selected" : ""}.csv`;
-  const selectedNoteUrls = selected?.type==="manufacturer" ? extractUrls(selected.notes) : [];
 
   useEffect(()=>{
     setSelectedKeys(keys => {
@@ -1002,18 +1010,64 @@ function App(){
                 <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8,flexWrap:"wrap"}}>
                     <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em"}}>NOTES</div>
-                    {!!selectedNoteUrls.length && <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                      <button onClick={()=>selectedNoteUrls.forEach(url => window.open(url, "_blank", "noopener,noreferrer"))} style={{padding:"4px 8px",border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",color:"#1d4ed8",cursor:"pointer",fontSize:11,fontWeight:700}}>Open Links ({selectedNoteUrls.length})</button>
-                      <button onClick={()=>{navigator.clipboard.writeText(selectedNoteUrls.join("\n")); toast2("Copied links");}} style={{padding:"4px 8px",border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",color:"#475569",cursor:"pointer",fontSize:11,fontWeight:700}}>Copy Links</button>
-                    </div>}
+                    <button onClick={()=>{
+                      if(notesEditing){
+                        setNotesDraft(selected.notes || "");
+                        setNotesEditing(false);
+                      } else {
+                        setNotesDraft(selected.notes || "");
+                        setNotesEditing(true);
+                      }
+                    }} style={{padding:"4px 8px",border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",color:"#475569",cursor:"pointer",fontSize:11,fontWeight:700}}>{notesEditing ? "Cancel" : "Edit"}</button>
                   </div>
-                  <textarea className="fieldbox" style={{minHeight:392,border:"1px solid #eef2f7",background:"#fff"}} placeholder="Internal notes, follow-up reminders..." value={selected.notes||""} onChange={e=>setSelected(cur=>({...cur,notes:e.target.value}))} onBlur={e=>saveMfrField("notes",e.target.value)} />
+                  {notesEditing
+                    ? <>
+                        <textarea className="fieldbox" style={{minHeight:392,border:"1px solid #eef2f7",background:"#fff"}} placeholder="Internal notes, follow-up reminders..." value={notesDraft} onChange={e=>setNotesDraft(e.target.value)} />
+                        <div style={{display:"flex",justifyContent:"flex-end",marginTop:8}}>
+                          <button onClick={async ()=>{ const ok = await saveMfrField("notes", notesDraft); if(ok){ setNotesEditing(false); setNotesDraft(notesDraft); } }} style={{padding:"6px 12px",border:"none",borderRadius:4,background:"#1e3a8a",color:"#fff",cursor:"pointer",fontSize:12,fontWeight:700}}>Save Notes</button>
+                        </div>
+                      </>
+                    : <div style={{minHeight:392,padding:"10px 12px",border:"1px solid #eef2f7",borderRadius:4,background:"#fff"}}>
+                        {selected.notes
+                          ? <LinkifiedText text={selected.notes} style={{fontSize:13,color:"#475569",lineHeight:1.7}} />
+                          : <div style={{fontSize:13,color:"#94a3b8"}}>Internal notes, follow-up reminders...</div>}
+                      </div>
+                  }
                 </div>
                 <div style={{display:"grid",gap:20}}>
                   <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
-                    <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>CONTACTS</div>
-                    <textarea className="fieldbox" style={{minHeight:360,border:"1px solid #eef2f7",background:"#fff"}} placeholder="Name, Title, LinkedIn URL" value={contactsDraft} onChange={e=>setContactsDraft(e.target.value)} onBlur={e=>saveContacts(e.target.value)} />
-                    <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:6}}>One per line: Name, Title, LinkedIn</div>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8,flexWrap:"wrap"}}>
+                      <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em"}}>CONTACTS</div>
+                      <button onClick={()=>{
+                        if(contactsEditing){
+                          setContactsDraft(contactsTextFromRecord(selected));
+                          setContactsEditing(false);
+                        } else {
+                          setContactsDraft(contactsTextFromRecord(selected));
+                          setContactsEditing(true);
+                        }
+                      }} style={{padding:"4px 8px",border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",color:"#475569",cursor:"pointer",fontSize:11,fontWeight:700}}>{contactsEditing ? "Cancel" : "Edit"}</button>
+                    </div>
+                    {contactsEditing
+                      ? <>
+                          <textarea className="fieldbox" style={{minHeight:360,border:"1px solid #eef2f7",background:"#fff"}} placeholder="Name, Title, LinkedIn URL" value={contactsDraft} onChange={e=>setContactsDraft(e.target.value)} />
+                          <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:6}}>One per line: Name, Title, LinkedIn</div>
+                          <div style={{display:"flex",justifyContent:"flex-end",marginTop:8}}>
+                            <button onClick={async ()=>{ const ok = await saveContacts(contactsDraft); if(ok) setContactsEditing(false); }} style={{padding:"6px 12px",border:"none",borderRadius:4,background:"#1e3a8a",color:"#fff",cursor:"pointer",fontSize:12,fontWeight:700}}>Save Contacts</button>
+                          </div>
+                        </>
+                      : <div style={{minHeight:360,padding:"10px 12px",border:"1px solid #eef2f7",borderRadius:4,background:"#fff",display:"grid",gap:12,alignContent:"start"}}>
+                          {(selected.contacts || []).length
+                            ? selected.contacts.map((contact, index)=>(
+                                <div key={[contact.name,contact.title,contact.linkedin,index].join("|")} style={{paddingBottom:10,borderBottom:index < selected.contacts.length-1 ? "1px solid #f1f5f9" : "none"}}>
+                                  <div style={{fontSize:13,fontWeight:700,color:"#172033"}}>{contact.name}</div>
+                                  {contact.title && <div style={{fontSize:12,color:"#64748b",marginTop:2}}>{contact.title}</div>}
+                                  {contact.linkedin && <a href={contact.linkedin} target="_blank" rel="noreferrer" style={{display:"inline-block",marginTop:4,color:"#1d4ed8",textDecoration:"underline",wordBreak:"break-all",fontSize:12}}>{contact.linkedin}</a>}
+                                </div>
+                              ))
+                            : <div style={{fontSize:13,color:"#94a3b8"}}>No contacts yet.</div>}
+                        </div>
+                    }
                   </div>
                 </div>
               </> : (
