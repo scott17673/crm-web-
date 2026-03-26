@@ -347,7 +347,7 @@ const normalizeExternalUrl = value => {
 };
 const escapeHtml = value => String(value || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 const linkifiedHtml = text => String(text || "").split(EXTERNAL_LINK_RE).map(part => isExternalLinkText(part)
-  ? `<a href="${escapeHtml(normalizeExternalUrl(part))}" target="_blank" rel="noreferrer" data-external-link="true" style="color:#1d4ed8;text-decoration:underline;word-break:break-all;cursor:pointer;">${escapeHtml(part)}</a>`
+  ? `<span data-external-url="${escapeHtml(normalizeExternalUrl(part))}" style="color:#1d4ed8;text-decoration:underline;word-break:break-all;cursor:pointer;">${escapeHtml(part)}</span>`
   : escapeHtml(part)
 ).join("");
 const editableTextFromElement = element => String(element?.innerText || "").replace(/\u00A0/g," ").replace(/\r/g,"").replace(/\n$/, "");
@@ -386,8 +386,8 @@ const stripEdgePunctuation = token => {
   return out;
 };
 const clickedExternalUrl = (event, root) => {
-  const anchor = event.target?.closest?.("a[data-external-link='true']");
-  if(anchor) return anchor.href;
+  const tagged = event.target?.closest?.("[data-external-url]");
+  if(tagged) return tagged.getAttribute("data-external-url") || "";
   const range = rangeFromPoint(event.clientX, event.clientY);
   if(!range) return "";
   let node = range.startContainer;
@@ -462,13 +462,13 @@ const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onMea
         if(!url) return;
         e.preventDefault();
         e.stopPropagation();
+        window.open(url, "_blank", "noopener,noreferrer");
       }}
       onClick={e=>{
         const url = clickedExternalUrl(e, innerRef.current);
         if(!url) return;
         e.preventDefault();
         e.stopPropagation();
-        window.open(url, "_blank", "noopener,noreferrer");
       }}
     />
   );
