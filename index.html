@@ -1000,12 +1000,6 @@ function App(){
                 <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>NOTES</div>
                   <textarea className="fieldbox" style={{minHeight:392,border:"1px solid #eef2f7",background:"#fff"}} placeholder="Internal notes, follow-up reminders..." value={selected.notes||""} onChange={e=>setSelected(cur=>({...cur,notes:e.target.value}))} onBlur={e=>saveMfrField("notes",e.target.value)} />
-                  {!!selected.notes && <>
-                    <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",margin:"10px 0 6px"}}>LINK PREVIEW</div>
-                    <div style={{padding:"10px 12px",border:"1px solid #eef2f7",borderRadius:4,background:"#fff"}}>
-                      <LinkifiedText text={selected.notes} style={{fontSize:13,color:"#475569",lineHeight:1.6}} />
-                    </div>
-                  </>}
                 </div>
                 <div style={{display:"grid",gap:20}}>
                   <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
