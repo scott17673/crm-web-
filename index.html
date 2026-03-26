@@ -747,12 +747,12 @@ function App(){
   const allVisibleSelected = visibleKeys.length>0 && visibleKeys.every(key => selectedKeys.includes(key));
   const exportRecords = selectedVisibleRecords.length ? selectedVisibleRecords : list;
   const exportFileName = `${tab}${selectedVisibleRecords.length ? "-selected" : ""}.csv`;
-  const notesPanelMinHeight = Math.max(392, estimateVisualLineCount(notesEditing ? notesDraft : (selected?.notes || ""), 94) * 26 + 88);
+  const notesPanelMinHeight = Math.max(280, estimateVisualLineCount(notesEditing ? notesDraft : (selected?.notes || ""), 126) * 22 + 52);
   const contactsPanelMinHeight = Math.max(
-    392,
+    280,
     contactsEditing
-      ? estimateVisualLineCount(contactsDraft, 56) * 24 + 120
-      : ((selected?.contacts || []).reduce((total, contact) => total + estimateVisualLineCount([contact.name, contact.title, contact.linkedin].filter(Boolean).join("\n"), 42), 0) * 24 + 84)
+      ? estimateVisualLineCount(contactsDraft, 72) * 22 + 52
+      : ((selected?.contacts || []).reduce((total, contact) => total + estimateVisualLineCount([contact.name, contact.title, contact.linkedin].filter(Boolean).join("\n"), 56), 0) * 22 + 52)
   );
   const detailPanelMinHeight = Math.max(notesPanelMinHeight, contactsPanelMinHeight);
 
