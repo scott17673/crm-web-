@@ -1284,7 +1284,7 @@ function App(){
                   <Tag label={TYPE_CFG[selected.type].icon+" "+TYPE_CFG[selected.type].label.slice(0,-1)} color={selected.type==="manufacturer"?"#1e3a8a":TYPE_CFG[selected.type].color} />
                   {selected.type==="manufacturer" && <>
                     <select className="field mono" style={{width:"auto",padding:"5px 10px",height:30,fontSize:12,background:"#f8fbff"}} value={selected.stage||"Prospect"} onChange={e=>{ const v=e.target.value; setSelected(cur=>({...cur,stage:v})); saveMfrField("stage",v); }}>{STAGES.map(s=><option key={s}>{s}</option>)}</select>
-                    <select className="field mono" style={{width:"auto",padding:"5px 10px",height:30,fontSize:12,background:"#fffaf5",color:"#f97316"}} value={selected.industry||""} onChange={e=>{ const v=e.target.value; setSelected(cur=>({...cur,industry:v})); saveMfrField("industry",v); }}><option value="">No Industry</option>{INDUSTRIES.map(i=><option key={i}>{i}</option>)}</select>
+                    <select className="field mono" style={{width:"auto",padding:"5px 10px",height:30,fontSize:12,background:"#fffaf5",color:"#f97316"}} value={selected.industry||""} onChange={e=>{ const v=e.target.value; setSelected(cur=>({...cur,industry:v})); saveMfrField("industry",v); }}><option value="">{OTHER_INDUSTRY_LABEL}</option>{INDUSTRIES.map(i=><option key={i}>{i}</option>)}</select>
                   </>}
                 </div>
                 <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{(selected.tags||[]).map(t=><Tag key={t} label={t} color={TYPE_CFG[selected.type].color} />)}</div>
@@ -1405,7 +1405,7 @@ function App(){
               <input className="field" style={{gridColumn:"1 / -1"}} placeholder="Company" value={form.company||""} onChange={e=>setForm(cur=>({...cur,company:e.target.value}))} />
               {formType==="manufacturer" ? <>
                 <select className="field" value={form.stage||"Prospect"} onChange={e=>setForm(cur=>({...cur,stage:e.target.value}))}>{STAGES.map(s=><option key={s}>{s}</option>)}</select>
-                <select className="field" value={form.industry||""} onChange={e=>setForm(cur=>({...cur,industry:e.target.value}))}><option value="">Select industry</option>{INDUSTRIES.map(i=><option key={i}>{i}</option>)}</select>
+                <select className="field" value={form.industry||""} onChange={e=>setForm(cur=>({...cur,industry:e.target.value}))}><option value="">{OTHER_INDUSTRY_LABEL}</option>{INDUSTRIES.map(i=><option key={i}>{i}</option>)}</select>
                 <textarea className="fieldbox" style={{gridColumn:"1 / -1",minHeight:110}} placeholder="Contacts: Name, Title, LinkedIn" value={form.contactsText||""} onChange={e=>setForm(cur=>({...cur,contactsText:e.target.value}))} />
               </> : <>
                 {["name","title","email","phone","industry","region"].map(k=><input key={k} className="field" placeholder={k[0].toUpperCase()+k.slice(1)} value={form[k]||""} onChange={e=>setForm(cur=>({...cur,[k]:e.target.value}))} />)}
