@@ -359,6 +359,28 @@ const exportRecordRows = (records, tab) => {
   }));
 };
 const contactsTextFromRecord = record => (record?.contacts || []).map(contact => [contact.name, contact.title, contact.linkedin].filter(Boolean).join(", ")).join("\n");
+const vendorContactTextFromRecord = record => [
+  [record?.name, record?.title].filter(Boolean).join(", "),
+  record?.email ? `Email: ${record.email}` : "",
+  record?.phone ? `Phone: ${record.phone}` : "",
+  record?.industry ? `Industry: ${record.industry}` : "",
+  record?.region ? `Region: ${record.region}` : "",
+].filter(Boolean).join("\n");
+const parseVendorContactText = raw => {
+  const parsed = {name:"",title:"",email:"",phone:"",industry:"",region:""};
+  String(raw || "").split(/\r?\n/).map(line => line.trim()).filter(Boolean).forEach(line => {
+    if(/^email\s*:/i.test(line)){ parsed.email = line.replace(/^email\s*:/i,"").trim(); return; }
+    if(/^phone\s*:/i.test(line)){ parsed.phone = line.replace(/^phone\s*:/i,"").trim(); return; }
+    if(/^industry\s*:/i.test(line)){ parsed.industry = line.replace(/^industry\s*:/i,"").trim(); return; }
+    if(/^region\s*:/i.test(line)){ parsed.region = line.replace(/^region\s*:/i,"").trim(); return; }
+    if(!parsed.name){
+      const parts = line.split(",").map(part => part.trim()).filter(Boolean);
+      parsed.name = parts[0] || "";
+      parsed.title = parts.slice(1).join(", ");
+    }
+  });
+  return parsed;
+};
 const deriveImportedContacts = row => {
   const explicitContacts = firstFilled(row.contacts, row.contact, row.contact_list, row.contact_lines);
   const namedContact = firstFilled(row.contact_name, row.primary_contact, row.contact_person)
@@ -724,7 +746,7 @@ function App(){
   const openRecord = rec => {
     setSelected(rec);
     setNotesDraft(rec.notes || "");
-    setContactsDraft(contactsTextFromRecord(rec));
+    setContactsDraft(rec.type==="manufacturer" ? contactsTextFromRecord(rec) : rec.type==="vendor" ? vendorContactTextFromRecord(rec) : "");
     setEditingTaskId(null);
     setEditingTaskDraft({title:"",due_date:""});
     setEditingActId(null);
@@ -746,6 +768,17 @@ function App(){
     return true;
   };
 
+  const saveVendorField = async (field, value) => {
+    if(!selected || selected.type!=="vendor") return false;
+    const { error } = await sb.from("vendors").update({[field]:value}).eq("id",selected.id);
+    if(error){ toast2("Save error: "+error.message); return false; }
+    const patch = {[field]:value};
+    setSelected(cur => cur ? {...cur,...patch} : cur);
+    setVendors(list => list.map(record => record.id===selected.id ? {...record,...patch} : record));
+    toast2("Saved");
+    return true;
+  };
+
   const saveContacts = async raw => {
     if(!selected || selected.type!=="manufacturer") return;
     try{
@@ -754,6 +787,31 @@ function App(){
       if(rows.length) ensureOk(await sb.from("manufacturer_contacts").insert(rows));
       await hydrate();
       setContactsDraft(raw);
+      toast2("Saved");
+      return true;
+    }catch(err){
+      toast2("Save error: "+err.message);
+      return false;
+    }
+  };
+
+  const saveVendorContacts = async raw => {
+    if(!selected || selected.type!=="vendor") return false;
+    try{
+      const parsed = parseVendorContactText(raw);
+      const payload = {
+        name: parsed.name,
+        title: parsed.title,
+        email: parsed.email,
+        phone: parsed.phone,
+        industry: parsed.industry,
+        region: parsed.region,
+      };
+      ensureOk(await sb.from("vendors").update(payload).eq("id",selected.id));
+      const nextRecord = {...selected, ...payload};
+      setSelected(nextRecord);
+      setVendors(list => list.map(record => record.id===selected.id ? {...record,...payload} : record));
+      setContactsDraft(vendorContactTextFromRecord(nextRecord));
       toast2("Saved");
       return true;
     }catch(err){
@@ -1138,7 +1196,7 @@ function App(){
   },[visibleKeys.join("|")]);
 
   useEffect(()=>{
-    if(selected?.type!=="manufacturer"){
+    if(!["manufacturer","vendor"].includes(selected?.type)){
       setDetailPanelHeight(280);
       return;
     }
@@ -1415,8 +1473,8 @@ function App(){
             <div style={{padding:"18px 28px",display:"flex",justifyContent:"space-between",gap:20,borderBottom:"1px solid #e8eef6",alignItems:"flex-start"}}>
               <div style={{flex:1}}>
                 <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:8}}>
-                  {selected.type==="manufacturer"
-                    ? <input className="field condensed" style={{fontSize:22,fontWeight:800,maxWidth:360,border:"none",padding:0,background:"transparent",color:"#172033"}} value={selected.company||""} onChange={e=>setSelected(cur=>({...cur,company:e.target.value}))} onBlur={e=>saveMfrField("company",e.target.value)} />
+                  {selected.type==="manufacturer" || selected.type==="vendor"
+                    ? <input className="field condensed" style={{fontSize:22,fontWeight:800,maxWidth:360,border:"none",padding:0,background:"transparent",color:"#172033"}} value={selected.company||""} onChange={e=>setSelected(cur=>({...cur,company:e.target.value}))} onBlur={e=>selected.type==="manufacturer" ? saveMfrField("company",e.target.value) : saveVendorField("company",e.target.value)} />
                     : <div className="condensed" style={{fontSize:22,fontWeight:800,color:"#172033"}}>{selected.company}</div>}
                   {selected.type==="lost"
                     ? <Tag label={TYPE_CFG[selected.type].icon+" "+TYPE_CFG[selected.type].label.slice(0,-1)} color={TYPE_CFG[selected.type].color} />
@@ -1434,6 +1492,10 @@ function App(){
                     <select className="field mono" style={{width:"auto",padding:"5px 10px",height:30,fontSize:12,background:"#f8fbff"}} value={selected.stage||"Prospect"} onChange={e=>{ const v=e.target.value; setSelected(cur=>({...cur,stage:v})); saveMfrField("stage",v); }}>{STAGES.map(s=><option key={s}>{s}</option>)}</select>
                     <select className="field mono" style={{width:"auto",padding:"5px 10px",height:30,fontSize:12,background:"#fffaf5",color:"#f97316"}} value={selected.industry||""} onChange={e=>{ const v=e.target.value; setSelected(cur=>({...cur,industry:v})); saveMfrField("industry",v); }}><option value="">{OTHER_INDUSTRY_LABEL}</option>{INDUSTRIES.map(i=><option key={i}>{i}</option>)}</select>
                   </>}
+                  {selected.type==="vendor" && <>
+                    <select className="field mono" style={{width:"auto",padding:"5px 10px",height:30,fontSize:12,background:"#f8fbff"}} value={selected.stage||"Prospect"} onChange={e=>{ const v=e.target.value; setSelected(cur=>({...cur,stage:v})); saveVendorField("stage",v); }}>{STAGES.map(s=><option key={s}>{s}</option>)}</select>
+                    <input className="field mono" style={{width:180,padding:"5px 10px",height:30,fontSize:12,background:"#fffaf5",color:"#f97316"}} value={selected.industry||""} placeholder={OTHER_INDUSTRY_LABEL} onChange={e=>setSelected(cur=>({...cur,industry:e.target.value}))} onBlur={e=>saveVendorField("industry", e.target.value)} />
+                  </>}
                 </div>
                 <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{(selected.tags||[]).map(t=><Tag key={t} label={t} color={TYPE_CFG[selected.type].color} />)}</div>
               </div>
@@ -1442,19 +1504,19 @@ function App(){
                 <button onClick={()=>setSelected(null)} style={{width:30,height:30,border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",cursor:"pointer",color:"#94a3b8"}}>×</button>
               </div>
             </div>
-            <div style={{padding:"22px 28px 24px",display:"grid",gridTemplateColumns:selected.type==="manufacturer"?"minmax(0,1fr) minmax(360px,440px)":"1fr",gap:20,alignItems:"stretch"}}>
-              {selected.type==="manufacturer" ? <>
+            <div style={{padding:"22px 28px 24px",display:"grid",gridTemplateColumns:["manufacturer","vendor"].includes(selected.type)?"minmax(0,1fr) minmax(360px,440px)":"1fr",gap:20,alignItems:"stretch"}}>
+              {["manufacturer","vendor"].includes(selected.type) ? <>
                 <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>NOTES</div>
                   <EditableLinkField
                     ref={notesBoxRef}
-                    richText
+                    richText={selected.type==="manufacturer"}
                     height={detailPanelHeight}
                     placeholder="Internal notes, follow-up reminders..."
                     value={notesDraft}
                     onChange={setNotesDraft}
                     onMeasure={syncDetailPanelHeight}
-                    onBlurSave={nextValue=>saveMfrField("notes", nextValue)}
+                    onBlurSave={nextValue=>selected.type==="manufacturer" ? saveMfrField("notes", nextValue) : saveVendorField("notes", nextValue)}
                   />
                 </div>
                 <div style={{display:"grid",gap:20,alignContent:"start"}}>
@@ -1463,13 +1525,13 @@ function App(){
                     <EditableLinkField
                       ref={contactsBoxRef}
                       height={detailPanelHeight}
-                      placeholder="Name, Title, LinkedIn URL"
+                      placeholder={selected.type==="manufacturer" ? "Name, Title, LinkedIn URL" : "Name, Title\nEmail: person@company.com\nPhone: 555-555-5555\nIndustry: Others\nRegion: Ontario"}
                       value={contactsDraft}
                       onChange={setContactsDraft}
                       onMeasure={syncDetailPanelHeight}
-                      onBlurSave={saveContacts}
+                      onBlurSave={selected.type==="manufacturer" ? saveContacts : saveVendorContacts}
                     />
-                    <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:6}}>One per line: Name, Title, LinkedIn</div>
+                    <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:6}}>{selected.type==="manufacturer" ? "One per line: Name, Title, LinkedIn" : "First line: Name, Title. Then Email:, Phone:, Industry:, Region:"}</div>
                   </div>
                 </div>
               </> : (
