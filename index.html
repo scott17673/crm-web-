@@ -386,6 +386,15 @@ const replaceManufacturerContacts = async (manufacturerId, contacts) => {
     }))
   ));
 };
+const dedupeTaskRows = rows => {
+  const seen = new Set();
+  return (rows || []).filter(row => {
+    const key = [row.contact_type || "", row.contact_id || "", row.company || "", row.title || "", row.due_date || ""].join("|");
+    if(seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
 
 const EXTERNAL_LINK_RE = /((?:https?:\/\/|www\.|(?:[a-z0-9-]+\.)+[a-z]{2,}\/)[^\s<]+)/gi;
 const isExternalLinkText = value => /^(?:https?:\/\/|www\.|(?:[a-z0-9-]+\.)+[a-z]{2,}\/)[^\s<]*$/i.test(String(value || "").trim());
@@ -878,6 +887,109 @@ function App(){
     }));
   };
 
+  const convertSelectedType = async nextType => {
+    if(!selected || selected.type===nextType || selected.type==="lost" || !["manufacturer","vendor"].includes(nextType)) return;
+    const source = selected;
+    const sourceKey = recordKey(source);
+    setSaving(true);
+    try{
+      if(nextType==="vendor" && source.type==="manufacturer"){
+        const existingVendor = vendors.find(record => normalizeCompanyKey(record.company)===normalizeCompanyKey(source.company));
+        const primaryContact = (source.contacts || [])[0] || {};
+        const contactLines = contactsTextFromRecord(source);
+        const manufacturerNotes = richNotesPlainText(source.notes);
+        const vendorNotes = appendUniqueText(
+          existingVendor?.notes || "",
+          appendUniqueText(manufacturerNotes, contactLines ? `Contacts\n${contactLines}` : "", "\n\n"),
+          "\n\n"
+        );
+        const vendorRow = {
+          company: source.company || existingVendor?.company || "",
+          name: firstFilled(primaryContact.name, source.name, existingVendor?.name),
+          title: firstFilled(primaryContact.title, source.title, existingVendor?.title),
+          email: firstFilled(source.email, existingVendor?.email),
+          phone: firstFilled(source.phone, existingVendor?.phone),
+          industry: firstFilled(source.industry, existingVendor?.industry),
+          region: firstFilled(source.region, existingVendor?.region),
+          stage: normalizeStage(firstFilled(source.stage, existingVendor?.stage)),
+          tags: [...new Set([...(existingVendor?.tags || []), ...(source.tags || [])])],
+          notes: vendorNotes,
+          last_contact: mergeImportDate(existingVendor?.lastContact, source.lastContact || today()) || today(),
+        };
+        let targetId = existingVendor?.id;
+        if(targetId){
+          ensureOk(await sb.from("vendors").update(vendorRow).eq("id", targetId));
+        } else {
+          const inserted = await sb.from("vendors").insert(vendorRow).select("id").single();
+          ensureOk(inserted);
+          targetId = inserted.data?.id;
+        }
+        ensureOk(await sb.from("activities").update({contact_id:targetId,contact_type:"vendor"}).eq("contact_type","manufacturer").eq("contact_id",source.id));
+        ensureOk(await sb.from("manufacturer_contacts").delete().eq("manufacturer_id", source.id));
+        ensureOk(await sb.from("manufacturers").delete().eq("id", source.id));
+        const nextSelected = {...vendorRow,id:targetId,type:"vendor",lastContact:vendorRow.last_contact};
+        setSelectedKeys(keys => {
+          const hadOld = keys.includes(sourceKey);
+          const nextKey = `vendor:${targetId}`;
+          const filtered = keys.filter(key => key!==sourceKey && key!==nextKey);
+          return hadOld ? [...filtered, nextKey] : filtered;
+        });
+        saveTasks(dedupeTaskRows(tasks.map(task => taskMatchesRecord(task, source) ? {...task,contact_id:targetId,contact_type:"vendor",company:vendorRow.company} : task)));
+        openRecord(nextSelected);
+      }
+
+      if(nextType==="manufacturer" && source.type==="vendor"){
+        const existingManufacturer = mfrs.find(record => normalizeCompanyKey(record.company)===normalizeCompanyKey(source.company));
+        const vendorMeta = [
+          source.name ? `Primary contact: ${source.name}${source.title ? `, ${source.title}` : ""}` : "",
+          source.email ? `Email: ${source.email}` : "",
+          source.phone ? `Phone: ${source.phone}` : "",
+          source.region ? `Region: ${source.region}` : "",
+        ].filter(Boolean).join("\n");
+        const manufacturerContacts = dedupeContacts([...(existingManufacturer?.contacts || []), ...(source.name ? [{name:source.name,title:source.title || "",linkedin:""}] : [])]);
+        const manufacturerNotes = appendUniqueText(
+          richNotesPlainText(existingManufacturer?.notes || ""),
+          appendUniqueText(source.notes || "", vendorMeta, "\n\n"),
+          "\n\n"
+        );
+        const manufacturerRow = {
+          company: source.company || existingManufacturer?.company || "",
+          stage: normalizeStage(firstFilled(source.stage, existingManufacturer?.stage)),
+          industry: firstFilled(source.industry, existingManufacturer?.industry),
+          signals: manufacturerNotes,
+          tags: [...new Set([...(existingManufacturer?.tags || []), ...(source.tags || [])])],
+          last_contact: mergeImportDate(existingManufacturer?.lastContact, source.lastContact || today()) || today(),
+        };
+        let targetId = existingManufacturer?.id;
+        if(targetId){
+          ensureOk(await sb.from("manufacturers").update(manufacturerRow).eq("id", targetId));
+        } else {
+          const inserted = await sb.from("manufacturers").insert(manufacturerRow).select("id").single();
+          ensureOk(inserted);
+          targetId = inserted.data?.id;
+        }
+        await replaceManufacturerContacts(targetId, manufacturerContacts);
+        ensureOk(await sb.from("activities").update({contact_id:targetId,contact_type:"manufacturer"}).eq("contact_type","vendor").eq("contact_id",source.id));
+        ensureOk(await sb.from("vendors").delete().eq("id", source.id));
+        const nextSelected = {...manufacturerRow,id:targetId,type:"manufacturer",tags:manufacturerRow.tags,lastContact:manufacturerRow.last_contact,notes:manufacturerRow.signals,contacts:manufacturerContacts};
+        setSelectedKeys(keys => {
+          const hadOld = keys.includes(sourceKey);
+          const nextKey = `manufacturer:${targetId}`;
+          const filtered = keys.filter(key => key!==sourceKey && key!==nextKey);
+          return hadOld ? [...filtered, nextKey] : filtered;
+        });
+        saveTasks(dedupeTaskRows(tasks.map(task => taskMatchesRecord(task, source) ? {...task,contact_id:targetId,contact_type:"manufacturer",company:manufacturerRow.company} : task)));
+        openRecord(nextSelected);
+      }
+
+      await hydrate();
+      toast2(`Changed to ${TYPE_CFG[nextType].label.slice(0,-1)}`);
+    }catch(err){
+      toast2("Type change error: "+err.message);
+    }
+    setSaving(false);
+  };
+
   const openForm = (type=tab, rec=null) => {
     setFormType(type);
       setForm(rec ? {...rec, tags:(rec.tags||[]).join(", "), contactsText:(rec.contacts||[]).map(c=>[c.name,c.title,c.linkedin].filter(Boolean).join(", ")).join("\n")} : {
@@ -1306,7 +1418,18 @@ function App(){
                   {selected.type==="manufacturer"
                     ? <input className="field condensed" style={{fontSize:22,fontWeight:800,maxWidth:360,border:"none",padding:0,background:"transparent",color:"#172033"}} value={selected.company||""} onChange={e=>setSelected(cur=>({...cur,company:e.target.value}))} onBlur={e=>saveMfrField("company",e.target.value)} />
                     : <div className="condensed" style={{fontSize:22,fontWeight:800,color:"#172033"}}>{selected.company}</div>}
-                  <Tag label={TYPE_CFG[selected.type].icon+" "+TYPE_CFG[selected.type].label.slice(0,-1)} color={selected.type==="manufacturer"?"#1e3a8a":TYPE_CFG[selected.type].color} />
+                  {selected.type==="lost"
+                    ? <Tag label={TYPE_CFG[selected.type].icon+" "+TYPE_CFG[selected.type].label.slice(0,-1)} color={TYPE_CFG[selected.type].color} />
+                    : <select
+                        className="field mono"
+                        disabled={saving}
+                        style={{width:"auto",padding:"5px 10px",height:30,fontSize:12,background:"#f8fbff",color:TYPE_CFG[selected.type].color,fontWeight:700}}
+                        value={selected.type}
+                        onChange={e=>convertSelectedType(e.target.value)}
+                      >
+                        <option value="manufacturer">Manufacturer</option>
+                        <option value="vendor">Vendor</option>
+                      </select>}
                   {selected.type==="manufacturer" && <>
                     <select className="field mono" style={{width:"auto",padding:"5px 10px",height:30,fontSize:12,background:"#f8fbff"}} value={selected.stage||"Prospect"} onChange={e=>{ const v=e.target.value; setSelected(cur=>({...cur,stage:v})); saveMfrField("stage",v); }}>{STAGES.map(s=><option key={s}>{s}</option>)}</select>
                     <select className="field mono" style={{width:"auto",padding:"5px 10px",height:30,fontSize:12,background:"#fffaf5",color:"#f97316"}} value={selected.industry||""} onChange={e=>{ const v=e.target.value; setSelected(cur=>({...cur,industry:v})); saveMfrField("industry",v); }}><option value="">{OTHER_INDUSTRY_LABEL}</option>{INDUSTRIES.map(i=><option key={i}>{i}</option>)}</select>
