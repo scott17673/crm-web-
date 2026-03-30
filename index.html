@@ -1047,6 +1047,26 @@ function App(){
     if(!window.confirm(`Delete ${selectedVisibleRecords.length} selected record${selectedVisibleRecords.length===1?"":"s"}?`)) return;
     await deleteRecords(selectedVisibleRecords);
   };
+  const bulkSetSelectedIndustry = async industryValue => {
+    const manufacturers = selectedVisibleRecords.filter(record => record.type==="manufacturer");
+    if(!manufacturers.length) return false;
+    const ids = manufacturers.map(record => record.id);
+    const nextIndustry = industryValue===OTHER_INDUSTRY_LABEL ? "" : industryValue;
+    setSaving(true);
+    try{
+      ensureOk(await sb.from("manufacturers").update({industry:nextIndustry}).in("id", ids));
+      setMfrs(list => list.map(record => ids.includes(record.id) ? {...record, industry:nextIndustry} : record));
+      setSelected(current => current && current.type==="manufacturer" && ids.includes(current.id) ? {...current, industry:nextIndustry} : current);
+      toast2(`Updated ${manufacturers.length} ${manufacturers.length===1?"manufacturer":"manufacturers"} to ${industryValue}`);
+      return true;
+    }catch(err){
+      toast2("Update error: "+err.message);
+      return false;
+    }
+    finally{
+      setSaving(false);
+    }
+  };
 
   if(loading) return <div style={{minHeight:"100vh",display:"grid",placeItems:"center"}}><div style={{display:"grid",gap:14,justifyItems:"center"}}><div className="spinner"/><div className="condensed" style={{letterSpacing:".1em",fontWeight:700,color:"#64748b"}}>LOADING</div></div></div>;
 
@@ -1223,7 +1243,7 @@ function App(){
               <input className="field" style={{maxWidth:260}} value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search company, contacts, notes..." />
               {tab==="manufacturer" && <>
                 <select className="field" style={{maxWidth:150}} value={stageF} onChange={e=>setStageF(e.target.value)}><option value="All">All Stages</option>{STAGES.map(s=><option key={s}>{s}</option>)}</select>
-                <select className="field" style={{maxWidth:180}} value={indF} onChange={e=>setIndF(e.target.value)}><option value="All">All Industries</option>{INDUSTRY_OPTIONS.map(i=><option key={i}>{i}</option>)}</select>
+                <select className="field" style={{maxWidth:180}} value={indF} onChange={async e=>{ const v=e.target.value; if(tab==="manufacturer" && selectedVisibleRecords.length && v!=="All"){ const ok = await bulkSetSelectedIndustry(v); if(ok) setIndF(v); } else setIndF(v); }}><option value="All">All Industries</option>{INDUSTRY_OPTIONS.map(i=><option key={i}>{i}</option>)}</select>
               </>}
               {tab==="lost" && <select className="field" style={{maxWidth:160}} value={reasonF} onChange={e=>setReasonF(e.target.value)}><option value="All">All Reasons</option>{LOST_REASONS.map(r=><option key={r}>{r}</option>)}</select>}
               <select className="field" style={{maxWidth:165}} value={sortBy} onChange={e=>setSortBy(e.target.value)}><option value="default">Sort: Default</option><option value="activity_asc">Oldest Activity</option><option value="activity_desc">Newest Activity</option></select>
@@ -1237,6 +1257,7 @@ function App(){
               <div style={{flex:1}} />
               <button onClick={toggleSelectAllVisible} disabled={!list.length} style={{padding:"8px 14px",border:"1px solid #cbd5e1",borderRadius:4,background:list.length?"#fff":"#f8fafc",color:list.length?"#334155":"#94a3b8",cursor:list.length?"pointer":"not-allowed"}}>{allVisibleSelected ? "Clear Visible" : "Select All Visible"}</button>
               <button onClick={bulkDeleteSelected} disabled={!selectedVisibleRecords.length} style={{padding:"8px 14px",border:"none",borderRadius:4,background:selectedVisibleRecords.length?"#ef4444":"#e2e8f0",color:"#fff",cursor:selectedVisibleRecords.length?"pointer":"not-allowed"}}>Delete Selected ({selectedVisibleRecords.length})</button>
+              {tab==="manufacturer" && !!selectedVisibleRecords.length && <div className="mono" style={{fontSize:10,color:"#8ea0bd"}}>Industry dropdown updates selected</div>}
               <button onClick={()=>downloadCsv(exportRecordRows(exportRecords, tab), exportFileName)} disabled={!exportRecords.length} style={{padding:"8px 14px",border:"1px solid #1e3a8a",borderRadius:4,background:exportRecords.length?"#eff6ff":"#f8fafc",color:exportRecords.length?"#1e3a8a":"#94a3b8",cursor:exportRecords.length?"pointer":"not-allowed"}}>{selectedVisibleRecords.length ? `Export Selected (${selectedVisibleRecords.length})` : "Export CSV"}</button>
               {tab==="manufacturer" && <label style={{padding:"8px 14px",border:"1px solid #22c55e",borderRadius:4,background:"#f0fdf4",color:"#15803d",cursor:"pointer"}}>Import CSV<input type="file" accept=".csv" style={{display:"none"}} onChange={e=>e.target.files?.[0]&&handleImport(e.target.files[0])} /></label>}
             </div>
