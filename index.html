@@ -244,6 +244,17 @@ const extractContactsFromNotes = notes => {
   return dedupeContacts([...contacts, ...linkedinContacts]);
 };
 const buildImportNotes = row => [firstFilled(row.notes, row.note, row.internal_notes), firstFilled(row.chat_gpt_search_result, row.search_result, row.research_notes, row.research_result)].filter(Boolean).join("\n\n");
+const parseImportTags = row => firstFilled(row.tags, row.tag, row.labels).split(/[;,]/).map(tag => tag.trim()).filter(Boolean);
+const preferIncomingText = (current, incoming) => String(incoming || "").trim() ? incoming : current;
+const appendUniqueText = (current, incoming, separator="\n\n") => {
+  const left = String(current || "").trim();
+  const right = String(incoming || "").trim();
+  if(!left) return right;
+  if(!right) return left;
+  if(left.includes(right)) return left;
+  if(right.includes(left)) return right;
+  return `${left}${separator}${right}`;
+};
 const normalizeImportDate = raw => {
   const text = String(raw || "").trim();
   if(!text) return "";
@@ -268,8 +279,43 @@ const normalizeImportRow = row => ({
   phone: firstFilled(row.phone, row.phone_number, row.phones),
   emails: firstFilled(row.email, row.emails),
   end_product: firstFilled(row.end_product, row.product, row.products),
+  tags: parseImportTags(row),
+  importedContacts: deriveImportedContacts(row),
+  rawRows: [row],
   raw: row,
 });
+const mergeImportDate = (current, incoming) => {
+  const values = [normalizeImportDate(current), normalizeImportDate(incoming)].filter(Boolean).sort();
+  return values[values.length - 1] || preferIncomingText(current, incoming);
+};
+const mergeImportRows = (current, incoming) => ({
+  ...current,
+  company: preferIncomingText(current.company, incoming.company),
+  stage: preferIncomingText(current.stage, incoming.stage),
+  industry: preferIncomingText(current.industry, incoming.industry),
+  date: mergeImportDate(current.date, incoming.date),
+  notes: appendUniqueText(current.notes, incoming.notes, "\n\n"),
+  contacts: appendUniqueText(current.contacts, incoming.contacts, "\n"),
+  contact_name: preferIncomingText(current.contact_name, incoming.contact_name),
+  contact_title: preferIncomingText(current.contact_title, incoming.contact_title),
+  contact_linkedin: preferIncomingText(current.contact_linkedin, incoming.contact_linkedin),
+  phone: appendUniqueText(current.phone, incoming.phone, "\n"),
+  emails: appendUniqueText(current.emails, incoming.emails, "\n"),
+  end_product: appendUniqueText(current.end_product, incoming.end_product, "\n"),
+  tags: [...new Set([...(current.tags || []), ...(incoming.tags || [])])],
+  importedContacts: dedupeContacts([...(current.importedContacts || []), ...(incoming.importedContacts || [])]),
+  rawRows: [...(current.rawRows || []), ...(incoming.rawRows || [])],
+});
+const buildMergedImportRowsByKey = rows => {
+  const map = new Map();
+  for(const rawRow of rows || []){
+    const row = normalizeImportRow(rawRow);
+    if(!isLikelyCompanyName(row.company)) continue;
+    const key = normalizeCompanyKey(row.company);
+    map.set(key, map.has(key) ? mergeImportRows(map.get(key), row) : row);
+  }
+  return map;
+};
 const exportRecordRows = (records, tab) => {
   if(tab==="manufacturer"){
     return records.map(record => ({
@@ -874,12 +920,7 @@ function App(){
     if(!importRows?.length) return;
     setSaving(true);
     try{
-      const incomingByKey = new Map();
-      for(const rawRow of importRows){
-        const row = normalizeImportRow(rawRow);
-        if(!isLikelyCompanyName(row.company)) continue;
-        incomingByKey.set(normalizeCompanyKey(row.company), row);
-      }
+      const incomingByKey = buildMergedImportRowsByKey(importRows);
 
       const existingByKey = new Map();
       for(const record of mfrs){
@@ -893,14 +934,14 @@ function App(){
 
       for(const [key, row] of incomingByKey.entries()){
         const importStage = normalizeStage(row.stage);
-        const importContacts = deriveImportedContacts(row);
+        const importContacts = row.importedContacts || [];
         const payload={
           company: row.company,
           stage: importStage,
           industry: row.industry || "",
           end_product: row.end_product || "",
           signals: row.notes,
-          tags: (row.raw?.tags || "").split(/[;,]/).map(x=>x.trim()).filter(Boolean),
+          tags: row.tags || [],
           last_contact: normalizeImportDate(row.date) || today()
         };
         const existingMatches = existingByKey.get(key) || [];
@@ -936,8 +977,7 @@ function App(){
   const list = tab==="manufacturer" ? filteredMfrs : filteredOthers;
   const importPreviewRows = (importRows || []).map(normalizeImportRow);
   const validImportRows = importPreviewRows.filter(row => isLikelyCompanyName(row.company));
-  const importRowsByKey = new Map();
-  validImportRows.forEach(row => importRowsByKey.set(normalizeCompanyKey(row.company), row));
+  const importRowsByKey = buildMergedImportRowsByKey(importRows || []);
   const importUniqueRows = [...importRowsByKey.values()];
   const existingManufacturerByKey = new Map();
   mfrs.forEach(record => {
