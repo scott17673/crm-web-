@@ -599,7 +599,7 @@ function App(){
   const [showForm,setShowForm] = useState(false);
   const [formType,setFormType] = useState("manufacturer");
   const [form,setForm] = useState({});
-  const [newAct,setNewAct] = useState({type:"Call",note:""});
+  const [newAct,setNewAct] = useState({type:"Call",note:"",date:today()});
   const [tasks,setTasks] = useState(()=>safeJson(localStorage.getItem("ed_tasks"),[]));
   const [taskTitle,setTaskTitle] = useState("");
   const [taskDate,setTaskDate] = useState("");
@@ -722,7 +722,7 @@ function App(){
     setEditingActDraft({type:"Call",note:""});
     setTaskTitle("");
     setTaskDate("");
-    setNewAct({type:"Call",note:""});
+    setNewAct({type:"Call",note:"",date:today()});
   };
 
   const saveMfrField = async (field, value) => {
@@ -801,15 +801,19 @@ function App(){
   const logActivity = async () => {
     if(!selected || !newAct.note.trim()) return;
     setSaving(true);
-    const payload={contact_id:selected.id,contact_type:selected.type,type:newAct.type,note:newAct.note,date:today(),created_by:"You"};
+    const activityDate = newAct.date || today();
+    const payload={contact_id:selected.id,contact_type:selected.type,type:newAct.type,note:newAct.note,date:activityDate,created_by:"You"};
     const { data, error } = await sb.from("activities").insert(payload).select().single();
     if(error){ setSaving(false); return toast2("Log error: "+error.message); }
     setActs(cur => [{...data,contactId:data.contact_id},...cur]);
-    setNewAct({type:"Call",note:""});
+    setNewAct({type:"Call",note:"",date:today()});
     if(selected.type==="manufacturer"){
-      await sb.from("manufacturers").update({last_contact:today()}).eq("id",selected.id);
-      setSelected(cur => cur ? {...cur,lastContact:today()} : cur);
-      setMfrs(list => list.map(m=>m.id===selected.id?{...m,lastContact:today()}:m));
+      const nextLastContact = !selected.lastContact || activityDate > selected.lastContact ? activityDate : selected.lastContact;
+      if(nextLastContact !== selected.lastContact){
+        await sb.from("manufacturers").update({last_contact:nextLastContact}).eq("id",selected.id);
+        setSelected(cur => cur ? {...cur,lastContact:nextLastContact} : cur);
+        setMfrs(list => list.map(m=>m.id===selected.id?{...m,lastContact:nextLastContact}:m));
+      }
     }
     setSaving(false);
     toast2("Logged");
@@ -1383,7 +1387,11 @@ function App(){
                 <div style={{paddingTop:18,borderTop:"1px solid #e8eef6"}}>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:10}}>LOG ACTIVITY</div>
                   <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>{["Call","Email","Meeting","Note"].map(t=><button key={t} onClick={()=>setNewAct(cur=>({...cur,type:t}))} style={{padding:"6px 14px",borderRadius:3,border:"2px solid "+(newAct.type===t?"#1e3a8a":"#d7dfeb"),background:newAct.type===t?"#eef4ff":"#fff",color:newAct.type===t?"#1e3a8a":"#8ea0bd",cursor:"pointer",fontWeight:800,fontSize:12,letterSpacing:".05em"}}>{t.toUpperCase()}</button>)}</div>
-                  <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 64px",gap:8,marginBottom:10}}><input className="field" value={newAct.note} onChange={e=>setNewAct(cur=>({...cur,note:e.target.value}))} placeholder="Add a note..." style={{background:"#fbfcfe"}} onKeyDown={e=>e.key==="Enter"&&logActivity()} /><button onClick={logActivity} style={{padding:"8px 14px",border:"none",borderRadius:4,background:"#ef4444",color:"#fff",cursor:"pointer",fontWeight:800,fontSize:12,letterSpacing:".05em"}}>LOG</button></div>
+                  <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 136px 64px",gap:8,marginBottom:10}}>
+                    <input className="field" value={newAct.note} onChange={e=>setNewAct(cur=>({...cur,note:e.target.value}))} placeholder="Add a note..." style={{background:"#fbfcfe"}} onKeyDown={e=>e.key==="Enter"&&logActivity()} />
+                    <input className="field mono" type="date" value={newAct.date} onChange={e=>setNewAct(cur=>({...cur,date:e.target.value}))} />
+                    <button onClick={logActivity} style={{padding:"8px 14px",border:"none",borderRadius:4,background:"#ef4444",color:"#fff",cursor:"pointer",fontWeight:800,fontSize:12,letterSpacing:".05em"}}>LOG</button>
+                  </div>
                   {!detailActs.length && <div className="mono" style={{fontSize:11,color:"#8ea0bd"}}>No activity yet.</div>}
                   {detailActs.map(a=>(
                     <div
