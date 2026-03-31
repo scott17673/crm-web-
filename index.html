@@ -56,6 +56,7 @@ const TYPE_CFG = {
 const STAGE_COLORS = {Unqualified:"#64748b",Prospect:"#94a3b8",Outreach:"#1e40af",Qualified:"#1e3a8a",Proposal:"#ef4444",Negotiation:"#f97316","Closed Won":"#22c55e","Closed Lost":"#64748b"};
 
 const today = () => new Date().toISOString().slice(0,10);
+const createEmptyActivityDraft = () => ({type:"Call",note:"",date:today()});
 const safeJson = (v, fallback) => { try { return JSON.parse(v || ""); } catch { return fallback; } };
 const pillStyle = color => ({fontSize:10,fontWeight:700,letterSpacing:".05em",padding:"3px 8px",borderRadius:2,color,background:color+"14",border:"1px solid "+color+"33",whiteSpace:"nowrap"});
 const tagStyle = color => ({fontSize:10,fontWeight:600,letterSpacing:".05em",padding:"2px 7px",borderRadius:2,color,background:color+"18",border:"1px solid "+color+"33"});
@@ -630,10 +631,12 @@ function App(){
   const [showForm,setShowForm] = useState(false);
   const [formType,setFormType] = useState("manufacturer");
   const [form,setForm] = useState({});
-  const [newAct,setNewAct] = useState({type:"Call",note:"",date:today()});
+  const [newAct,setNewAct] = useState(createEmptyActivityDraft());
   const [tasks,setTasks] = useState(()=>safeJson(localStorage.getItem("ed_tasks"),[]));
   const [taskTitle,setTaskTitle] = useState("");
   const [taskDate,setTaskDate] = useState("");
+  const [taskDrafts,setTaskDrafts] = useState(()=>safeJson(localStorage.getItem("ed_task_drafts"),{}));
+  const [activityDrafts,setActivityDrafts] = useState(()=>safeJson(localStorage.getItem("ed_activity_drafts"),{}));
   const [editingTaskId,setEditingTaskId] = useState(null);
   const [editingTaskDraft,setEditingTaskDraft] = useState({title:"",due_date:""});
   const [editingActId,setEditingActId] = useState(null);
@@ -652,6 +655,70 @@ function App(){
 
   const toast2 = msg => { setToast(msg); setTimeout(()=>setToast(""),3000); };
   const saveTasks = next => { setTasks(next); localStorage.setItem("ed_tasks",JSON.stringify(next)); };
+  const saveTaskDrafts = next => { setTaskDrafts(next); localStorage.setItem("ed_task_drafts",JSON.stringify(next)); };
+  const saveActivityDrafts = next => { setActivityDrafts(next); localStorage.setItem("ed_activity_drafts",JSON.stringify(next)); };
+  const syncTaskDraft = (record, patch) => {
+    if(!record) return;
+    const key = recordKey(record);
+    saveTaskDrafts({
+      ...taskDrafts,
+      [key]: {...(taskDrafts[key] || {title:"",due_date:""}), ...patch},
+    });
+  };
+  const clearTaskDraft = record => {
+    if(!record) return;
+    const key = recordKey(record);
+    if(!(key in taskDrafts)) return;
+    const next = {...taskDrafts};
+    delete next[key];
+    saveTaskDrafts(next);
+  };
+  const syncActivityDraft = (record, patch) => {
+    if(!record) return;
+    const key = recordKey(record);
+    saveActivityDrafts({
+      ...activityDrafts,
+      [key]: {...createEmptyActivityDraft(), ...(activityDrafts[key] || {}), ...patch},
+    });
+  };
+  const clearActivityDraft = record => {
+    if(!record) return;
+    const key = recordKey(record);
+    if(!(key in activityDrafts)) return;
+    const next = {...activityDrafts};
+    delete next[key];
+    saveActivityDrafts(next);
+  };
+  const moveRecordDrafts = (fromRecord, toRecord) => {
+    if(!fromRecord || !toRecord) return;
+    const fromKey = recordKey(fromRecord);
+    const toKey = recordKey(toRecord);
+    if(fromKey===toKey) return;
+    if(taskDrafts[fromKey]){
+      const nextTaskDrafts = {...taskDrafts, [toKey]: taskDrafts[fromKey]};
+      delete nextTaskDrafts[fromKey];
+      saveTaskDrafts(nextTaskDrafts);
+    }
+    if(activityDrafts[fromKey]){
+      const nextActivityDrafts = {...activityDrafts, [toKey]: activityDrafts[fromKey]};
+      delete nextActivityDrafts[fromKey];
+      saveActivityDrafts(nextActivityDrafts);
+    }
+  };
+  const removeDraftsForRecords = records => {
+    const keys = new Set((records || []).map(recordKey));
+    if(!keys.size) return;
+    const nextTaskDrafts = {...taskDrafts};
+    const nextActivityDrafts = {...activityDrafts};
+    let changedTasks = false;
+    let changedActivities = false;
+    keys.forEach(key => {
+      if(key in nextTaskDrafts){ delete nextTaskDrafts[key]; changedTasks = true; }
+      if(key in nextActivityDrafts){ delete nextActivityDrafts[key]; changedActivities = true; }
+    });
+    if(changedTasks) saveTaskDrafts(nextTaskDrafts);
+    if(changedActivities) saveActivityDrafts(nextActivityDrafts);
+  };
 
   const hydrate = useCallback(async (withSpinner=false)=>{
     if(withSpinner) setLoading(true);
@@ -677,6 +744,16 @@ function App(){
   },[]);
 
   useEffect(()=>{ hydrate(true); },[hydrate]);
+
+  useEffect(()=>{
+    if(!selected) return;
+    const key = recordKey(selected);
+    const taskDraft = taskDrafts[key] || {title:"",due_date:""};
+    const activityDraft = {...createEmptyActivityDraft(), ...(activityDrafts[key] || {})};
+    if(taskTitle !== (taskDraft.title || "")) setTaskTitle(taskDraft.title || "");
+    if(taskDate !== (taskDraft.due_date || "")) setTaskDate(taskDraft.due_date || "");
+    if(newAct.type !== activityDraft.type || newAct.note !== activityDraft.note || newAct.date !== activityDraft.date) setNewAct(activityDraft);
+  },[selected?.id, selected?.type, taskDrafts, activityDrafts]);
 
   const all = [...mfrs,...vendors,...lost];
   const detailActs = selected ? acts.filter(a=>a.contactId===selected.id) : [];
@@ -744,6 +821,7 @@ function App(){
   },[vendors,lost,tab,search,stageF,reasonF,sortBy,activityDate,activityMode,matchesOtherSearch]);
 
   const openRecord = rec => {
+    const key = recordKey(rec);
     setSelected(rec);
     setNotesDraft(rec.notes || "");
     setContactsDraft(rec.type==="manufacturer" ? contactsTextFromRecord(rec) : rec.type==="vendor" ? vendorContactTextFromRecord(rec) : "");
@@ -751,9 +829,9 @@ function App(){
     setEditingTaskDraft({title:"",due_date:""});
     setEditingActId(null);
     setEditingActDraft({type:"Call",note:""});
-    setTaskTitle("");
-    setTaskDate("");
-    setNewAct({type:"Call",note:"",date:today()});
+    setTaskTitle(taskDrafts[key]?.title || "");
+    setTaskDate(taskDrafts[key]?.due_date || "");
+    setNewAct({...createEmptyActivityDraft(), ...(activityDrafts[key] || {})});
   };
 
   const saveMfrField = async (field, value) => {
@@ -823,6 +901,7 @@ function App(){
   const addTask = () => {
     if(!selected || !taskTitle.trim()) return;
     saveTasks([{id:Date.now(),contact_id:selected.id,contact_type:selected.type,company:selected.company,title:taskTitle,due_date:taskDate,done:false},...tasks]);
+    clearTaskDraft(selected);
     setTaskTitle("");
     setTaskDate("");
   };
@@ -873,7 +952,8 @@ function App(){
     const { data, error } = await sb.from("activities").insert(payload).select().single();
     if(error){ setSaving(false); return toast2("Log error: "+error.message); }
     setActs(cur => [{...data,contactId:data.contact_id},...cur]);
-    setNewAct({type:"Call",note:"",date:today()});
+    clearActivityDraft(selected);
+    setNewAct(createEmptyActivityDraft());
     if(selected.type==="manufacturer"){
       const nextLastContact = !selected.lastContact || activityDate > selected.lastContact ? activityDate : selected.lastContact;
       if(nextLastContact !== selected.lastContact){
@@ -915,6 +995,7 @@ function App(){
       if(selected && records.some(rec => rec.id===selected.id && rec.type===selected.type)) setSelected(null);
       setSelectedKeys(keys => keys.filter(key => !records.some(rec => recordKey(rec)===key)));
       saveTasks(tasks.filter(task => !records.some(rec => taskMatchesRecord(task, rec))));
+      removeDraftsForRecords(records);
       await hydrate();
       toast2(records.length===1 ? "Deleted" : `Deleted ${records.length} records`);
     }catch(err){
@@ -943,6 +1024,7 @@ function App(){
       if(task.company && companySet.has(task.company)) return false;
       return true;
     }));
+    removeDraftsForRecords(uniqueIds.map(id => ({type:"manufacturer",id})));
   };
 
   const convertSelectedType = async nextType => {
@@ -993,6 +1075,7 @@ function App(){
           return hadOld ? [...filtered, nextKey] : filtered;
         });
         saveTasks(dedupeTaskRows(tasks.map(task => taskMatchesRecord(task, source) ? {...task,contact_id:targetId,contact_type:"vendor",company:vendorRow.company} : task)));
+        moveRecordDrafts(source, {id:targetId,type:"vendor"});
         openRecord(nextSelected);
       }
 
@@ -1037,6 +1120,7 @@ function App(){
           return hadOld ? [...filtered, nextKey] : filtered;
         });
         saveTasks(dedupeTaskRows(tasks.map(task => taskMatchesRecord(task, source) ? {...task,contact_id:targetId,contact_type:"manufacturer",company:manufacturerRow.company} : task)));
+        moveRecordDrafts(source, {id:targetId,type:"manufacturer"});
         openRecord(nextSelected);
       }
 
@@ -1545,7 +1629,11 @@ function App(){
               <div style={{gridColumn:"1 / -1",display:"grid",gap:18}}>
                 <div style={{paddingTop:18,borderTop:"1px solid #e8eef6"}}>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:10}}>TASKS</div>
-                  <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 130px 70px",gap:8,marginBottom:10}}><input className="field" value={taskTitle} onChange={e=>setTaskTitle(e.target.value)} placeholder="Add a task..." style={{background:"#fbfcfe"}} /><input className="field mono" style={{background:"#fff"}} type="date" value={taskDate} onChange={e=>setTaskDate(e.target.value)} /><button onClick={addTask} style={{padding:"8px 14px",border:"none",borderRadius:4,background:"#ef4444",color:"#fff",cursor:"pointer",fontWeight:800,fontSize:12,letterSpacing:".05em"}}>ADD</button></div>
+                  <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 130px 70px",gap:8,marginBottom:10}}>
+                    <input className="field" value={taskTitle} onChange={e=>{ const value = e.target.value; setTaskTitle(value); syncTaskDraft(selected,{title:value}); }} placeholder="Add a task..." style={{background:"#fbfcfe"}} />
+                    <input className="field mono" style={{background:"#fff"}} type="date" value={taskDate} onChange={e=>{ const value = e.target.value; setTaskDate(value); syncTaskDraft(selected,{due_date:value}); }} />
+                    <button onClick={addTask} style={{padding:"8px 14px",border:"none",borderRadius:4,background:"#ef4444",color:"#fff",cursor:"pointer",fontWeight:800,fontSize:12,letterSpacing:".05em"}}>ADD</button>
+                  </div>
                   {tasks.filter(t=>taskMatchesRecord(t, selected)).length===0 && <div className="mono" style={{fontSize:11,color:"#8ea0bd"}}>No tasks yet.</div>}
                   {tasks.filter(t=>taskMatchesRecord(t, selected)).map(t=>(
                     <div key={t.id} style={{display:"flex",gap:8,alignItems:"center",padding:"8px 0",borderBottom:"1px solid #f1f5f9"}}>
@@ -1571,10 +1659,10 @@ function App(){
                 </div>
                 <div style={{paddingTop:18,borderTop:"1px solid #e8eef6"}}>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:10}}>LOG ACTIVITY</div>
-                  <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>{["Call","Email","Meeting","Note"].map(t=><button key={t} onClick={()=>setNewAct(cur=>({...cur,type:t}))} style={{padding:"6px 14px",borderRadius:3,border:"2px solid "+(newAct.type===t?"#1e3a8a":"#d7dfeb"),background:newAct.type===t?"#eef4ff":"#fff",color:newAct.type===t?"#1e3a8a":"#8ea0bd",cursor:"pointer",fontWeight:800,fontSize:12,letterSpacing:".05em"}}>{t.toUpperCase()}</button>)}</div>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>{["Call","Email","Meeting","Note"].map(t=><button key={t} onClick={()=>{ const next = {...newAct,type:t}; setNewAct(next); syncActivityDraft(selected,next); }} style={{padding:"6px 14px",borderRadius:3,border:"2px solid "+(newAct.type===t?"#1e3a8a":"#d7dfeb"),background:newAct.type===t?"#eef4ff":"#fff",color:newAct.type===t?"#1e3a8a":"#8ea0bd",cursor:"pointer",fontWeight:800,fontSize:12,letterSpacing:".05em"}}>{t.toUpperCase()}</button>)}</div>
                   <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 136px 64px",gap:8,marginBottom:10}}>
-                    <input className="field" value={newAct.note} onChange={e=>setNewAct(cur=>({...cur,note:e.target.value}))} placeholder="Add a note..." style={{background:"#fbfcfe"}} onKeyDown={e=>e.key==="Enter"&&logActivity()} />
-                    <input className="field mono" type="date" value={newAct.date} onChange={e=>setNewAct(cur=>({...cur,date:e.target.value}))} />
+                    <input className="field" value={newAct.note} onChange={e=>{ const next = {...newAct,note:e.target.value}; setNewAct(next); syncActivityDraft(selected,next); }} placeholder="Add a note..." style={{background:"#fbfcfe"}} onKeyDown={e=>e.key==="Enter"&&logActivity()} />
+                    <input className="field mono" type="date" value={newAct.date} onChange={e=>{ const next = {...newAct,date:e.target.value}; setNewAct(next); syncActivityDraft(selected,next); }} />
                     <button onClick={logActivity} style={{padding:"8px 14px",border:"none",borderRadius:4,background:"#ef4444",color:"#fff",cursor:"pointer",fontWeight:800,fontSize:12,letterSpacing:".05em"}}>LOG</button>
                   </div>
                   {!detailActs.length && <div className="mono" style={{fontSize:11,color:"#8ea0bd"}}>No activity yet.</div>}
