@@ -46,6 +46,10 @@ const LOST_REASONS = ["Price","Competitor","No Budget","No Decision","Bad Fit","
 const INDUSTRIES = ["Food and Beverage","Concrete","Metal Refineries","Recycling","Mining/Aggregate","Asphalt Plants","Building Products"];
 const OTHER_INDUSTRY_LABEL = "Others";
 const INDUSTRY_OPTIONS = [...INDUSTRIES, OTHER_INDUSTRY_LABEL];
+const TASK_ACTIVITY_TYPE = "__task__";
+const TASK_OPEN_META = "__task_open__";
+const TASK_DONE_META = "__task_done__";
+const LEGACY_TASKS_KEY = "ed_tasks";
 const IND_COLORS = {"Food and Beverage":"#f97316","Concrete":"#78716c","Metal Refineries":"#64748b","Recycling":"#22c55e","Mining/Aggregate":"#a16207","Asphalt Plants":"#334155","Building Products":"#1d4ed8","Others":"#475569"};
 const IND_ICONS = {"Food and Beverage":"◍","Concrete":"▦","Metal Refineries":"◉","Recycling":"↻","Mining/Aggregate":"⛏","Asphalt Plants":"▣","Building Products":"▥","Others":"◧"};
 const TYPE_CFG = {
@@ -165,6 +169,10 @@ const sortTasksByNearest = list => [...(list || [])].sort((a,b) => {
   if(byCompany) return byCompany;
   return String(a.title || "").localeCompare(String(b.title || ""));
 });
+const isTaskActivity = row => row?.type===TASK_ACTIVITY_TYPE;
+const taskActivityMeta = done => done ? TASK_DONE_META : TASK_OPEN_META;
+const taskIsDone = row => String(row?.created_by || "").trim()===TASK_DONE_META;
+const taskIdentityKey = task => [task.contact_type || "", task.contact_id || "", task.title || "", task.due_date || "", task.done ? "1" : "0"].join("|");
 const taskMatchesRecord = (task, rec) => task.contact_id===rec.id && (!task.contact_type || task.contact_type===rec.type || task.company===rec.company);
 const manufacturerDbField = field => ({ notes: "signals" }[field] || field);
 const ensureOk = result => {
@@ -642,7 +650,7 @@ function App(){
   const [formType,setFormType] = useState("manufacturer");
   const [form,setForm] = useState({});
   const [newAct,setNewAct] = useState(createEmptyActivityDraft());
-  const [tasks,setTasks] = useState(()=>safeJson(localStorage.getItem("ed_tasks"),[]));
+  const [tasks,setTasks] = useState([]);
   const [taskTitle,setTaskTitle] = useState("");
   const [taskDate,setTaskDate] = useState("");
   const [taskDrafts,setTaskDrafts] = useState(()=>safeJson(localStorage.getItem("ed_task_drafts"),{}));
@@ -666,7 +674,6 @@ function App(){
   const [taskSearch,setTaskSearch] = useState("");
 
   const toast2 = msg => { setToast(msg); setTimeout(()=>setToast(""),3000); };
-  const saveTasks = next => { setTasks(next); localStorage.setItem("ed_tasks",JSON.stringify(next)); };
   const saveTaskDrafts = next => { setTaskDrafts(next); localStorage.setItem("ed_task_drafts",JSON.stringify(next)); };
   const saveActivityDrafts = next => { setActivityDrafts(next); localStorage.setItem("ed_activity_drafts",JSON.stringify(next)); };
   const syncTaskDraft = (record, patch) => {
@@ -731,6 +738,23 @@ function App(){
     if(changedTasks) saveTaskDrafts(nextTaskDrafts);
     if(changedActivities) saveActivityDrafts(nextActivityDrafts);
   };
+  const taskRowFromActivity = (row, companyByKey) => ({
+    id: row.id,
+    contact_id: row.contact_id,
+    contact_type: row.contact_type || "manufacturer",
+    company: companyByKey.get(`${row.contact_type || "manufacturer"}:${row.contact_id}`) || "",
+    title: row.note || "",
+    due_date: row.date || "",
+    done: taskIsDone(row),
+  });
+  const taskActivityFromTask = task => ({
+    contact_id: task.contact_id,
+    contact_type: task.contact_type || "manufacturer",
+    type: TASK_ACTIVITY_TYPE,
+    note: task.title || "",
+    date: task.due_date || null,
+    created_by: taskActivityMeta(!!task.done),
+  });
 
   const hydrate = useCallback(async (withSpinner=false)=>{
     if(withSpinner) setLoading(true);
@@ -746,10 +770,38 @@ function App(){
       const m = (mr.data||[]).map(row => ({...row,type:"manufacturer",tags:row.tags||[],lastContact:row.last_contact,industry:row.industry||"",notes:row.signals||"",contacts:contacts.filter(c=>c.manufacturer_id===row.id)}));
       const v = (vr.data||[]).map(row => ({...row,type:"vendor",tags:row.tags||[],lastContact:row.last_contact}));
       const l = (lr.data||[]).map(row => ({...row,type:"lost",tags:row.tags||[],lastContact:row.last_contact,lostReason:row.lost_reason,value:row.deal_value}));
+      let activityRows = ar.data || [];
+      const legacyTasks = safeJson(localStorage.getItem(LEGACY_TASKS_KEY), []);
+      if(Array.isArray(legacyTasks) && legacyTasks.length){
+        const existingTaskKeys = new Set(activityRows.filter(isTaskActivity).map(row => taskIdentityKey({
+          contact_id: row.contact_id,
+          contact_type: row.contact_type || "manufacturer",
+          title: row.note || "",
+          due_date: row.date || "",
+          done: taskIsDone(row),
+        })));
+        const toInsert = legacyTasks
+          .filter(task => task && task.title)
+          .filter(task => !existingTaskKeys.has(taskIdentityKey(task)))
+          .map(taskActivityFromTask);
+        if(toInsert.length){
+          const inserted = await sb.from("activities").insert(toInsert).select("*");
+          ensureOk(inserted);
+          activityRows = [...(inserted.data || []), ...activityRows];
+        }
+        localStorage.removeItem(LEGACY_TASKS_KEY);
+      }
+      const companyByKey = new Map([
+        ...m.map(row => [`manufacturer:${row.id}`, row.company || ""]),
+        ...v.map(row => [`vendor:${row.id}`, row.company || ""]),
+        ...l.map(row => [`lost:${row.id}`, row.company || ""]),
+      ]);
+      const taskRows = activityRows.filter(isTaskActivity).map(row => taskRowFromActivity(row, companyByKey));
       setMfrs(m);
       setVendors(v);
       setLost(l);
-      setActs((ar.data||[]).map(row => ({...row,contactId:row.contact_id})));
+      setTasks(sortTasksByNearest(taskRows));
+      setActs(activityRows.filter(row => !isTaskActivity(row)).map(row => ({...row,contactId:row.contact_id})));
       setSelected(cur => !cur ? null : m.find(x=>x.id===cur.id) || v.find(x=>x.id===cur.id) || l.find(x=>x.id===cur.id) || cur);
     }catch(err){ toast2("Load error: "+err.message); }
     if(withSpinner) setLoading(false);
@@ -930,13 +982,55 @@ function App(){
 
   const addTask = () => {
     if(!selected || !taskTitle.trim()) return;
-    saveTasks([{id:Date.now(),contact_id:selected.id,contact_type:selected.type,company:selected.company,title:taskTitle,due_date:taskDate,done:false},...tasks]);
-    clearTaskDraft(selected);
-    setTaskTitle("");
-    setTaskDate("");
+    return (async () => {
+      try{
+        const payload = {
+          contact_id: selected.id,
+          contact_type: selected.type,
+          type: TASK_ACTIVITY_TYPE,
+          note: taskTitle.trim(),
+          date: taskDate || null,
+          created_by: taskActivityMeta(false),
+        };
+        const inserted = await sb.from("activities").insert(payload).select("*").single();
+        ensureOk(inserted);
+        const task = {
+          id: inserted.data.id,
+          contact_id: selected.id,
+          contact_type: selected.type,
+          company: selected.company,
+          title: inserted.data.note || "",
+          due_date: inserted.data.date || "",
+          done: false,
+        };
+        setTasks(list => sortTasksByNearest([task, ...list]));
+        clearTaskDraft(selected);
+        setTaskTitle("");
+        setTaskDate("");
+      }catch(err){
+        toast2("Task error: "+err.message);
+      }
+    })();
   };
-  const toggleTask = id => saveTasks(tasks.map(t=>t.id===id?{...t,done:!t.done}:t));
-  const deleteTask = id => saveTasks(tasks.filter(t=>t.id!==id));
+  const toggleTask = id => (async () => {
+    const current = tasks.find(task => task.id===id);
+    if(!current) return;
+    const done = !current.done;
+    try{
+      ensureOk(await sb.from("activities").update({created_by:taskActivityMeta(done)}).eq("id",id));
+      setTasks(list => sortTasksByNearest(list.map(task => task.id===id ? {...task,done} : task)));
+    }catch(err){
+      toast2("Task error: "+err.message);
+    }
+  })();
+  const deleteTask = id => (async () => {
+    try{
+      ensureOk(await sb.from("activities").delete().eq("id",id));
+      setTasks(list => list.filter(task => task.id!==id));
+    }catch(err){
+      toast2("Task error: "+err.message);
+    }
+  })();
   const startTaskEdit = task => {
     setEditingTaskId(task.id);
     setEditingTaskDraft({title:task.title || "",due_date:task.due_date || ""});
@@ -948,9 +1042,16 @@ function App(){
       setEditingTaskDraft({title:"",due_date:""});
       return;
     }
-    saveTasks(tasks.map(task => task.id===id ? {...task,title,due_date:editingTaskDraft.due_date || ""} : task));
-    setEditingTaskId(null);
-    setEditingTaskDraft({title:"",due_date:""});
+    (async () => {
+      try{
+        ensureOk(await sb.from("activities").update({note:title,date:editingTaskDraft.due_date || null}).eq("id",id));
+        setTasks(list => sortTasksByNearest(list.map(task => task.id===id ? {...task,title,due_date:editingTaskDraft.due_date || ""} : task)));
+        setEditingTaskId(null);
+        setEditingTaskDraft({title:"",due_date:""});
+      }catch(err){
+        toast2("Task error: "+err.message);
+      }
+    })();
   };
   const startActivityEdit = activity => {
     setEditingActId(activity.id);
@@ -1024,7 +1125,7 @@ function App(){
 
       if(selected && records.some(rec => rec.id===selected.id && rec.type===selected.type)) setSelected(null);
       setSelectedKeys(keys => keys.filter(key => !records.some(rec => recordKey(rec)===key)));
-      saveTasks(tasks.filter(task => !records.some(rec => taskMatchesRecord(task, rec))));
+      setTasks(list => list.filter(task => !records.some(rec => taskMatchesRecord(task, rec))));
       removeDraftsForRecords(records);
       await hydrate();
       toast2(records.length===1 ? "Deleted" : `Deleted ${records.length} records`);
@@ -1043,17 +1144,12 @@ function App(){
     const uniqueIds = [...new Set((manufacturerIds || []).filter(Boolean))];
     if(!uniqueIds.length) return;
     const idSet = new Set(uniqueIds);
-    const companySet = new Set(mfrs.filter(record => idSet.has(record.id)).map(record => record.company));
     ensureOk(await sb.from("manufacturer_contacts").delete().in("manufacturer_id", uniqueIds));
     ensureOk(await sb.from("activities").delete().eq("contact_type","manufacturer").in("contact_id", uniqueIds));
     ensureOk(await sb.from("manufacturers").delete().in("id", uniqueIds));
     if(selected && selected.type==="manufacturer" && idSet.has(selected.id)) setSelected(null);
     setSelectedKeys(keys => keys.filter(key => !uniqueIds.some(id => key===`manufacturer:${id}`)));
-    saveTasks(tasks.filter(task => {
-      if(idSet.has(task.contact_id)) return false;
-      if(task.company && companySet.has(task.company)) return false;
-      return true;
-    }));
+    setTasks(list => list.filter(task => !idSet.has(task.contact_id)));
     removeDraftsForRecords(uniqueIds.map(id => ({type:"manufacturer",id})));
   };
 
@@ -1104,7 +1200,7 @@ function App(){
           const filtered = keys.filter(key => key!==sourceKey && key!==nextKey);
           return hadOld ? [...filtered, nextKey] : filtered;
         });
-        saveTasks(dedupeTaskRows(tasks.map(task => taskMatchesRecord(task, source) ? {...task,contact_id:targetId,contact_type:"vendor",company:vendorRow.company} : task)));
+        setTasks(list => sortTasksByNearest(dedupeTaskRows(list.map(task => taskMatchesRecord(task, source) ? {...task,contact_id:targetId,contact_type:"vendor",company:vendorRow.company} : task))));
         moveRecordDrafts(source, {id:targetId,type:"vendor"});
         openRecord(nextSelected);
       }
@@ -1149,7 +1245,7 @@ function App(){
           const filtered = keys.filter(key => key!==sourceKey && key!==nextKey);
           return hadOld ? [...filtered, nextKey] : filtered;
         });
-        saveTasks(dedupeTaskRows(tasks.map(task => taskMatchesRecord(task, source) ? {...task,contact_id:targetId,contact_type:"manufacturer",company:manufacturerRow.company} : task)));
+        setTasks(list => sortTasksByNearest(dedupeTaskRows(list.map(task => taskMatchesRecord(task, source) ? {...task,contact_id:targetId,contact_type:"manufacturer",company:manufacturerRow.company} : task))));
         moveRecordDrafts(source, {id:targetId,type:"manufacturer"});
         openRecord(nextSelected);
       }
