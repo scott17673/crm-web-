@@ -769,6 +769,24 @@ function App(){
 
   const all = [...mfrs,...vendors,...lost];
   const detailActs = selected ? acts.filter(a=>a.contactId===selected.id) : [];
+  const resolveTaskRecord = useCallback(task => {
+    if(!task) return null;
+    if(task.contact_id){
+      const direct = all.find(record => record.id===task.contact_id && (!task.contact_type || record.type===task.contact_type));
+      if(direct) return direct;
+    }
+    const companyKey = normalizeCompanyKey(task.company);
+    if(!companyKey) return null;
+    return all.find(record => normalizeCompanyKey(record.company)===companyKey) || null;
+  },[all]);
+  const openTaskRecord = useCallback(task => {
+    const record = resolveTaskRecord(task);
+    if(!record) return toast2("Company not found");
+    setShowTasksModal(false);
+    setView("contacts");
+    setTab(record.type);
+    openRecord(record);
+  },[resolveTaskRecord]);
   const activitySearchByRecord = useMemo(()=>{
     const map = new Map();
     acts.forEach(act => {
@@ -1740,16 +1758,20 @@ function App(){
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em"}}>DUE DATE</div>
                 </div>
                 {!filteredTaskList.length && <div className="mono" style={{padding:"18px 20px",fontSize:12,color:"#8ea0bd"}}>No tasks match that search.</div>}
-                {filteredTaskList.map(task=>(
+                {filteredTaskList.map(task=>{
+                  const linkedRecord = resolveTaskRecord(task);
+                  return (
                   <div key={task.id} style={{display:"grid",gridTemplateColumns:"44px minmax(0,1fr) 170px 110px",gap:12,alignItems:"start",padding:"12px 16px",borderBottom:"1px solid #eef3f9"}}>
                     <input type="checkbox" checked={task.done} onChange={()=>toggleTask(task.id)} style={{marginTop:2}} />
                     <div style={{minWidth:0}}>
                       <div style={{fontSize:13,fontWeight:700,color:task.done?"#94a3b8":"#18233a",textDecoration:task.done?"line-through":"none"}}>{task.title}</div>
                     </div>
-                    <div style={{fontSize:12,color:"#475569",minWidth:0,wordBreak:"break-word"}}>{task.company || "—"}</div>
+                    {linkedRecord
+                      ? <button onClick={()=>openTaskRecord(task)} style={{fontSize:12,color:"#1e3a8a",minWidth:0,wordBreak:"break-word",border:"none",background:"transparent",padding:0,textAlign:"left",cursor:"pointer",textDecoration:"underline"}}>{task.company || "—"}</button>
+                      : <div style={{fontSize:12,color:"#475569",minWidth:0,wordBreak:"break-word"}}>{task.company || "—"}</div>}
                     <div className="mono" style={{fontSize:11,color:task.done?"#94a3b8":task.due_date&&task.due_date<today()?"#ef4444":"#64748b"}}>{task.due_date || "No date"}</div>
                   </div>
-                ))}
+                )})}
               </div>
             </div>
           </div>
