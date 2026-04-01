@@ -1340,8 +1340,8 @@ function App(){
 
   if(loading) return <div style={{minHeight:"100vh",display:"grid",placeItems:"center"}}><div style={{display:"grid",gap:14,justifyItems:"center"}}><div className="spinner"/><div className="condensed" style={{letterSpacing:".1em",fontWeight:700,color:"#64748b"}}>LOADING</div></div></div>;
 
-  const overdue = sortTasksByNearest(tasks.filter(t=>!t.done&&t.due_date&&t.due_date<today()));
-  const upcoming = sortTasksByNearest(tasks.filter(t=>!t.done&&(!t.due_date||t.due_date>=today())));
+  const overdue = sortTasksByNearest(tasks.filter(t=>!t.done&&t.due_date&&t.due_date<=today()));
+  const upcoming = sortTasksByNearest(tasks.filter(t=>!t.done&&(!t.due_date||t.due_date>today())));
   const taskSearchQuery = taskSearch.trim().toLowerCase();
   const filteredTaskList = sortTasksByNearest(tasks.filter(task => {
     if(!taskSearchQuery) return true;
@@ -1438,12 +1438,12 @@ function App(){
 
               <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
                 <div style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #d8e2ef",background:"#f8fbff",gap:12}}>
-                  <div className="mono" style={{fontSize:11,letterSpacing:".16em",color:"#6f84a6",textTransform:"uppercase"}}>⚠ Overdue</div>
+                  <div className="mono" style={{fontSize:11,letterSpacing:".16em",color:"#6f84a6",textTransform:"uppercase"}}>⚠ Due / Overdue</div>
                   <button onClick={()=>setShowTasksModal(true)} style={{border:"none",background:"transparent",color:"#1e3a8a",cursor:"pointer",fontSize:12,fontWeight:700}}>View All</button>
                 </div>
                 <div style={{minHeight:302}}>
                   {overdue.length===0
-                    ? <div className="mono" style={{padding:"18px 20px",fontSize:12,color:"#8ea0bd"}}>No overdue tasks.</div>
+                    ? <div className="mono" style={{padding:"18px 20px",fontSize:12,color:"#8ea0bd"}}>No due or overdue tasks.</div>
                     : overdue.map(t=>(
                       <div key={t.id} onClick={()=>setShowTasksModal(true)} style={{padding:"12px 18px",borderBottom:"1px solid #eef3f9",display:"flex",gap:10,alignItems:"flex-start",cursor:"pointer"}}>
                         <input type="checkbox" checked={t.done} onChange={()=>toggleTask(t.id)} onClick={e=>e.stopPropagation()} style={{marginTop:2}} />
