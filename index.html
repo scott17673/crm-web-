@@ -1060,6 +1060,20 @@ const taskActivityFromTask = task => ({
     return true;
   };
 
+  const touchRecordLastActivity = async (record, activityDate=today()) => {
+    if(!record?.id || !record?.type || !activityDate) return;
+    const currentLast = record.lastContact || "";
+    if(currentLast && currentLast >= activityDate) return;
+    const table = record.type==="manufacturer" ? "manufacturers" : record.type==="vendor" ? "vendors" : record.type==="lost" ? "lost_contacts" : null;
+    if(!table) return;
+    const { error } = await sb.from(table).update({last_contact:activityDate}).eq("id",record.id);
+    if(error) throw error;
+    if(record.type==="manufacturer") setMfrs(list => list.map(item => item.id===record.id ? {...item,lastContact:activityDate,last_contact:activityDate} : item));
+    if(record.type==="vendor") setVendors(list => list.map(item => item.id===record.id ? {...item,lastContact:activityDate,last_contact:activityDate} : item));
+    if(record.type==="lost") setLost(list => list.map(item => item.id===record.id ? {...item,lastContact:activityDate,last_contact:activityDate} : item));
+    setSelected(current => current && current.id===record.id && current.type===record.type ? {...current,lastContact:activityDate,last_contact:activityDate} : current);
+  };
+
   const saveContacts = async raw => {
     if(!selected || selected.type!=="manufacturer") return;
     try{
@@ -1142,6 +1156,10 @@ const taskActivityFromTask = task => ({
     try{
       ensureOk(await sb.from("activities").update({created_by:taskActivityMeta(done, current.owner)}).eq("id",id));
       setTasks(list => sortTasksByNearest(list.map(task => task.id===id ? {...task,done} : task)));
+      if(done){
+        const linkedRecord = resolveTaskRecord(current);
+        if(linkedRecord) await touchRecordLastActivity(linkedRecord, today());
+      }
     }catch(err){
       toast2("Task error: "+err.message);
     }
