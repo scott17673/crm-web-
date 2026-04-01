@@ -193,6 +193,31 @@ const taskOwnerFromActivity = row => parseTaskActivityMeta(row?.created_by).owne
 const displayOwner = value => String(value || "").trim() || DEFAULT_OWNER;
 const taskIdentityKey = task => [task.contact_type || "", task.contact_id || "", task.title || "", task.due_date || "", normalizeOwner(task.owner), task.done ? "1" : "0"].join("|");
 const taskMatchesRecord = (task, rec) => task.contact_id===rec.id && (!task.contact_type || task.contact_type===rec.type || task.company===rec.company);
+const inferTaskRecord = (task, records) => {
+  const allRecords = records || [];
+  const companyKey = normalizeCompanyKey(task?.company);
+  if(task?.contact_id != null){
+    const typed = allRecords.find(record => record.id===task.contact_id && (!task.contact_type || record.type===task.contact_type));
+    if(typed) return typed;
+    const byId = allRecords.find(record => record.id===task.contact_id);
+    if(byId) return byId;
+  }
+  if(companyKey) return allRecords.find(record => normalizeCompanyKey(record.company)===companyKey) || null;
+  return null;
+};
+const normalizeLegacyTask = (task, records) => {
+  const record = inferTaskRecord(task, records);
+  return {
+    ...task,
+    contact_id: record?.id ?? task?.contact_id ?? null,
+    contact_type: record?.type ?? task?.contact_type ?? "manufacturer",
+    company: record?.company || task?.company || "",
+    title: String(task?.title || "").trim(),
+    due_date: task?.due_date || "",
+    owner: normalizeOwner(task?.owner),
+    done: !!task?.done,
+  };
+};
 const manufacturerDbField = field => ({ notes: "signals" }[field] || field);
 const ensureOk = result => {
   if(result?.error) throw result.error;
@@ -792,6 +817,7 @@ function App(){
       const m = (mr.data||[]).map(row => ({...row,type:"manufacturer",tags:row.tags||[],lastContact:row.last_contact,industry:row.industry||"",notes:row.signals||"",contacts:contacts.filter(c=>c.manufacturer_id===row.id)}));
       const v = (vr.data||[]).map(row => ({...row,type:"vendor",tags:row.tags||[],lastContact:row.last_contact}));
       const l = (lr.data||[]).map(row => ({...row,type:"lost",tags:row.tags||[],lastContact:row.last_contact,lostReason:row.lost_reason,value:row.deal_value}));
+      const allRecords = [...m, ...v, ...l];
       let activityRows = ar.data || [];
       const legacyTasks = safeJson(localStorage.getItem(LEGACY_TASKS_KEY), []);
       if(Array.isArray(legacyTasks) && legacyTasks.length){
@@ -804,16 +830,35 @@ function App(){
             owner: taskOwnerFromActivity(row),
             done: taskIsDone(row),
           })));
-          const toInsert = legacyTasks
-            .filter(task => task && task.title)
-            .filter(task => !existingTaskKeys.has(taskIdentityKey({...task, owner: normalizeOwner(task.owner)})))
-            .map(task => taskActivityFromTask({...task, owner: normalizeOwner(task.owner)}));
-          if(toInsert.length){
-            const inserted = await sb.from("activities").insert(toInsert).select("*");
-            ensureOk(inserted);
-            activityRows = [...(inserted.data || []), ...activityRows];
+          const preparedLegacyTasks = legacyTasks
+            .map(task => normalizeLegacyTask(task, allRecords))
+            .filter(task => task.title);
+          const pendingLegacyTasks = preparedLegacyTasks.filter(task => task.contact_id && !existingTaskKeys.has(taskIdentityKey(task)));
+          const insertedRows = [];
+          const insertedKeys = new Set();
+          for(const task of pendingLegacyTasks){
+            try{
+              const inserted = await sb.from("activities").insert(taskActivityFromTask(task)).select("*").single();
+              ensureOk(inserted);
+              if(inserted.data){
+                insertedRows.push(inserted.data);
+                insertedKeys.add(taskIdentityKey(task));
+              }
+            }catch(singleTaskErr){
+              console.error("Legacy task insert failed", task, singleTaskErr);
+            }
           }
-          localStorage.removeItem(LEGACY_TASKS_KEY);
+          if(insertedRows.length) activityRows = [...insertedRows, ...activityRows];
+          const remainingLegacyTasks = preparedLegacyTasks.filter(task => {
+            if(!task.contact_id) return true;
+            const key = taskIdentityKey(task);
+            return !existingTaskKeys.has(key) && !insertedKeys.has(key);
+          });
+          if(remainingLegacyTasks.length) localStorage.setItem(LEGACY_TASKS_KEY, JSON.stringify(remainingLegacyTasks));
+          else localStorage.removeItem(LEGACY_TASKS_KEY);
+          if(remainingLegacyTasks.length){
+            toast2(`Task sync warning: ${remainingLegacyTasks.length} older task${remainingLegacyTasks.length===1?"":"s"} still need a matching company on this browser.`);
+          }
         }catch(taskErr){
           console.error("Legacy task migration failed", taskErr);
           toast2("Task sync warning: local tasks will stay on this browser until they save again.");
