@@ -47,6 +47,7 @@ const INDUSTRIES = ["Food and Beverage","Concrete","Metal Refineries","Recycling
 const OTHER_INDUSTRY_LABEL = "Others";
 const INDUSTRY_OPTIONS = [...INDUSTRIES, OTHER_INDUSTRY_LABEL];
 const TASK_ACTIVITY_TYPE = "__task__";
+const TASK_ACTIVITY_DB_TYPE = "Note";
 const TASK_OPEN_META = "__task_open__";
 const TASK_DONE_META = "__task_done__";
 const LEGACY_TASKS_KEY = "ed_tasks";
@@ -201,7 +202,10 @@ const sortTasksByNearest = list => [...(list || [])].sort((a,b) => {
   if(byCompany) return byCompany;
   return String(a.title || "").localeCompare(String(b.title || ""));
 });
-const isTaskActivity = row => row?.type===TASK_ACTIVITY_TYPE;
+const isTaskActivity = row => {
+  const raw = String(row?.created_by || "").trim();
+  return raw===TASK_OPEN_META || raw===TASK_DONE_META || raw.startsWith(`${TASK_ACTIVITY_TYPE}|`);
+};
 const normalizeOwner = value => PEOPLE.includes(value) ? value : DEFAULT_OWNER;
 const parseTaskActivityMeta = value => {
   const raw = String(value || "").trim();
@@ -832,10 +836,10 @@ function App(){
     done: taskIsDone(row),
     owner: taskOwnerFromActivity(row),
   });
-  const taskActivityFromTask = task => ({
+const taskActivityFromTask = task => ({
     contact_id: task.contact_id,
     contact_type: task.contact_type || "manufacturer",
-    type: TASK_ACTIVITY_TYPE,
+    type: TASK_ACTIVITY_DB_TYPE,
     note: task.title || "",
     date: task.due_date || null,
     created_by: taskActivityMeta(!!task.done, task.owner),
@@ -1104,7 +1108,7 @@ function App(){
         const payload = {
           contact_id: selected.id,
           contact_type: selected.type,
-          type: TASK_ACTIVITY_TYPE,
+          type: TASK_ACTIVITY_DB_TYPE,
           note: taskTitle.trim(),
           date: taskDate || null,
           created_by: taskActivityMeta(false, taskOwner),
