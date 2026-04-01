@@ -123,6 +123,32 @@ const isKnownIndustry = value => INDUSTRIES.includes(normalizeIndustry(value));
 const getIndustryBucket = value => isKnownIndustry(value) ? normalizeIndustry(value) : OTHER_INDUSTRY_LABEL;
 const matchesIndustryFilter = (value, filter) => filter==="All" || (filter===OTHER_INDUSTRY_LABEL ? !isKnownIndustry(value) : normalizeIndustry(value)===filter);
 const normalizeCompanyKey = value => String(value || "").toLowerCase().replace(/[^a-z0-9]/g,"");
+const COMPANY_STOP_WORDS = new Set(["inc","ltd","limited","corp","corporation","co","company","llc","lp","plc"]);
+const tokenizeCompanyName = value => String(value || "")
+  .toLowerCase()
+  .replace(/&/g, " and ")
+  .replace(/[^a-z0-9]+/g, " ")
+  .trim()
+  .split(/\s+/)
+  .filter(token => token && !COMPANY_STOP_WORDS.has(token));
+const companySimilarityScore = (left, right) => {
+  const leftKey = normalizeCompanyKey(left);
+  const rightKey = normalizeCompanyKey(right);
+  if(!leftKey || !rightKey) return 0;
+  if(leftKey===rightKey) return 1;
+  if(leftKey.includes(rightKey) || rightKey.includes(leftKey)) return 0.94;
+  const leftTokens = tokenizeCompanyName(left);
+  const rightTokens = tokenizeCompanyName(right);
+  if(!leftTokens.length || !rightTokens.length) return 0;
+  const rightSet = new Set(rightTokens);
+  const leftSet = new Set(leftTokens);
+  const overlap = leftTokens.filter(token => rightSet.has(token)).length;
+  const maxLen = Math.max(leftSet.size, rightSet.size, 1);
+  const minLen = Math.min(leftSet.size, rightSet.size, 1);
+  const coverage = overlap / maxLen;
+  const saturation = overlap / minLen;
+  return (coverage * 0.7) + (saturation * 0.3);
+};
 const isLinkTarget = target => {
   const node = target && (target.nodeType === 1 ? target : target.parentElement);
   return !!node?.closest?.("a,[data-external-url]");
@@ -202,7 +228,17 @@ const inferTaskRecord = (task, records) => {
     const byId = allRecords.find(record => record.id===task.contact_id);
     if(byId) return byId;
   }
-  if(companyKey) return allRecords.find(record => normalizeCompanyKey(record.company)===companyKey) || null;
+  if(companyKey){
+    const exact = allRecords.find(record => normalizeCompanyKey(record.company)===companyKey);
+    if(exact) return exact;
+    const ranked = allRecords
+      .map(record => ({record, score: companySimilarityScore(task?.company, record.company)}))
+      .filter(entry => entry.score > 0)
+      .sort((a,b) => b.score - a.score);
+    const best = ranked[0];
+    const second = ranked[1];
+    if(best && (best.score >= 0.84 || (best.score >= 0.68 && (!second || best.score - second.score >= 0.12)))) return best.record;
+  }
   return null;
 };
 const normalizeLegacyTask = (task, records) => {
@@ -1547,6 +1583,49 @@ function App(){
     const haystack = [task.title, task.company, task.due_date, task.contact_type, task.owner].filter(Boolean).join(" ").toLowerCase();
     return haystack.includes(taskSearchQuery);
   }));
+  const attachUnmatchedLegacyTasks = async () => {
+    if(!unmatchedLegacyTasks.length) return;
+    const preparedTasks = unmatchedLegacyTasks.map(task => normalizeLegacyTask(task, all));
+    const existingTaskKeys = new Set(tasks.map(task => taskIdentityKey(task)));
+    const pendingTasks = preparedTasks.filter(task => task.contact_id && !existingTaskKeys.has(taskIdentityKey(task)));
+    if(!pendingTasks.length){
+      const stillUnmatched = preparedTasks.filter(task => !task.contact_id);
+      setUnmatchedLegacyTasks(stillUnmatched);
+      if(stillUnmatched.length) localStorage.setItem(LEGACY_TASKS_KEY, JSON.stringify(stillUnmatched));
+      else localStorage.removeItem(LEGACY_TASKS_KEY);
+      return toast2(stillUnmatched.length ? "Those tasks still need clearer company matches." : "All unmatched tasks are already attached.");
+    }
+    setSaving(true);
+    try{
+      const companyByKey = new Map(all.map(record => [`${record.type}:${record.id}`, record.company || ""]));
+      const insertedTasks = [];
+      const insertedKeys = new Set();
+      for(const task of pendingTasks){
+        try{
+          const inserted = await sb.from("activities").insert(taskActivityFromTask(task)).select("*").single();
+          ensureOk(inserted);
+          if(inserted.data){
+            insertedTasks.push(taskRowFromActivity(inserted.data, companyByKey));
+            insertedKeys.add(taskIdentityKey(task));
+          }
+        }catch(singleTaskErr){
+          console.error("Attach legacy task failed", task, singleTaskErr);
+        }
+      }
+      if(insertedTasks.length) setTasks(list => sortTasksByNearest([...insertedTasks, ...list]));
+      const remainingTasks = preparedTasks.filter(task => {
+        if(!task.contact_id) return true;
+        return !insertedKeys.has(taskIdentityKey(task));
+      });
+      setUnmatchedLegacyTasks(remainingTasks);
+      if(remainingTasks.length) localStorage.setItem(LEGACY_TASKS_KEY, JSON.stringify(remainingTasks));
+      else localStorage.removeItem(LEGACY_TASKS_KEY);
+      toast2(insertedTasks.length ? `Attached ${insertedTasks.length} task${insertedTasks.length===1?"":"s"}.` : "No tasks could be attached yet.");
+    }catch(err){
+      toast2("Task attach error: "+err.message);
+    }
+    setSaving(false);
+  };
   const pipe = mfrs.filter(m=>!["Closed Won","Closed Lost"].includes(m.stage)).length;
   const hot = mfrs.filter(m=>(m.tags||[]).includes("Hot")).length;
   const lostValue = lost.reduce((sum,r)=>sum+(r.value||0),0);
@@ -1987,7 +2066,10 @@ function App(){
                 <div className="condensed" style={{fontSize:22,fontWeight:800,color:"#172033"}}>Unmatched Legacy Tasks</div>
                 <div className="mono" style={{fontSize:11,color:"#8ea0bd",marginTop:3}}>{unmatchedLegacyTasks.length} task{unmatchedLegacyTasks.length===1?"":"s"} still stored only on this browser</div>
               </div>
-              <button onClick={()=>setShowUnmatchedTasksModal(false)} style={{width:30,height:30,border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",cursor:"pointer",color:"#94a3b8"}}>×</button>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                {!!unmatchedLegacyTasks.length && <button onClick={attachUnmatchedLegacyTasks} style={{padding:"8px 12px",border:"1px solid #1e3a8a",borderRadius:4,background:"#eff6ff",color:"#1e3a8a",cursor:"pointer",fontSize:12,fontWeight:700}}>Attach Matched Now</button>}
+                <button onClick={()=>setShowUnmatchedTasksModal(false)} style={{width:30,height:30,border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",cursor:"pointer",color:"#94a3b8"}}>×</button>
+              </div>
             </div>
             <div style={{padding:"18px 24px",display:"grid",gap:14}}>
               {!unmatchedLegacyTasks.length && <div className="mono" style={{fontSize:12,color:"#8ea0bd"}}>No unmatched legacy tasks right now.</div>}
