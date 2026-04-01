@@ -795,23 +795,29 @@ function App(){
       let activityRows = ar.data || [];
       const legacyTasks = safeJson(localStorage.getItem(LEGACY_TASKS_KEY), []);
       if(Array.isArray(legacyTasks) && legacyTasks.length){
-        const existingTaskKeys = new Set(activityRows.filter(isTaskActivity).map(row => taskIdentityKey({
-          contact_id: row.contact_id,
-          contact_type: row.contact_type || "manufacturer",
-          title: row.note || "",
-          due_date: row.date || "",
-          done: taskIsDone(row),
-        })));
-        const toInsert = legacyTasks
-          .filter(task => task && task.title)
-          .filter(task => !existingTaskKeys.has(taskIdentityKey(task)))
-          .map(taskActivityFromTask);
-        if(toInsert.length){
-          const inserted = await sb.from("activities").insert(toInsert).select("*");
-          ensureOk(inserted);
-          activityRows = [...(inserted.data || []), ...activityRows];
+        try{
+          const existingTaskKeys = new Set(activityRows.filter(isTaskActivity).map(row => taskIdentityKey({
+            contact_id: row.contact_id,
+            contact_type: row.contact_type || "manufacturer",
+            title: row.note || "",
+            due_date: row.date || "",
+            owner: taskOwnerFromActivity(row),
+            done: taskIsDone(row),
+          })));
+          const toInsert = legacyTasks
+            .filter(task => task && task.title)
+            .filter(task => !existingTaskKeys.has(taskIdentityKey({...task, owner: normalizeOwner(task.owner)})))
+            .map(task => taskActivityFromTask({...task, owner: normalizeOwner(task.owner)}));
+          if(toInsert.length){
+            const inserted = await sb.from("activities").insert(toInsert).select("*");
+            ensureOk(inserted);
+            activityRows = [...(inserted.data || []), ...activityRows];
+          }
+          localStorage.removeItem(LEGACY_TASKS_KEY);
+        }catch(taskErr){
+          console.error("Legacy task migration failed", taskErr);
+          toast2("Task sync warning: local tasks will stay on this browser until they save again.");
         }
-        localStorage.removeItem(LEGACY_TASKS_KEY);
       }
       const companyByKey = new Map([
         ...m.map(row => [`manufacturer:${row.id}`, row.company || ""]),
