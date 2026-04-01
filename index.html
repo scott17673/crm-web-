@@ -50,6 +50,9 @@ const TASK_ACTIVITY_TYPE = "__task__";
 const TASK_OPEN_META = "__task_open__";
 const TASK_DONE_META = "__task_done__";
 const LEGACY_TASKS_KEY = "ed_tasks";
+const PEOPLE = ["Scott","Jeff"];
+const DEFAULT_OWNER = PEOPLE[0];
+const PERSON_COLORS = {Scott:"#1e3a8a",Jeff:"#16a34a"};
 const IND_COLORS = {"Food and Beverage":"#f97316","Concrete":"#78716c","Metal Refineries":"#64748b","Recycling":"#22c55e","Mining/Aggregate":"#a16207","Asphalt Plants":"#334155","Building Products":"#1d4ed8","Others":"#475569"};
 const IND_ICONS = {"Food and Beverage":"◍","Concrete":"▦","Metal Refineries":"◉","Recycling":"↻","Mining/Aggregate":"⛏","Asphalt Plants":"▣","Building Products":"▥","Others":"◧"};
 const TYPE_CFG = {
@@ -60,7 +63,10 @@ const TYPE_CFG = {
 const STAGE_COLORS = {Unqualified:"#64748b",Prospect:"#94a3b8",Outreach:"#1e40af",Qualified:"#1e3a8a",Proposal:"#ef4444",Negotiation:"#f97316","Closed Won":"#22c55e","Closed Lost":"#64748b"};
 
 const today = () => new Date().toISOString().slice(0,10);
-const createEmptyActivityDraft = () => ({type:"Call",note:"",date:today()});
+const createEmptyTaskDraft = () => ({title:"",due_date:"",owner:DEFAULT_OWNER});
+const createEmptyActivityDraft = () => ({type:"Call",note:"",date:today(),created_by:DEFAULT_OWNER});
+const createEmptyTaskEditDraft = () => ({title:"",due_date:"",owner:DEFAULT_OWNER});
+const createEmptyActivityEditDraft = () => ({type:"Call",note:"",created_by:DEFAULT_OWNER});
 const safeJson = (v, fallback) => { try { return JSON.parse(v || ""); } catch { return fallback; } };
 const pillStyle = color => ({fontSize:10,fontWeight:700,letterSpacing:".05em",padding:"3px 8px",borderRadius:2,color,background:color+"14",border:"1px solid "+color+"33",whiteSpace:"nowrap"});
 const tagStyle = color => ({fontSize:10,fontWeight:600,letterSpacing:".05em",padding:"2px 7px",borderRadius:2,color,background:color+"18",border:"1px solid "+color+"33"});
@@ -170,9 +176,22 @@ const sortTasksByNearest = list => [...(list || [])].sort((a,b) => {
   return String(a.title || "").localeCompare(String(b.title || ""));
 });
 const isTaskActivity = row => row?.type===TASK_ACTIVITY_TYPE;
-const taskActivityMeta = done => done ? TASK_DONE_META : TASK_OPEN_META;
-const taskIsDone = row => String(row?.created_by || "").trim()===TASK_DONE_META;
-const taskIdentityKey = task => [task.contact_type || "", task.contact_id || "", task.title || "", task.due_date || "", task.done ? "1" : "0"].join("|");
+const normalizeOwner = value => PEOPLE.includes(value) ? value : DEFAULT_OWNER;
+const parseTaskActivityMeta = value => {
+  const raw = String(value || "").trim();
+  if(raw===TASK_DONE_META) return {done:true, owner:DEFAULT_OWNER};
+  if(raw===TASK_OPEN_META) return {done:false, owner:DEFAULT_OWNER};
+  if(raw.startsWith(`${TASK_ACTIVITY_TYPE}|`)){
+    const [, state, owner] = raw.split("|");
+    return {done:state==="done", owner:normalizeOwner(owner)};
+  }
+  return {done:false, owner:DEFAULT_OWNER};
+};
+const taskActivityMeta = (done, owner=DEFAULT_OWNER) => `${TASK_ACTIVITY_TYPE}|${done ? "done" : "open"}|${normalizeOwner(owner)}`;
+const taskIsDone = row => parseTaskActivityMeta(row?.created_by).done;
+const taskOwnerFromActivity = row => parseTaskActivityMeta(row?.created_by).owner;
+const displayOwner = value => String(value || "").trim() || DEFAULT_OWNER;
+const taskIdentityKey = task => [task.contact_type || "", task.contact_id || "", task.title || "", task.due_date || "", normalizeOwner(task.owner), task.done ? "1" : "0"].join("|");
 const taskMatchesRecord = (task, rec) => task.contact_id===rec.id && (!task.contact_type || task.contact_type===rec.type || task.company===rec.company);
 const manufacturerDbField = field => ({ notes: "signals" }[field] || field);
 const ensureOk = result => {
@@ -626,6 +645,7 @@ const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onMea
 
 const Pill = ({ label, color }) => <span className="mono" style={pillStyle(color || "#64748b")}>{label}</span>;
 const Tag = ({ label, color }) => <span className="mono" style={tagStyle(color || "#1e3a8a")}>{label}</span>;
+const OwnerTag = ({ owner }) => <Tag label={displayOwner(owner)} color={PERSON_COLORS[displayOwner(owner)] || "#64748b"} />;
 
 function App(){
   const [mfrs,setMfrs] = useState([]);
@@ -653,12 +673,13 @@ function App(){
   const [tasks,setTasks] = useState([]);
   const [taskTitle,setTaskTitle] = useState("");
   const [taskDate,setTaskDate] = useState("");
+  const [taskOwner,setTaskOwner] = useState(DEFAULT_OWNER);
   const [taskDrafts,setTaskDrafts] = useState(()=>safeJson(localStorage.getItem("ed_task_drafts"),{}));
   const [activityDrafts,setActivityDrafts] = useState(()=>safeJson(localStorage.getItem("ed_activity_drafts"),{}));
   const [editingTaskId,setEditingTaskId] = useState(null);
-  const [editingTaskDraft,setEditingTaskDraft] = useState({title:"",due_date:""});
+  const [editingTaskDraft,setEditingTaskDraft] = useState(createEmptyTaskEditDraft());
   const [editingActId,setEditingActId] = useState(null);
-  const [editingActDraft,setEditingActDraft] = useState({type:"Call",note:""});
+  const [editingActDraft,setEditingActDraft] = useState(createEmptyActivityEditDraft());
   const [notesDraft,setNotesDraft] = useState("");
   const [contactsDraft,setContactsDraft] = useState("");
   const [detailPanelHeight,setDetailPanelHeight] = useState(280);
@@ -681,7 +702,7 @@ function App(){
     const key = recordKey(record);
     saveTaskDrafts({
       ...taskDrafts,
-      [key]: {...(taskDrafts[key] || {title:"",due_date:""}), ...patch},
+      [key]: {...createEmptyTaskDraft(), ...(taskDrafts[key] || {}), ...patch},
     });
   };
   const clearTaskDraft = record => {
@@ -746,6 +767,7 @@ function App(){
     title: row.note || "",
     due_date: row.date || "",
     done: taskIsDone(row),
+    owner: taskOwnerFromActivity(row),
   });
   const taskActivityFromTask = task => ({
     contact_id: task.contact_id,
@@ -753,7 +775,7 @@ function App(){
     type: TASK_ACTIVITY_TYPE,
     note: task.title || "",
     date: task.due_date || null,
-    created_by: taskActivityMeta(!!task.done),
+    created_by: taskActivityMeta(!!task.done, task.owner),
   });
 
   const hydrate = useCallback(async (withSpinner=false)=>{
@@ -812,11 +834,12 @@ function App(){
   useEffect(()=>{
     if(!selected) return;
     const key = recordKey(selected);
-    const taskDraft = taskDrafts[key] || {title:"",due_date:""};
+    const taskDraft = {...createEmptyTaskDraft(), ...(taskDrafts[key] || {})};
     const activityDraft = {...createEmptyActivityDraft(), ...(activityDrafts[key] || {})};
     if(taskTitle !== (taskDraft.title || "")) setTaskTitle(taskDraft.title || "");
     if(taskDate !== (taskDraft.due_date || "")) setTaskDate(taskDraft.due_date || "");
-    if(newAct.type !== activityDraft.type || newAct.note !== activityDraft.note || newAct.date !== activityDraft.date) setNewAct(activityDraft);
+    if(taskOwner !== normalizeOwner(taskDraft.owner)) setTaskOwner(normalizeOwner(taskDraft.owner));
+    if(newAct.type !== activityDraft.type || newAct.note !== activityDraft.note || newAct.date !== activityDraft.date || newAct.created_by !== normalizeOwner(activityDraft.created_by)) setNewAct({...activityDraft, created_by:normalizeOwner(activityDraft.created_by)});
   },[selected?.id, selected?.type, taskDrafts, activityDrafts]);
 
   const all = [...mfrs,...vendors,...lost];
@@ -852,7 +875,7 @@ function App(){
     const map = new Map();
     tasks.forEach(task => {
       const key = `${task.contact_type || "manufacturer"}:${task.contact_id}`;
-      const chunk = [task.title, task.due_date, task.company].filter(Boolean).join(" ");
+      const chunk = [task.title, task.due_date, task.company, task.owner].filter(Boolean).join(" ");
       map.set(key, `${map.get(key) || ""} ${chunk}`.trim());
     });
     return map;
@@ -908,12 +931,13 @@ function App(){
     setNotesDraft(rec.notes || "");
     setContactsDraft(rec.type==="manufacturer" ? contactsTextFromRecord(rec) : rec.type==="vendor" ? vendorContactTextFromRecord(rec) : "");
     setEditingTaskId(null);
-    setEditingTaskDraft({title:"",due_date:""});
+    setEditingTaskDraft(createEmptyTaskEditDraft());
     setEditingActId(null);
-    setEditingActDraft({type:"Call",note:""});
+    setEditingActDraft(createEmptyActivityEditDraft());
     setTaskTitle(taskDrafts[key]?.title || "");
     setTaskDate(taskDrafts[key]?.due_date || "");
-    setNewAct({...createEmptyActivityDraft(), ...(activityDrafts[key] || {})});
+    setTaskOwner(normalizeOwner(taskDrafts[key]?.owner));
+    setNewAct({...createEmptyActivityDraft(), ...(activityDrafts[key] || {}), created_by:normalizeOwner(activityDrafts[key]?.created_by)});
   };
 
   const saveMfrField = async (field, value) => {
@@ -990,7 +1014,7 @@ function App(){
           type: TASK_ACTIVITY_TYPE,
           note: taskTitle.trim(),
           date: taskDate || null,
-          created_by: taskActivityMeta(false),
+          created_by: taskActivityMeta(false, taskOwner),
         };
         const inserted = await sb.from("activities").insert(payload).select("*").single();
         ensureOk(inserted);
@@ -1002,11 +1026,13 @@ function App(){
           title: inserted.data.note || "",
           due_date: inserted.data.date || "",
           done: false,
+          owner: taskOwner,
         };
         setTasks(list => sortTasksByNearest([task, ...list]));
         clearTaskDraft(selected);
         setTaskTitle("");
         setTaskDate("");
+        setTaskOwner(DEFAULT_OWNER);
       }catch(err){
         toast2("Task error: "+err.message);
       }
@@ -1017,7 +1043,7 @@ function App(){
     if(!current) return;
     const done = !current.done;
     try{
-      ensureOk(await sb.from("activities").update({created_by:taskActivityMeta(done)}).eq("id",id));
+      ensureOk(await sb.from("activities").update({created_by:taskActivityMeta(done, current.owner)}).eq("id",id));
       setTasks(list => sortTasksByNearest(list.map(task => task.id===id ? {...task,done} : task)));
     }catch(err){
       toast2("Task error: "+err.message);
@@ -1033,21 +1059,23 @@ function App(){
   })();
   const startTaskEdit = task => {
     setEditingTaskId(task.id);
-    setEditingTaskDraft({title:task.title || "",due_date:task.due_date || ""});
+    setEditingTaskDraft({title:task.title || "",due_date:task.due_date || "",owner:normalizeOwner(task.owner)});
   };
   const saveTaskEdit = id => {
     const title = String(editingTaskDraft.title || "").trim();
+    const current = tasks.find(task => task.id===id);
     if(!title){
       setEditingTaskId(null);
-      setEditingTaskDraft({title:"",due_date:""});
+      setEditingTaskDraft(createEmptyTaskEditDraft());
       return;
     }
     (async () => {
       try{
-        ensureOk(await sb.from("activities").update({note:title,date:editingTaskDraft.due_date || null}).eq("id",id));
-        setTasks(list => sortTasksByNearest(list.map(task => task.id===id ? {...task,title,due_date:editingTaskDraft.due_date || ""} : task)));
+        const nextOwner = normalizeOwner(editingTaskDraft.owner);
+        ensureOk(await sb.from("activities").update({note:title,date:editingTaskDraft.due_date || null,created_by:taskActivityMeta(!!current?.done, nextOwner)}).eq("id",id));
+        setTasks(list => sortTasksByNearest(list.map(task => task.id===id ? {...task,title,due_date:editingTaskDraft.due_date || "",owner:nextOwner} : task)));
         setEditingTaskId(null);
-        setEditingTaskDraft({title:"",due_date:""});
+        setEditingTaskDraft(createEmptyTaskEditDraft());
       }catch(err){
         toast2("Task error: "+err.message);
       }
@@ -1055,16 +1083,16 @@ function App(){
   };
   const startActivityEdit = activity => {
     setEditingActId(activity.id);
-    setEditingActDraft({type:activity.type || "Call",note:activity.note || ""});
+    setEditingActDraft({type:activity.type || "Call",note:activity.note || "",created_by:normalizeOwner(activity.created_by)});
   };
   const saveActivityEdit = async id => {
     const note = String(editingActDraft.note || "").trim();
     if(!note){
       setEditingActId(null);
-      setEditingActDraft({type:"Call",note:""});
+      setEditingActDraft(createEmptyActivityEditDraft());
       return;
     }
-    const payload = {type:editingActDraft.type || "Call",note};
+    const payload = {type:editingActDraft.type || "Call",note,created_by:normalizeOwner(editingActDraft.created_by)};
     const { error } = await sb.from("activities").update(payload).eq("id",id);
     if(error){
       toast2("Save error: "+error.message);
@@ -1072,14 +1100,14 @@ function App(){
     }
     setActs(list => list.map(activity => activity.id===id ? {...activity,...payload} : activity));
     setEditingActId(null);
-    setEditingActDraft({type:"Call",note:""});
+    setEditingActDraft(createEmptyActivityEditDraft());
   };
 
   const logActivity = async () => {
     if(!selected || !newAct.note.trim()) return;
     setSaving(true);
     const activityDate = newAct.date || today();
-    const payload={contact_id:selected.id,contact_type:selected.type,type:newAct.type,note:newAct.note,date:activityDate,created_by:"You"};
+    const payload={contact_id:selected.id,contact_type:selected.type,type:newAct.type,note:newAct.note,date:activityDate,created_by:normalizeOwner(newAct.created_by)};
     const { data, error } = await sb.from("activities").insert(payload).select().single();
     if(error){ setSaving(false); return toast2("Log error: "+error.message); }
     setActs(cur => [{...data,contactId:data.contact_id},...cur]);
@@ -1459,7 +1487,7 @@ function App(){
   const taskSearchQuery = taskSearch.trim().toLowerCase();
   const filteredTaskList = sortTasksByNearest(tasks.filter(task => {
     if(!taskSearchQuery) return true;
-    const haystack = [task.title, task.company, task.due_date, task.contact_type].filter(Boolean).join(" ").toLowerCase();
+    const haystack = [task.title, task.company, task.due_date, task.contact_type, task.owner].filter(Boolean).join(" ").toLowerCase();
     return haystack.includes(taskSearchQuery);
   }));
   const pipe = mfrs.filter(m=>!["Closed Won","Closed Lost"].includes(m.stage)).length;
@@ -1563,7 +1591,7 @@ function App(){
                         <input type="checkbox" checked={t.done} onChange={()=>toggleTask(t.id)} onClick={e=>e.stopPropagation()} style={{marginTop:2}} />
                         <div style={{minWidth:0}}>
                           <div style={{fontSize:13,fontWeight:700,color:"#18233a"}}>{t.title}</div>
-                          <div className="mono" style={{fontSize:11,color:"#ef4444",marginTop:3}}>{t.company}{t.due_date?" · "+t.due_date:""}</div>
+                          <div className="mono" style={{fontSize:11,color:"#ef4444",marginTop:3}}>{normalizeOwner(t.owner)}{" · "}{t.company}{t.due_date?" · "+t.due_date:""}</div>
                         </div>
                       </div>
                     ))
@@ -1584,7 +1612,7 @@ function App(){
                         <input type="checkbox" checked={t.done} onChange={()=>toggleTask(t.id)} onClick={e=>e.stopPropagation()} style={{marginTop:2}} />
                         <div style={{minWidth:0}}>
                           <div style={{fontSize:13,fontWeight:700,color:"#18233a"}}>{t.title}</div>
-                          <div className="mono" style={{fontSize:11,color:"#7f92b0",marginTop:3}}>{t.company}{t.due_date?" · "+t.due_date:""}</div>
+                          <div className="mono" style={{fontSize:11,color:"#7f92b0",marginTop:3}}>{normalizeOwner(t.owner)}{" · "}{t.company}{t.due_date?" · "+t.due_date:""}</div>
                         </div>
                       </div>
                     ))
@@ -1767,9 +1795,12 @@ function App(){
               <div style={{gridColumn:"1 / -1",display:"grid",gap:18}}>
                 <div style={{paddingTop:18,borderTop:"1px solid #e8eef6"}}>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:10}}>TASKS</div>
-                  <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 130px 70px",gap:8,marginBottom:10}}>
+                  <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 130px 120px 70px",gap:8,marginBottom:10}}>
                     <input className="field" value={taskTitle} onChange={e=>{ const value = e.target.value; setTaskTitle(value); syncTaskDraft(selected,{title:value}); }} placeholder="Add a task..." style={{background:"#fbfcfe"}} />
                     <input className="field mono" style={{background:"#fff"}} type="date" value={taskDate} onChange={e=>{ const value = e.target.value; setTaskDate(value); syncTaskDraft(selected,{due_date:value}); }} />
+                    <select className="field mono" value={taskOwner} onChange={e=>{ const value = normalizeOwner(e.target.value); setTaskOwner(value); syncTaskDraft(selected,{owner:value}); }}>
+                      {PEOPLE.map(person=><option key={person}>{person}</option>)}
+                    </select>
                     <button onClick={addTask} style={{padding:"8px 14px",border:"none",borderRadius:4,background:"#ef4444",color:"#fff",cursor:"pointer",fontWeight:800,fontSize:12,letterSpacing:".05em"}}>ADD</button>
                   </div>
                   {tasks.filter(t=>taskMatchesRecord(t, selected)).length===0 && <div className="mono" style={{fontSize:11,color:"#8ea0bd"}}>No tasks yet.</div>}
@@ -1782,13 +1813,19 @@ function App(){
                         onBlur={e=>{ if(editingTaskId===t.id && !e.currentTarget.contains(e.relatedTarget)) saveTaskEdit(t.id); }}
                       >
                         {editingTaskId===t.id
-                          ? <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 130px",gap:8}}>
-                              <input className="field" autoFocus value={editingTaskDraft.title} onChange={e=>setEditingTaskDraft(cur=>({...cur,title:e.target.value}))} onKeyDown={e=>{ if(e.key==="Enter") saveTaskEdit(t.id); if(e.key==="Escape"){ setEditingTaskId(null); setEditingTaskDraft({title:"",due_date:""}); } }} />
-                              <input className="field mono" type="date" value={editingTaskDraft.due_date} onChange={e=>setEditingTaskDraft(cur=>({...cur,due_date:e.target.value}))} onKeyDown={e=>{ if(e.key==="Escape"){ setEditingTaskId(null); setEditingTaskDraft({title:"",due_date:""}); } }} />
+                          ? <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 130px 120px",gap:8}}>
+                              <input className="field" autoFocus value={editingTaskDraft.title} onChange={e=>setEditingTaskDraft(cur=>({...cur,title:e.target.value}))} onKeyDown={e=>{ if(e.key==="Enter") saveTaskEdit(t.id); if(e.key==="Escape"){ setEditingTaskId(null); setEditingTaskDraft(createEmptyTaskEditDraft()); } }} />
+                              <input className="field mono" type="date" value={editingTaskDraft.due_date} onChange={e=>setEditingTaskDraft(cur=>({...cur,due_date:e.target.value}))} onKeyDown={e=>{ if(e.key==="Escape"){ setEditingTaskId(null); setEditingTaskDraft(createEmptyTaskEditDraft()); } }} />
+                              <select className="field mono" value={editingTaskDraft.owner} onChange={e=>setEditingTaskDraft(cur=>({...cur,owner:normalizeOwner(e.target.value)}))} onKeyDown={e=>{ if(e.key==="Escape"){ setEditingTaskId(null); setEditingTaskDraft(createEmptyTaskEditDraft()); } }}>
+                                {PEOPLE.map(person=><option key={person}>{person}</option>)}
+                              </select>
                             </div>
                           : <div>
                               <div style={{fontSize:13,textDecoration:t.done?"line-through":"none",color:t.done?"#94a3b8":"#0f172a",cursor:"text"}}>{t.title}</div>
-                              {t.due_date&&<div className="mono" style={{fontSize:10,color:t.due_date<today()&&!t.done?"#ef4444":"#94a3b8"}}>{t.due_date}</div>}
+                              <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginTop:4}}>
+                                <OwnerTag owner={t.owner} />
+                                {t.due_date&&<div className="mono" style={{fontSize:10,color:t.due_date<today()&&!t.done?"#ef4444":"#94a3b8"}}>{t.due_date}</div>}
+                              </div>
                             </div>}
                       </div>
                       <button onClick={e=>{ e.stopPropagation(); deleteTask(t.id); }} style={{border:"none",background:"transparent",color:"#cbd5e1",fontSize:16,cursor:"pointer"}}>×</button>
@@ -1798,9 +1835,12 @@ function App(){
                 <div style={{paddingTop:18,borderTop:"1px solid #e8eef6"}}>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:10}}>LOG ACTIVITY</div>
                   <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>{["Call","Email","Meeting","Note"].map(t=><button key={t} onClick={()=>{ const next = {...newAct,type:t}; setNewAct(next); syncActivityDraft(selected,next); }} style={{padding:"6px 14px",borderRadius:3,border:"2px solid "+(newAct.type===t?"#1e3a8a":"#d7dfeb"),background:newAct.type===t?"#eef4ff":"#fff",color:newAct.type===t?"#1e3a8a":"#8ea0bd",cursor:"pointer",fontWeight:800,fontSize:12,letterSpacing:".05em"}}>{t.toUpperCase()}</button>)}</div>
-                  <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 136px 64px",gap:8,marginBottom:10}}>
+                  <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 136px 120px 64px",gap:8,marginBottom:10}}>
                     <input className="field" value={newAct.note} onChange={e=>{ const next = {...newAct,note:e.target.value}; setNewAct(next); syncActivityDraft(selected,next); }} placeholder="Add a note..." style={{background:"#fbfcfe"}} onKeyDown={e=>e.key==="Enter"&&logActivity()} />
                     <input className="field mono" type="date" value={newAct.date} onChange={e=>{ const next = {...newAct,date:e.target.value}; setNewAct(next); syncActivityDraft(selected,next); }} />
+                    <select className="field mono" value={normalizeOwner(newAct.created_by)} onChange={e=>{ const next = {...newAct,created_by:normalizeOwner(e.target.value)}; setNewAct(next); syncActivityDraft(selected,next); }}>
+                      {PEOPLE.map(person=><option key={person}>{person}</option>)}
+                    </select>
                     <button onClick={logActivity} style={{padding:"8px 14px",border:"none",borderRadius:4,background:"#ef4444",color:"#fff",cursor:"pointer",fontWeight:800,fontSize:12,letterSpacing:".05em"}}>LOG</button>
                   </div>
                   {!detailActs.length && <div className="mono" style={{fontSize:11,color:"#8ea0bd"}}>No activity yet.</div>}
@@ -1812,16 +1852,19 @@ function App(){
                     >
                       {editingActId===a.id
                         ? <div style={{display:"grid",gap:8}}>
-                            <div style={{display:"grid",gridTemplateColumns:"150px minmax(0,1fr)",gap:8,alignItems:"center"}}>
+                            <div style={{display:"grid",gridTemplateColumns:"150px 120px minmax(0,1fr)",gap:8,alignItems:"center"}}>
                               <select className="field mono" value={editingActDraft.type} onChange={e=>setEditingActDraft(cur=>({...cur,type:e.target.value}))}>
                                 {["Call","Email","Meeting","Note"].map(type=><option key={type}>{type}</option>)}
                               </select>
+                              <select className="field mono" value={editingActDraft.created_by} onChange={e=>setEditingActDraft(cur=>({...cur,created_by:normalizeOwner(e.target.value)}))}>
+                                {PEOPLE.map(person=><option key={person}>{person}</option>)}
+                              </select>
                               <div className="mono" style={{fontSize:10,color:"#94a3b8"}}>{a.date}</div>
                             </div>
-                            <textarea className="fieldbox" autoFocus style={{minHeight:82,resize:"vertical"}} value={editingActDraft.note} onChange={e=>setEditingActDraft(cur=>({...cur,note:e.target.value}))} onKeyDown={e=>{ if(e.key==="Escape"){ setEditingActId(null); setEditingActDraft({type:"Call",note:""}); } if((e.ctrlKey||e.metaKey)&&e.key==="Enter") saveActivityEdit(a.id); }} />
+                            <textarea className="fieldbox" autoFocus style={{minHeight:82,resize:"vertical"}} value={editingActDraft.note} onChange={e=>setEditingActDraft(cur=>({...cur,note:e.target.value}))} onKeyDown={e=>{ if(e.key==="Escape"){ setEditingActId(null); setEditingActDraft(createEmptyActivityEditDraft()); } if((e.ctrlKey||e.metaKey)&&e.key==="Enter") saveActivityEdit(a.id); }} />
                           </div>
                         : <div onClick={e=>{ if(isLinkTarget(e.target)) return; startActivityEdit(a); }} style={{cursor:"text"}}>
-                            <div style={{fontSize:12}}><span className="condensed" style={{fontWeight:700,color:"#1e3a8a",textTransform:"uppercase"}}>{a.type}</span><span style={{color:"#cbd5e1"}}> · </span><span className="mono" style={{fontSize:10,color:"#94a3b8"}}>{a.date}</span></div>
+                            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:4}}><span className="condensed" style={{fontSize:12,fontWeight:700,color:"#1e3a8a",textTransform:"uppercase"}}>{a.type}</span><span className="mono" style={{fontSize:10,color:"#94a3b8"}}>{a.date}</span><OwnerTag owner={a.created_by} /></div>
                             <LinkifiedText text={a.note} style={{fontSize:13,color:"#475569",lineHeight:1.6}} />
                           </div>}
                     </div>
@@ -1845,7 +1888,7 @@ function App(){
               <button onClick={()=>setShowTasksModal(false)} style={{width:30,height:30,border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",cursor:"pointer",color:"#94a3b8"}}>×</button>
             </div>
             <div style={{padding:"18px 24px",display:"grid",gap:14}}>
-              <input className="field" value={taskSearch} onChange={e=>setTaskSearch(e.target.value)} placeholder="Search by company or task..." />
+              <input className="field" value={taskSearch} onChange={e=>setTaskSearch(e.target.value)} placeholder="Search by company, task, or owner..." />
               <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,overflow:"hidden"}}>
                 <div style={{display:"grid",gridTemplateColumns:"44px minmax(0,1fr) 170px 110px",gap:12,padding:"12px 16px",borderBottom:"1px solid #e8eef6",background:"#f8fbff"}}>
                   <div />
@@ -1861,6 +1904,7 @@ function App(){
                     <input type="checkbox" checked={task.done} onChange={()=>toggleTask(task.id)} style={{marginTop:2}} />
                     <div style={{minWidth:0}}>
                       <div style={{fontSize:13,fontWeight:700,color:task.done?"#94a3b8":"#18233a",textDecoration:task.done?"line-through":"none"}}>{task.title}</div>
+                      <div style={{marginTop:4}}><OwnerTag owner={task.owner} /></div>
                     </div>
                     {linkedRecord
                       ? <button onClick={()=>openTaskRecord(task)} style={{fontSize:12,color:"#1e3a8a",minWidth:0,wordBreak:"break-word",border:"none",background:"transparent",padding:0,textAlign:"left",cursor:"pointer",textDecoration:"underline"}}>{task.company || "—"}</button>
