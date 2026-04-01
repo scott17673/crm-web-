@@ -1400,8 +1400,8 @@ function App(){
           <div className="fade" style={{display:"grid",gap:20}}>
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:16}}>
               {[
-                ["Manufacturers",mfrs.length,soFacilities+" with S.Ont facilities","#1e3a8a","◌"],
-                ["In Pipeline",pipe,hot+" hot accounts","#ef4444","◈"],
+                ["Manufacturers",mfrs.length,"","#1e3a8a","◌"],
+                ["In Pipeline",pipe,"","#ef4444","◈"],
                 ["Vendors",vendors.length,preferredVendors+" preferred","#1d4ed8","◉"],
                 ["Lost Value","$"+(lostValue/1000).toFixed(0)+"k",lost.length+" lost contacts","#94a3b8","✕"],
               ].map(([label,value,sub,color,icon])=>(
@@ -1411,7 +1411,7 @@ function App(){
                     <div className="mono" style={{fontSize:10,letterSpacing:".14em",color:"#7f92b0",textTransform:"uppercase"}}>{label}</div>
                   </div>
                   <div className="condensed" style={{fontSize:34,fontWeight:800,color:"#18233a",lineHeight:1,marginBottom:8}}>{value}</div>
-                  <div style={{fontSize:12,color:"#8fa0b8"}}>{sub}</div>
+                  <div style={{fontSize:12,color:"#8fa0b8",minHeight:18}}>{sub}</div>
                 </div>
               ))}
             </div>
