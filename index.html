@@ -41,7 +41,7 @@ const sb = createClient(
 );
 
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
-const STAGES = ["Unqualified","Prospect","Outreach","Qualified","Proposal","Negotiation","Closed Won","Closed Lost"];
+const STAGES = ["Unqualified","Prospect","Outreach","Not Interested","Qualified","Proposal","Negotiation","Closed Won","Closed Lost"];
 const LOST_REASONS = ["Price","Competitor","No Budget","No Decision","Bad Fit","Timing","Other"];
 const INDUSTRIES = ["Food and Beverage","Concrete","Metal Refineries","Recycling","Mining/Aggregate","Asphalt Plants","Building Products"];
 const OTHER_INDUSTRY_LABEL = "Others";
@@ -61,7 +61,7 @@ const TYPE_CFG = {
   vendor: { label: "Vendors", color: "#ef4444", icon: "◈" },
   lost: { label: "Lost", color: "#94a3b8", icon: "✕" },
 };
-const STAGE_COLORS = {Unqualified:"#64748b",Prospect:"#94a3b8",Outreach:"#1e40af",Qualified:"#1e3a8a",Proposal:"#ef4444",Negotiation:"#f97316","Closed Won":"#22c55e","Closed Lost":"#64748b"};
+const STAGE_COLORS = {Unqualified:"#64748b",Prospect:"#94a3b8",Outreach:"#1e40af","Not Interested":"#b45309",Qualified:"#1e3a8a",Proposal:"#ef4444",Negotiation:"#f97316","Closed Won":"#22c55e","Closed Lost":"#64748b"};
 
 const today = () => new Date().toISOString().slice(0,10);
 const createEmptyTaskDraft = () => ({title:"",due_date:"",owner:DEFAULT_OWNER});
@@ -1657,7 +1657,7 @@ const taskActivityFromTask = task => ({
   const stageStats = STAGES.map(stage => ({ stage, count: mfrs.filter(m=>m.stage===stage).length }));
   const maxIndustryCount = Math.max(1, ...industryStats.map(item => item.count));
   const maxStageCount = Math.max(1, ...stageStats.map(item => item.count));
-  const stagePriority = {Negotiation:0,Proposal:1,Qualified:2,Outreach:3,Prospect:4,Unqualified:5};
+  const stagePriority = {Negotiation:0,Proposal:1,Qualified:2,"Not Interested":3,Outreach:4,Prospect:5,Unqualified:6};
   const hotProspects = [...mfrs]
     .filter(m=>!["Closed Won","Closed Lost"].includes(m.stage))
     .sort((a,b)=>{
