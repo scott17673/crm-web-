@@ -155,6 +155,16 @@ const sortRecordsByActivity = (records, sortBy) => {
   if(sortBy==="activity_desc") return [...records].sort((a,b)=>(b.lastContact||"").localeCompare(a.lastContact||""));
   return records;
 };
+const sortTasksByNearest = list => [...(list || [])].sort((a,b) => {
+  const aBlank = !a.due_date;
+  const bBlank = !b.due_date;
+  if(aBlank !== bBlank) return aBlank ? 1 : -1;
+  const byDate = String(a.due_date || "").localeCompare(String(b.due_date || ""));
+  if(byDate) return byDate;
+  const byCompany = String(a.company || "").localeCompare(String(b.company || ""));
+  if(byCompany) return byCompany;
+  return String(a.title || "").localeCompare(String(b.title || ""));
+});
 const taskMatchesRecord = (task, rec) => task.contact_id===rec.id && (!task.contact_type || task.contact_type===rec.type || task.company===rec.company);
 const manufacturerDbField = field => ({ notes: "signals" }[field] || field);
 const ensureOk = result => {
@@ -652,6 +662,8 @@ function App(){
   const [efFmt,setEfFmt] = useState("{first}.{last}");
   const [importRows,setImportRows] = useState(null);
   const [importMode,setImportMode] = useState("merge");
+  const [showTasksModal,setShowTasksModal] = useState(false);
+  const [taskSearch,setTaskSearch] = useState("");
 
   const toast2 = msg => { setToast(msg); setTimeout(()=>setToast(""),3000); };
   const saveTasks = next => { setTasks(next); localStorage.setItem("ed_tasks",JSON.stringify(next)); };
@@ -1328,8 +1340,14 @@ function App(){
 
   if(loading) return <div style={{minHeight:"100vh",display:"grid",placeItems:"center"}}><div style={{display:"grid",gap:14,justifyItems:"center"}}><div className="spinner"/><div className="condensed" style={{letterSpacing:".1em",fontWeight:700,color:"#64748b"}}>LOADING</div></div></div>;
 
-  const overdue = tasks.filter(t=>!t.done&&t.due_date&&t.due_date<today());
-  const upcoming = tasks.filter(t=>!t.done&&(!t.due_date||t.due_date>=today()));
+  const overdue = sortTasksByNearest(tasks.filter(t=>!t.done&&t.due_date&&t.due_date<today()));
+  const upcoming = sortTasksByNearest(tasks.filter(t=>!t.done&&(!t.due_date||t.due_date>=today())));
+  const taskSearchQuery = taskSearch.trim().toLowerCase();
+  const filteredTaskList = sortTasksByNearest(tasks.filter(task => {
+    if(!taskSearchQuery) return true;
+    const haystack = [task.title, task.company, task.due_date, task.contact_type].filter(Boolean).join(" ").toLowerCase();
+    return haystack.includes(taskSearchQuery);
+  }));
   const pipe = mfrs.filter(m=>!["Closed Won","Closed Lost"].includes(m.stage)).length;
   const hot = mfrs.filter(m=>(m.tags||[]).includes("Hot")).length;
   const lostValue = lost.reduce((sum,r)=>sum+(r.value||0),0);
@@ -1419,13 +1437,16 @@ function App(){
               </section>
 
               <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
-                <div className="mono" style={{padding:"14px 18px",fontSize:11,letterSpacing:".16em",color:"#6f84a6",textTransform:"uppercase",borderBottom:"1px solid #d8e2ef",background:"#f8fbff"}}>⚠ Overdue</div>
+                <div style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #d8e2ef",background:"#f8fbff",gap:12}}>
+                  <div className="mono" style={{fontSize:11,letterSpacing:".16em",color:"#6f84a6",textTransform:"uppercase"}}>⚠ Overdue</div>
+                  <button onClick={()=>setShowTasksModal(true)} style={{border:"none",background:"transparent",color:"#1e3a8a",cursor:"pointer",fontSize:12,fontWeight:700}}>View All</button>
+                </div>
                 <div style={{minHeight:302}}>
                   {overdue.length===0
                     ? <div className="mono" style={{padding:"18px 20px",fontSize:12,color:"#8ea0bd"}}>No overdue tasks.</div>
                     : overdue.map(t=>(
-                      <div key={t.id} style={{padding:"12px 18px",borderBottom:"1px solid #eef3f9",display:"flex",gap:10,alignItems:"flex-start"}}>
-                        <input type="checkbox" checked={t.done} onChange={()=>toggleTask(t.id)} style={{marginTop:2}} />
+                      <div key={t.id} onClick={()=>setShowTasksModal(true)} style={{padding:"12px 18px",borderBottom:"1px solid #eef3f9",display:"flex",gap:10,alignItems:"flex-start",cursor:"pointer"}}>
+                        <input type="checkbox" checked={t.done} onChange={()=>toggleTask(t.id)} onClick={e=>e.stopPropagation()} style={{marginTop:2}} />
                         <div style={{minWidth:0}}>
                           <div style={{fontSize:13,fontWeight:700,color:"#18233a"}}>{t.title}</div>
                           <div className="mono" style={{fontSize:11,color:"#ef4444",marginTop:3}}>{t.company}{t.due_date?" · "+t.due_date:""}</div>
@@ -1437,13 +1458,16 @@ function App(){
               </section>
 
               <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
-                <div className="mono" style={{padding:"14px 18px",fontSize:11,letterSpacing:".16em",color:"#6f84a6",textTransform:"uppercase",borderBottom:"1px solid #d8e2ef",background:"#f8fbff"}}>📋 Upcoming Tasks</div>
+                <div style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #d8e2ef",background:"#f8fbff",gap:12}}>
+                  <div className="mono" style={{fontSize:11,letterSpacing:".16em",color:"#6f84a6",textTransform:"uppercase"}}>📋 Upcoming Tasks</div>
+                  <button onClick={()=>setShowTasksModal(true)} style={{border:"none",background:"transparent",color:"#1e3a8a",cursor:"pointer",fontSize:12,fontWeight:700}}>View All</button>
+                </div>
                 <div style={{minHeight:302}}>
                   {upcoming.length===0
                     ? <div className="mono" style={{padding:"18px 20px",fontSize:12,color:"#8ea0bd"}}>No upcoming tasks.</div>
                     : upcoming.slice(0,8).map(t=>(
-                      <div key={t.id} style={{padding:"12px 18px",borderBottom:"1px solid #eef3f9",display:"flex",gap:10,alignItems:"flex-start"}}>
-                        <input type="checkbox" checked={t.done} onChange={()=>toggleTask(t.id)} style={{marginTop:2}} />
+                      <div key={t.id} onClick={()=>setShowTasksModal(true)} style={{padding:"12px 18px",borderBottom:"1px solid #eef3f9",display:"flex",gap:10,alignItems:"flex-start",cursor:"pointer"}}>
+                        <input type="checkbox" checked={t.done} onChange={()=>toggleTask(t.id)} onClick={e=>e.stopPropagation()} style={{marginTop:2}} />
                         <div style={{minWidth:0}}>
                           <div style={{fontSize:13,fontWeight:700,color:"#18233a"}}>{t.title}</div>
                           <div className="mono" style={{fontSize:11,color:"#7f92b0",marginTop:3}}>{t.company}{t.due_date?" · "+t.due_date:""}</div>
@@ -1689,6 +1713,43 @@ function App(){
                     </div>
                   ))}
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showTasksModal && (
+        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.5)",display:"grid",placeItems:"center",padding:20,zIndex:105}} onClick={e=>e.target===e.currentTarget&&setShowTasksModal(false)}>
+          <div className="slide" style={{width:"min(900px,100%)",maxHeight:"90vh",overflow:"auto",background:"#fff",borderRadius:8,border:"1px solid #d7dfeb",boxShadow:"0 24px 60px rgba(0,0,0,.18)"}}>
+            <div style={{borderTop:"3px solid #1e3a8a"}} />
+            <div style={{padding:"18px 24px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:16,borderBottom:"1px solid #e8eef6"}}>
+              <div>
+                <div className="condensed" style={{fontSize:22,fontWeight:800,color:"#172033"}}>All Tasks</div>
+                <div className="mono" style={{fontSize:11,color:"#8ea0bd",marginTop:3}}>{filteredTaskList.length} matching task{filteredTaskList.length===1?"":"s"} · nearest due at the top</div>
+              </div>
+              <button onClick={()=>setShowTasksModal(false)} style={{width:30,height:30,border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",cursor:"pointer",color:"#94a3b8"}}>×</button>
+            </div>
+            <div style={{padding:"18px 24px",display:"grid",gap:14}}>
+              <input className="field" value={taskSearch} onChange={e=>setTaskSearch(e.target.value)} placeholder="Search by company or task..." />
+              <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,overflow:"hidden"}}>
+                <div style={{display:"grid",gridTemplateColumns:"44px minmax(0,1fr) 170px 110px",gap:12,padding:"12px 16px",borderBottom:"1px solid #e8eef6",background:"#f8fbff"}}>
+                  <div />
+                  <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em"}}>TASK</div>
+                  <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em"}}>COMPANY</div>
+                  <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em"}}>DUE DATE</div>
+                </div>
+                {!filteredTaskList.length && <div className="mono" style={{padding:"18px 20px",fontSize:12,color:"#8ea0bd"}}>No tasks match that search.</div>}
+                {filteredTaskList.map(task=>(
+                  <div key={task.id} style={{display:"grid",gridTemplateColumns:"44px minmax(0,1fr) 170px 110px",gap:12,alignItems:"start",padding:"12px 16px",borderBottom:"1px solid #eef3f9"}}>
+                    <input type="checkbox" checked={task.done} onChange={()=>toggleTask(task.id)} style={{marginTop:2}} />
+                    <div style={{minWidth:0}}>
+                      <div style={{fontSize:13,fontWeight:700,color:task.done?"#94a3b8":"#18233a",textDecoration:task.done?"line-through":"none"}}>{task.title}</div>
+                    </div>
+                    <div style={{fontSize:12,color:"#475569",minWidth:0,wordBreak:"break-word"}}>{task.company || "—"}</div>
+                    <div className="mono" style={{fontSize:11,color:task.done?"#94a3b8":task.due_date&&task.due_date<today()?"#ef4444":"#64748b"}}>{task.due_date || "No date"}</div>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
