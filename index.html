@@ -219,7 +219,7 @@ const taskOwnerFromActivity = row => parseTaskActivityMeta(row?.created_by).owne
 const displayOwner = value => String(value || "").trim() || DEFAULT_OWNER;
 const taskIdentityKey = task => [task.contact_type || "", task.contact_id || "", task.title || "", task.due_date || "", normalizeOwner(task.owner), task.done ? "1" : "0"].join("|");
 const taskMatchesRecord = (task, rec) => task.contact_id===rec.id && (!task.contact_type || task.contact_type===rec.type || task.company===rec.company);
-const inferTaskRecord = (task, records) => {
+const inferTaskRecord = (task, records, forceMatch=false) => {
   const allRecords = records || [];
   const companyKey = normalizeCompanyKey(task?.company);
   if(task?.contact_id != null){
@@ -237,12 +237,12 @@ const inferTaskRecord = (task, records) => {
       .sort((a,b) => b.score - a.score);
     const best = ranked[0];
     const second = ranked[1];
-    if(best && (best.score >= 0.84 || (best.score >= 0.68 && (!second || best.score - second.score >= 0.12)))) return best.record;
+    if(best && (best.score >= 0.84 || (best.score >= 0.68 && (!second || best.score - second.score >= 0.12)) || (forceMatch && best.score >= 0.35) || (forceMatch && best.score >= 0.22 && (!second || best.score - second.score >= 0.08)))) return best.record;
   }
   return null;
 };
-const normalizeLegacyTask = (task, records) => {
-  const record = inferTaskRecord(task, records);
+const normalizeLegacyTask = (task, records, forceMatch=false) => {
+  const record = inferTaskRecord(task, records, forceMatch);
   return {
     ...task,
     contact_id: record?.id ?? task?.contact_id ?? null,
@@ -755,7 +755,7 @@ function App(){
   const [showTasksModal,setShowTasksModal] = useState(false);
   const [showUnmatchedTasksModal,setShowUnmatchedTasksModal] = useState(false);
   const [taskSearch,setTaskSearch] = useState("");
-  const [unmatchedLegacyTasks,setUnmatchedLegacyTasks] = useState(()=>safeJson(localStorage.getItem(LEGACY_TASKS_KEY), []).map(task => normalizeLegacyTask(task, [])));
+  const [unmatchedLegacyTasks,setUnmatchedLegacyTasks] = useState(()=>safeJson(localStorage.getItem(LEGACY_TASKS_KEY), []).map(task => normalizeLegacyTask(task, [], true)));
 
   const toast2 = msg => { setToast(msg); setTimeout(()=>setToast(""),3000); };
   const saveTaskDrafts = next => { setTaskDrafts(next); localStorage.setItem("ed_task_drafts",JSON.stringify(next)); };
@@ -869,7 +869,7 @@ function App(){
             done: taskIsDone(row),
           })));
           const preparedLegacyTasks = legacyTasks
-            .map(task => normalizeLegacyTask(task, allRecords))
+            .map(task => normalizeLegacyTask(task, allRecords, true))
             .filter(task => task.title);
           const pendingLegacyTasks = preparedLegacyTasks.filter(task => task.contact_id && !existingTaskKeys.has(taskIdentityKey(task)));
           const insertedRows = [];
@@ -900,7 +900,7 @@ function App(){
           }
         }catch(taskErr){
           console.error("Legacy task migration failed", taskErr);
-          setUnmatchedLegacyTasks(safeJson(localStorage.getItem(LEGACY_TASKS_KEY), []).map(task => normalizeLegacyTask(task, allRecords)));
+          setUnmatchedLegacyTasks(safeJson(localStorage.getItem(LEGACY_TASKS_KEY), []).map(task => normalizeLegacyTask(task, allRecords, true)));
           toast2("Task sync warning: local tasks will stay on this browser until they save again.");
         }
       } else {
@@ -1585,7 +1585,7 @@ function App(){
   }));
   const attachUnmatchedLegacyTasks = async () => {
     if(!unmatchedLegacyTasks.length) return;
-    const preparedTasks = unmatchedLegacyTasks.map(task => normalizeLegacyTask(task, all));
+    const preparedTasks = unmatchedLegacyTasks.map(task => normalizeLegacyTask(task, all, true));
     const existingTaskKeys = new Set(tasks.map(task => taskIdentityKey(task)));
     const pendingTasks = preparedTasks.filter(task => task.contact_id && !existingTaskKeys.has(taskIdentityKey(task)));
     if(!pendingTasks.length){
