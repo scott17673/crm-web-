@@ -1654,7 +1654,7 @@ const taskActivityFromTask = task => ({
   const soFacilities = mfrs.filter(m=>m.has_so_facilities).length;
   const preferredVendors = vendors.filter(v=>(v.tags||[]).includes("Preferred")).length;
   const industryStats = INDUSTRY_OPTIONS.map(industry => ({ industry, count: mfrs.filter(m=>getIndustryBucket(m.industry)===industry).length }));
-  const stageStats = STAGES.map(stage => ({ stage, count: mfrs.filter(m=>m.stage===stage).length }));
+  const stageStats = STAGES.map(stage => ({ stage, count: mfrs.filter(m=>normalizeStage(m.stage)===stage).length }));
   const maxIndustryCount = Math.max(1, ...industryStats.map(item => item.count));
   const maxStageCount = Math.max(1, ...stageStats.map(item => item.count));
   const stagePriority = {Negotiation:0,Proposal:1,Qualified:2,"Not Interested":3,Outreach:4,Prospect:5,Unqualified:6};
