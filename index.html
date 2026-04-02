@@ -645,8 +645,20 @@ const LinkifiedText = ({ text, style }) => {
   );
 };
 
-const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onMeasure, placeholder, height, style, richText=false }, forwardedRef) => {
+const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onAutoSave, onMeasure, placeholder, height, style, richText=false }, forwardedRef) => {
   const innerRef = useRef(null);
+  const latestValueRef = useRef(value || "");
+  const saveTimerRef = useRef(null);
+
+  const scheduleAutoSave = useCallback(nextValue => {
+    latestValueRef.current = nextValue;
+    if(!onAutoSave) return;
+    if(saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(()=>{
+      saveTimerRef.current = null;
+      onAutoSave(latestValueRef.current);
+    }, 150);
+  },[onAutoSave]);
 
   useEffect(()=>{
     const element = innerRef.current;
@@ -656,9 +668,21 @@ const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onMea
   },[value, richText]);
 
   useEffect(()=>{
+    latestValueRef.current = value || "";
+  },[value]);
+
+  useEffect(()=>{
     if(typeof forwardedRef === "function") forwardedRef(innerRef.current);
     else if(forwardedRef) forwardedRef.current = innerRef.current;
   },[forwardedRef]);
+
+  useEffect(()=>()=> {
+    if(saveTimerRef.current){
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+      onAutoSave?.(latestValueRef.current);
+    }
+  },[onAutoSave]);
 
   return (
     <div
@@ -668,7 +692,12 @@ const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onMea
       suppressContentEditableWarning
       data-placeholder={placeholder}
       style={{height,minHeight:height,border:"1px solid #eef2f7",background:"#fff",...style}}
-      onInput={e=>{ onChange(richText ? richNotesFromElement(e.currentTarget) : editableTextFromElement(e.currentTarget)); onMeasure?.(); }}
+      onInput={e=>{
+        const nextValue = richText ? richNotesFromElement(e.currentTarget) : editableTextFromElement(e.currentTarget);
+        onChange(nextValue);
+        scheduleAutoSave(nextValue);
+        onMeasure?.();
+      }}
       onPaste={e=>{
         e.preventDefault();
         const html = richText
@@ -682,11 +711,16 @@ const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onMea
         window.requestAnimationFrame(()=>{
           const nextValue = richText ? richNotesFromElement(innerRef.current) : editableTextFromElement(innerRef.current);
           onChange(nextValue);
+          scheduleAutoSave(nextValue);
           onMeasure?.();
         });
       }}
       onBlur={e=>{
         const nextValue = richText ? richNotesFromElement(e.currentTarget) : editableTextFromElement(e.currentTarget);
+        if(saveTimerRef.current){
+          window.clearTimeout(saveTimerRef.current);
+          saveTimerRef.current = null;
+        }
         e.currentTarget.innerHTML = richText ? renderRichNotesHtml(nextValue) : linkifiedHtml(nextValue);
         onMeasure?.();
         onBlurSave?.(nextValue);
@@ -1037,26 +1071,34 @@ const taskActivityFromTask = task => ({
     setNewAct({...createEmptyActivityDraft(), ...(activityDrafts[key] || {}), created_by:normalizeOwner(activityDrafts[key]?.created_by)});
   };
 
-  const saveMfrField = async (field, value) => {
+  const saveMfrField = async (field, value, options={}) => {
     if(!selected || selected.type!=="manufacturer") return;
+    const quiet = !!options.quiet;
+    const currentValue = String(field==="notes" ? (selected.notes || "") : (selected[field] ?? ""));
+    const nextValue = String(value ?? "");
+    if(currentValue===nextValue) return true;
     const dbField = manufacturerDbField(field);
     const { error } = await sb.from("manufacturers").update({[dbField]:value}).eq("id",selected.id);
     if(error){ toast2("Save error: "+error.message); return false; }
     const patch = dbField===field ? {[field]:value} : {[field]:value,[dbField]:value};
     setSelected(cur => cur ? {...cur,...patch} : cur);
     setMfrs(list => list.map(m => m.id===selected.id ? {...m,...patch} : m));
-    toast2("Saved");
+    if(!quiet) toast2("Saved");
     return true;
   };
 
-  const saveVendorField = async (field, value) => {
+  const saveVendorField = async (field, value, options={}) => {
     if(!selected || selected.type!=="vendor") return false;
+    const quiet = !!options.quiet;
+    const currentValue = String(field==="notes" ? (selected.notes || "") : (selected[field] ?? ""));
+    const nextValue = String(value ?? "");
+    if(currentValue===nextValue) return true;
     const { error } = await sb.from("vendors").update({[field]:value}).eq("id",selected.id);
     if(error){ toast2("Save error: "+error.message); return false; }
     const patch = {[field]:value};
     setSelected(cur => cur ? {...cur,...patch} : cur);
     setVendors(list => list.map(record => record.id===selected.id ? {...record,...patch} : record));
-    toast2("Saved");
+    if(!quiet) toast2("Saved");
     return true;
   };
 
@@ -1926,8 +1968,9 @@ const taskActivityFromTask = task => ({
                     placeholder="Internal notes, follow-up reminders..."
                     value={notesDraft}
                     onChange={setNotesDraft}
+                    onAutoSave={nextValue=>selected.type==="manufacturer" ? saveMfrField("notes", nextValue, {quiet:true}) : saveVendorField("notes", nextValue, {quiet:true})}
                     onMeasure={syncDetailPanelHeight}
-                    onBlurSave={nextValue=>selected.type==="manufacturer" ? saveMfrField("notes", nextValue) : saveVendorField("notes", nextValue)}
+                    onBlurSave={nextValue=>selected.type==="manufacturer" ? saveMfrField("notes", nextValue, {quiet:true}) : saveVendorField("notes", nextValue, {quiet:true})}
                   />
                 </div>
                 <div style={{display:"grid",gap:20,alignContent:"start"}}>
