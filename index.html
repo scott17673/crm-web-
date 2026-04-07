@@ -1643,6 +1643,7 @@ const taskActivityFromTask = task => ({
   const upcoming = sortTasksByNearest(tasks.filter(t=>!t.done&&(!t.due_date||t.due_date>today())));
   const taskSearchQuery = taskSearch.trim().toLowerCase();
   const filteredTaskList = sortTasksByNearest(tasks.filter(task => {
+    if(task.done) return false;
     if(!taskSearchQuery) return true;
     const haystack = [task.title, task.company, task.due_date, task.contact_type, task.owner].filter(Boolean).join(" ").toLowerCase();
     return haystack.includes(taskSearchQuery);
