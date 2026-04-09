@@ -52,6 +52,9 @@ const TASK_OPEN_META = "__task_open__";
 const TASK_DONE_META = "__task_done__";
 const LEGACY_TASKS_KEY = "ed_tasks";
 const ASK_FEEDBACK_KEY = "ed_ask_feedback";
+const ASK_FEEDBACK_CONTACT_TYPE = "__ask_feedback__";
+const ASK_FEEDBACK_ACTIVITY_TYPE = "Ask CRM Reply";
+const ASK_FEEDBACK_OWNER = "Ask CRM";
 const PEOPLE = ["Scott","Jeff"];
 const DEFAULT_OWNER = PEOPLE[0];
 const PERSON_COLORS = {Scott:"#1e3a8a",Jeff:"#16a34a"};
@@ -207,6 +210,7 @@ const isTaskActivity = row => {
   const raw = String(row?.created_by || "").trim();
   return raw===TASK_OPEN_META || raw===TASK_DONE_META || raw.startsWith(`${TASK_ACTIVITY_TYPE}|`);
 };
+const isAskFeedbackActivity = row => String(row?.contact_type || "").trim()===ASK_FEEDBACK_CONTACT_TYPE;
 const normalizeOwner = value => PEOPLE.includes(value) ? value : DEFAULT_OWNER;
 const parseTaskActivityMeta = value => {
   const raw = String(value || "").trim();
@@ -223,6 +227,48 @@ const taskIsDone = row => parseTaskActivityMeta(row?.created_by).done;
 const taskOwnerFromActivity = row => parseTaskActivityMeta(row?.created_by).owner;
 const displayOwner = value => String(value || "").trim() || DEFAULT_OWNER;
 const taskIdentityKey = task => [task.contact_type || "", task.contact_id || "", task.title || "", task.due_date || "", normalizeOwner(task.owner), task.done ? "1" : "0"].join("|");
+const normalizeAskFeedbackEntry = entry => {
+  const question = String(entry?.question || "").trim();
+  const feedback = String(entry?.feedback || "").trim();
+  if(!question || !feedback) return null;
+  return {
+    id: entry?.id || null,
+    question,
+    feedback,
+    created_at: entry?.created_at || new Date().toISOString(),
+  };
+};
+const askFeedbackEntryKey = entry => {
+  const normalized = normalizeAskFeedbackEntry(entry);
+  if(!normalized) return "";
+  return `${normalizeFeedbackQuestion(normalized.question)}|${normalized.feedback.toLowerCase()}`;
+};
+const askFeedbackActivityFromEntry = entry => {
+  const normalized = normalizeAskFeedbackEntry(entry);
+  if(!normalized) return null;
+  return {
+    contact_id: 0,
+    contact_type: ASK_FEEDBACK_CONTACT_TYPE,
+    type: ASK_FEEDBACK_ACTIVITY_TYPE,
+    note: JSON.stringify({question:normalized.question, feedback:normalized.feedback}),
+    date: String(normalized.created_at || today()).slice(0,10),
+    created_by: ASK_FEEDBACK_OWNER,
+  };
+};
+const askFeedbackFromActivity = row => {
+  if(!isAskFeedbackActivity(row)) return null;
+  try{
+    const parsed = JSON.parse(String(row?.note || "{}"));
+    return normalizeAskFeedbackEntry({
+      id: row.id,
+      question: parsed.question,
+      feedback: parsed.feedback,
+      created_at: row.created_at || row.date || new Date().toISOString(),
+    });
+  }catch{
+    return null;
+  }
+};
 const taskMatchesRecord = (task, rec) => task.contact_id===rec.id && (!task.contact_type || task.contact_type===rec.type || task.company===rec.company);
 const inferTaskRecord = (task, records, forceMatch=false) => {
   const allRecords = records || [];
@@ -1015,7 +1061,7 @@ function App(){
   const [askResult,setAskResult] = useState(null);
   const [askLoading,setAskLoading] = useState(false);
   const [askFeedbackText,setAskFeedbackText] = useState("");
-  const [askFeedbackEntries,setAskFeedbackEntries] = useState(()=>safeJson(localStorage.getItem(ASK_FEEDBACK_KEY), []));
+  const [askFeedbackEntries,setAskFeedbackEntries] = useState([]);
   const notesBoxRef = useRef(null);
   const contactsBoxRef = useRef(null);
   const companyNameSaveRef = useRef({timer:null, record:null, value:""});
@@ -1033,7 +1079,6 @@ function App(){
   const toast2 = msg => { setToast(msg); setTimeout(()=>setToast(""),3000); };
   const saveAskFeedbackEntries = next => {
     setAskFeedbackEntries(next);
-    localStorage.setItem(ASK_FEEDBACK_KEY, JSON.stringify(next));
   };
   const saveTaskDrafts = next => { setTaskDrafts(next); localStorage.setItem("ed_task_drafts",JSON.stringify(next)); };
   const saveActivityDrafts = next => { setActivityDrafts(next); localStorage.setItem("ed_activity_drafts",JSON.stringify(next)); };
@@ -1134,6 +1179,35 @@ const taskActivityFromTask = task => ({
       const l = (lr.data||[]).map(row => ({...row,type:"lost",tags:row.tags||[],lastContact:row.last_contact,lostReason:row.lost_reason,value:row.deal_value}));
       const allRecords = [...m, ...v, ...l];
       let activityRows = ar.data || [];
+      const legacyAskFeedback = safeJson(localStorage.getItem(ASK_FEEDBACK_KEY), []);
+      if(Array.isArray(legacyAskFeedback) && legacyAskFeedback.length){
+        try{
+          const existingAskFeedbackKeys = new Set(activityRows.map(askFeedbackFromActivity).filter(Boolean).map(askFeedbackEntryKey).filter(Boolean));
+          let askFeedbackMigrationFailed = false;
+          const insertedAskFeedbackRows = [];
+          for(const entry of legacyAskFeedback.map(normalizeAskFeedbackEntry).filter(Boolean)){
+            const key = askFeedbackEntryKey(entry);
+            if(!key || existingAskFeedbackKeys.has(key)) continue;
+            try{
+              const payload = askFeedbackActivityFromEntry(entry);
+              if(!payload) continue;
+              const inserted = await sb.from("activities").insert(payload).select("*").single();
+              ensureOk(inserted);
+              if(inserted.data){
+                insertedAskFeedbackRows.push(inserted.data);
+                existingAskFeedbackKeys.add(key);
+              }
+            }catch(singleAskErr){
+              askFeedbackMigrationFailed = true;
+              console.error("Ask CRM reply migration failed", entry, singleAskErr);
+            }
+          }
+          if(insertedAskFeedbackRows.length) activityRows = [...insertedAskFeedbackRows, ...activityRows];
+          if(!askFeedbackMigrationFailed) localStorage.removeItem(ASK_FEEDBACK_KEY);
+        }catch(askMigrationErr){
+          console.error("Ask CRM reply migration failed", askMigrationErr);
+        }
+      }
       const legacyTasks = safeJson(localStorage.getItem(LEGACY_TASKS_KEY), []);
       if(Array.isArray(legacyTasks) && legacyTasks.length){
         try{
@@ -1188,12 +1262,15 @@ const taskActivityFromTask = task => ({
         ...v.map(row => [`vendor:${row.id}`, row.company || ""]),
         ...l.map(row => [`lost:${row.id}`, row.company || ""]),
       ]);
-      const taskRows = activityRows.filter(isTaskActivity).map(row => taskRowFromActivity(row, companyByKey));
+      const askFeedbackRows = activityRows.map(askFeedbackFromActivity).filter(Boolean).sort((a,b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+      const visibleActivityRows = activityRows.filter(row => !isAskFeedbackActivity(row));
+      const taskRows = visibleActivityRows.filter(isTaskActivity).map(row => taskRowFromActivity(row, companyByKey));
       setMfrs(m);
       setVendors(v);
       setLost(l);
+      setAskFeedbackEntries(askFeedbackRows);
       setTasks(sortTasksByNearest(taskRows));
-      setActs(activityRows.filter(row => !isTaskActivity(row)).map(row => ({...row,contactId:row.contact_id})));
+      setActs(visibleActivityRows.filter(row => !isTaskActivity(row)).map(row => ({...row,contactId:row.contact_id})));
       setSelected(cur => !cur ? null : m.find(x=>x.id===cur.id) || v.find(x=>x.id===cur.id) || l.find(x=>x.id===cur.id) || cur);
     }catch(err){ toast2("Load error: "+err.message); }
     if(withSpinner) setLoading(false);
@@ -1258,19 +1335,31 @@ const taskActivityFromTask = task => ({
     const feedback = askFeedbackText.trim();
     const question = askQuery.trim();
     if(!feedback || !question) return;
-    const nextEntries = [
-      {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
-        question,
-        feedback,
-        created_at: new Date().toISOString(),
-      },
-      ...askFeedbackEntries,
-    ].slice(0,80);
-    saveAskFeedbackEntries(nextEntries);
-    setAskFeedbackText("");
-    setAskResult(current => current ? {...current, rememberedFeedback: findRelevantAskFeedback(question, nextEntries)} : current);
-    toast2("Ask CRM feedback saved");
+    return (async () => {
+      try{
+        const entry = normalizeAskFeedbackEntry({
+          question,
+          feedback,
+          created_at: new Date().toISOString(),
+        });
+        const key = askFeedbackEntryKey(entry);
+        if(!entry || !key) return;
+        if(askFeedbackEntries.some(existing => askFeedbackEntryKey(existing)===key)){
+          setAskFeedbackText("");
+          return toast2("That reply is already saved");
+        }
+        const inserted = await sb.from("activities").insert(askFeedbackActivityFromEntry(entry)).select("*").single();
+        ensureOk(inserted);
+        const savedEntry = askFeedbackFromActivity(inserted.data) || {...entry, id: inserted.data?.id || entry.id};
+        const nextEntries = [savedEntry, ...askFeedbackEntries].sort((a,b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+        saveAskFeedbackEntries(nextEntries);
+        setAskFeedbackText("");
+        setAskResult(current => current ? {...current, rememberedFeedback: findRelevantAskFeedback(question, nextEntries)} : current);
+        toast2("Ask CRM reply saved");
+      }catch(err){
+        toast2("Ask CRM reply error: "+err.message);
+      }
+    })();
   },[askFeedbackEntries, askFeedbackText, askQuery]);
   const activitySearchByRecord = useMemo(()=>{
     const map = new Map();
@@ -2061,7 +2150,7 @@ const taskActivityFromTask = task => ({
               <div style={{padding:"14px 16px",display:"grid",gap:12}}>
                 {!!askResult.rememberedFeedback?.length && (
                   <div style={{background:"#f8fbff",border:"1px solid #d8e2ef",borderRadius:6,padding:"10px 12px",display:"grid",gap:8}}>
-                    <div className="mono" style={{fontSize:10,color:"#6f84a6",letterSpacing:".12em",textTransform:"uppercase"}}>Remembered Feedback</div>
+                    <div className="mono" style={{fontSize:10,color:"#6f84a6",letterSpacing:".12em",textTransform:"uppercase"}}>Saved Replies</div>
                     {askResult.rememberedFeedback.map(entry => (
                       <div key={entry.id} style={{fontSize:12,color:"#475569",lineHeight:1.6,whiteSpace:"pre-wrap"}}>
                         <span style={{fontWeight:700,color:"#172033"}}>For "{entry.question}":</span> {entry.feedback}
@@ -2076,17 +2165,17 @@ const taskActivityFromTask = task => ({
                   {askResult.records.map(record => <button key={recordKey(record)} onClick={()=>openAskRecord(record)} style={{padding:"7px 12px",border:"1px solid #1e3a8a",borderRadius:999,background:"#eff6ff",color:"#1e3a8a",cursor:"pointer",fontSize:12,fontWeight:700}}>{record.company}</button>)}
                 </div>}
                 <div style={{display:"grid",gap:8,paddingTop:4,borderTop:"1px solid #eef3f9"}}>
-                  <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",textTransform:"uppercase"}}>Teach Ask CRM</div>
+                  <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",textTransform:"uppercase"}}>Reply To Ask CRM</div>
                   <textarea
                     className="fieldbox"
                     style={{minHeight:76}}
                     value={askFeedbackText}
                     onChange={e=>setAskFeedbackText(e.target.value)}
-                    placeholder="Correct the answer, add missing context, or explain how this should be answered next time..."
+                    placeholder="Answer it back, correct it, or add missing context..."
                   />
                   <div style={{display:"flex",justifyContent:"flex-end",gap:8}}>
-                    <button onClick={()=>setAskFeedbackText("")} style={{padding:"8px 12px",border:"1px solid #cbd5e1",borderRadius:4,background:"#fff",color:"#64748b",cursor:"pointer"}}>Clear Feedback</button>
-                    <button onClick={saveAskFeedback} disabled={!askFeedbackText.trim() || !askQuery.trim()} style={{padding:"8px 14px",border:"none",borderRadius:4,background:askFeedbackText.trim()&&askQuery.trim()?"#16a34a":"#cbd5e1",color:"#fff",cursor:askFeedbackText.trim()&&askQuery.trim()?"pointer":"not-allowed",fontWeight:700}}>Save Feedback</button>
+                    <button onClick={()=>setAskFeedbackText("")} style={{padding:"8px 12px",border:"1px solid #cbd5e1",borderRadius:4,background:"#fff",color:"#64748b",cursor:"pointer"}}>Clear Reply</button>
+                    <button onClick={saveAskFeedback} disabled={!askFeedbackText.trim() || !askQuery.trim()} style={{padding:"8px 14px",border:"none",borderRadius:4,background:askFeedbackText.trim()&&askQuery.trim()?"#16a34a":"#cbd5e1",color:"#fff",cursor:askFeedbackText.trim()&&askQuery.trim()?"pointer":"not-allowed",fontWeight:700}}>Save Reply</button>
                   </div>
                 </div>
               </div>
