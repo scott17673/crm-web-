@@ -530,6 +530,19 @@ const exportRecordRows = (records, tab, acts=[], tasks=[]) => {
 const tokenizeQuestion = value => String(value || "").toLowerCase().match(/[a-z0-9]+/g) || [];
 const normalizeFeedbackQuestion = value => tokenizeQuestion(value).filter(token => token.length>1).join(" ");
 const questionIncludes = (question, phrases) => phrases.some(phrase => String(question || "").toLowerCase().includes(phrase));
+const looksLikeAskQuestion = value => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if(!normalized) return false;
+  if(normalized.includes("?")) return true;
+  return /^(who|what|when|where|why|how|which|did|do|does|is|are|was|were|can|could|would|should|will|what about|and what about)\b/.test(normalized);
+};
+const composeAskFollowupQuestion = (baseQuestion, reply) => {
+  const base = String(baseQuestion || "").trim();
+  const next = String(reply || "").trim();
+  if(!base) return next;
+  if(!next) return base;
+  return `${base}\nFollow-up: ${next}`;
+};
 const formatLocalDate = date => {
   const year = date.getFullYear();
   const month = String(date.getMonth()+1).padStart(2,"0");
@@ -669,6 +682,7 @@ const feedbackSimilarityScore = (left, right) => {
   return Math.max(tokenScore, companySimilarityScore(leftNorm, rightNorm));
 };
 const findRelevantAskFeedback = (question, feedbackEntries=[]) => [...(feedbackEntries || [])]
+  .filter(entry => !looksLikeAskQuestion(entry.feedback))
   .map(entry => ({...entry, score:feedbackSimilarityScore(question, entry.question)}))
   .filter(entry => entry.score >= 0.45)
   .sort((a,b) => {
@@ -1241,6 +1255,7 @@ function App(){
   const [contactsDraft,setContactsDraft] = useState("");
   const [detailPanelHeight,setDetailPanelHeight] = useState(280);
   const [askQuery,setAskQuery] = useState("");
+  const [askConversationQuery,setAskConversationQuery] = useState("");
   const [askResult,setAskResult] = useState(null);
   const [askLoading,setAskLoading] = useState(false);
   const [askFeedbackText,setAskFeedbackText] = useState("");
@@ -1503,6 +1518,7 @@ const taskActivityFromTask = task => ({
     if(!question) return;
     setAskLoading(true);
     setAskFeedbackText("");
+    setAskConversationQuery(question);
     window.setTimeout(()=>{
       setAskResult(buildAskCrmAnswer(question, all, tasks, acts, askFeedbackEntries));
       setAskLoading(false);
@@ -1510,14 +1526,26 @@ const taskActivityFromTask = task => ({
   },[askQuery, all, tasks, acts, askFeedbackEntries]);
   const clearAskCrm = useCallback(() => {
     setAskQuery("");
+    setAskConversationQuery("");
     setAskResult(null);
     setAskLoading(false);
     setAskFeedbackText("");
   },[]);
   const saveAskFeedback = useCallback(() => {
     const feedback = askFeedbackText.trim();
-    const question = askQuery.trim();
+    const question = (askConversationQuery || askQuery).trim();
     if(!feedback || !question) return;
+    if(looksLikeAskQuestion(feedback)){
+      const followupQuestion = composeAskFollowupQuestion(question, feedback);
+      setAskLoading(true);
+      setAskConversationQuery(followupQuestion);
+      setAskFeedbackText("");
+      window.setTimeout(()=>{
+        setAskResult(buildAskCrmAnswer(followupQuestion, all, tasks, acts, askFeedbackEntries));
+        setAskLoading(false);
+      },0);
+      return;
+    }
     return (async () => {
       try{
         const entry = normalizeAskFeedbackEntry({
@@ -1543,7 +1571,7 @@ const taskActivityFromTask = task => ({
         toast2("Ask CRM reply error: "+err.message);
       }
     })();
-  },[askFeedbackEntries, askFeedbackText, askQuery]);
+  },[askFeedbackEntries, askFeedbackText, askQuery, askConversationQuery, all, tasks, acts]);
   const activitySearchByRecord = useMemo(()=>{
     const map = new Map();
     acts.forEach(act => {
@@ -2357,14 +2385,14 @@ const taskActivityFromTask = task => ({
                     onKeyDown={e=>{
                       if(e.key==="Enter" && !e.shiftKey){
                         e.preventDefault();
-                        if(askFeedbackText.trim() && askQuery.trim()) saveAskFeedback();
+                        if(askFeedbackText.trim() && (askConversationQuery.trim() || askQuery.trim())) saveAskFeedback();
                       }
                     }}
-                    placeholder="Answer it back, correct it, or add missing context..."
+                    placeholder="Ask a follow-up, answer it back, or correct it..."
                   />
                   <div style={{display:"flex",justifyContent:"flex-end",gap:8}}>
                     <button onClick={()=>setAskFeedbackText("")} style={{padding:"8px 12px",border:"1px solid #cbd5e1",borderRadius:4,background:"#fff",color:"#64748b",cursor:"pointer"}}>Clear Reply</button>
-                    <button onClick={saveAskFeedback} disabled={!askFeedbackText.trim() || !askQuery.trim()} style={{padding:"8px 14px",border:"none",borderRadius:4,background:askFeedbackText.trim()&&askQuery.trim()?"#16a34a":"#cbd5e1",color:"#fff",cursor:askFeedbackText.trim()&&askQuery.trim()?"pointer":"not-allowed",fontWeight:700}}>Save Reply</button>
+                    <button onClick={saveAskFeedback} disabled={!askFeedbackText.trim() || !(askConversationQuery.trim() || askQuery.trim())} style={{padding:"8px 14px",border:"none",borderRadius:4,background:askFeedbackText.trim()&&(askConversationQuery.trim() || askQuery.trim())?"#16a34a":"#cbd5e1",color:"#fff",cursor:askFeedbackText.trim()&&(askConversationQuery.trim() || askQuery.trim())?"pointer":"not-allowed",fontWeight:700}}>Send Reply</button>
                   </div>
                 </div>
               </div>
