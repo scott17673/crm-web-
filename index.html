@@ -613,6 +613,7 @@ const parseQuestionDateWindow = question => {
   if(!normalized) return null;
   if(normalized.includes("today")) return {from:today(), to:today(), label:"today"};
   if(normalized.includes("yesterday")) return {from:dateDaysAgo(1), to:dateDaysAgo(1), label:"yesterday"};
+  if(questionIncludes(normalized, ["the other day","other day"])) return {from:dateDaysAgo(4), to:today(), label:"the last few days"};
   if(questionIncludes(normalized, ["couple days ago","a couple days ago","few days ago","a few days ago"])) return {from:dateDaysAgo(4), to:dateDaysAgo(1), label:"the last few days"};
   const exactDaysAgo = normalized.match(/(\d+)\s+days?\s+ago/);
   if(exactDaysAgo){
@@ -637,33 +638,112 @@ const activityMatchesDateWindow = (activity, window) => {
   if(window.to && activityDate > window.to) return false;
   return true;
 };
+const looksLikeAskContactNoise = value => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if(!normalized) return true;
+  return [
+    "linkedin",
+    "current public contacts worth keeping",
+    "maybe keep only",
+    "this one is weaker",
+    "former maintenance-side names",
+    "these are not current managers",
+    "i could not verify",
+    "maintenance / operations leadership",
+    "current best match",
+    "not current managers",
+  ].some(fragment => normalized.includes(fragment));
+};
+const titleCaseLooseText = value => String(value || "").trim().split(/\s+/).map(word => {
+  if(!word) return "";
+  if(/[@:/]/.test(word)) return word;
+  return word.charAt(0).toUpperCase() + word.slice(1);
+}).join(" ");
+const normalizeAskContact = contact => {
+  let name = String(contact?.name || "").trim();
+  let title = String(contact?.title || "").trim();
+  const linkedin = String(contact?.linkedin || "").trim();
+  if(looksLikeAskContactNoise(name) || /^linkedin\b/i.test(name)) return null;
+  if(!title){
+      let match = name.match(/^(.+?)\s+[\u2013-]\s+(.+)$/);
+    if(match){
+      name = match[1].trim();
+      title = match[2].trim();
+    } else {
+      match = name.match(/^(.+?)\s+\|\s+(.+)$/);
+      if(match){
+        name = match[1].trim();
+        title = match[2].trim();
+      } else {
+        match = name.match(/^(.+?)\s+is there\s+(.+)$/i);
+        if(match){
+          name = match[1].trim();
+          title = match[2].trim();
+        }
+      }
+    }
+  }
+  if(looksLikeAskContactNoise(name) || !/[a-z]/i.test(name)) return null;
+  if(!/[A-Z]/.test(name) && !/https?:|www\.|@/i.test(name)) name = titleCaseLooseText(name);
+  if(title && !/[A-Z]/.test(title) && !/https?:|www\.|@/i.test(title)) title = titleCaseLooseText(title);
+  return {name, title, linkedin};
+};
+const extractActivityPersonFromNote = activity => {
+  const note = String(activity?.note || "").trim();
+  if(!note) return "";
+  const patterns = [
+    /(?:got transfered to|got transferred to|transferred to|reached|spoke with|talked to|talked with|asked for|left a vm for|left a voicemail for)\s+([a-z]+(?:\s+[a-z]+)?)/i,
+    /(?:gave me the option of)\s+([a-z]+(?:\s+or\s+[a-z]+)?)/i,
+  ];
+  for(const pattern of patterns){
+    const match = note.match(pattern);
+    if(!match) continue;
+    let candidate = String(match[1] || "").split(/\s+or\s+/i)[0].trim();
+    candidate = candidate.replace(/\b(?:he|she|they|plant|manager|maintenance|qa|quality|super|supervisor|director|operator|office|front|guy|girl|line|team)\b.*$/i,"").trim();
+    if(candidate && !/^(the|a|an|someone|operator|front|office|message)$/i.test(candidate)){
+      return titleCaseLooseText(candidate);
+    }
+  }
+  return "";
+};
 const getAskRecordContacts = record => {
   if(!record) return [];
-  if(record.type==="manufacturer") return record.contacts || [];
+  if(record.type==="manufacturer") return (record.contacts || []).map(normalizeAskContact).filter(Boolean);
   const name = String(record.name || "").trim();
   if(!name) return [];
-  return [{name,title:record.title || "",linkedin:record.email || record.phone || ""}];
+  return [{name,title:record.title || "",linkedin:record.email || record.phone || ""}].map(normalizeAskContact).filter(Boolean);
 };
 const describeAskContact = contact => [contact?.name, contact?.title].filter(Boolean).join(" | ");
 const detectActivityContact = (activity, record) => {
   const contacts = getAskRecordContacts(record);
-  if(!contacts.length) return null;
   const note = String(activity?.note || "").toLowerCase();
-  const direct = contacts.find(contact => {
-    const name = String(contact?.name || "").trim();
-    if(!name) return false;
-    const compactName = normalizeCompanyKey(name);
-    if(compactName && normalizeCompanyKey(note).includes(compactName)) return true;
-    const nameTokens = tokenizeCompanyName(name).filter(token => token.length>2);
-    return !!nameTokens.length && nameTokens.every(token => note.includes(token));
-  });
-  if(direct) return direct;
+  if(contacts.length){
+    const direct = contacts.find(contact => {
+      const name = String(contact?.name || "").trim();
+      if(!name) return false;
+      const compactName = normalizeCompanyKey(name);
+      if(compactName && normalizeCompanyKey(note).includes(compactName)) return true;
+      const nameTokens = tokenizeCompanyName(name).filter(token => token.length>2);
+      return !!nameTokens.length && nameTokens.every(token => note.includes(token));
+    });
+    if(direct) return direct;
+  }
+  const extractedName = extractActivityPersonFromNote(activity);
+  if(extractedName){
+    const extractedKey = normalizeCompanyKey(extractedName);
+    const matchedContact = contacts.find(contact => {
+      const contactKey = normalizeCompanyKey(contact?.name || "");
+      return contactKey && (contactKey.includes(extractedKey) || extractedKey.split(" ").some(part => part.length>2 && contactKey.includes(part)));
+    });
+    if(matchedContact) return matchedContact;
+    return {name: extractedName, title:"", linkedin:""};
+  }
   return contacts.length===1 ? contacts[0] : null;
 };
 const detectActivityInterestState = activity => {
   const note = String(activity?.note || "").toLowerCase();
-  if(questionIncludes(note, ["not interested","no interest","uninterested"])) return "negative";
-  if(questionIncludes(note, ["interested","interest","keen","open to","wants quote","wants pricing","wants info","positive","liked it"])) return "positive";
+  if(questionIncludes(note, ["not interested","no interest","uninterested","already had the coverage","already use someone","already uses someone","already covered","smoke screen","not a good call","too small","ghost company","declined my calendar invite"])) return "negative";
+  if(questionIncludes(note, ["interested","interest","keen","open to","wants quote","wants pricing","wants info","positive","liked it","asked for my email","asked for our email","send back some info","send some info","gave me his email","gave me her email","gave me their email","follow up","follow-up","definitley a follow up","definitely a follow up","get three quotes","three quotes","good talk"])) return "positive";
   return "neutral";
 };
 const activityTypeMatchesQuestion = (question, activity) => {
@@ -706,6 +786,11 @@ const scoreQuestionAgainstActivity = (question, activity, record, contact, dateW
   if(contact?.name) score += 0.12;
   if(companySimilarityScore(question, record?.company || "") > 0.8) score += 1.2;
   return score;
+};
+const summarizeActivityNote = note => {
+  const cleaned = String(note || "").replace(/\s+/g, " ").trim();
+  if(!cleaned) return "";
+  return cleaned.length > 190 ? `${cleaned.slice(0,187).trim()}...` : cleaned;
 };
 const feedbackSimilarityScore = (left, right) => {
   const leftNorm = normalizeFeedbackQuestion(left);
@@ -773,6 +858,7 @@ const buildAskFollowupResult = (reply, result) => {
   const next = result || {
     title: "Reply answer",
     summary: "I could not find a clear answer to that follow-up in the CRM data.",
+    answer: "",
     lines: [],
     records: [],
     rememberedFeedback: [],
@@ -781,9 +867,10 @@ const buildAskFollowupResult = (reply, result) => {
     ...next,
     title: "Reply answer",
     summary: next.summary ? `Follow-up result: ${next.summary}` : "Follow-up result from your CRM data.",
+    answer: next.answer || "",
     lines: [
       ...(normalizedReply ? [`You replied: ${normalizedReply}`] : []),
-      ...(next.title ? [`Best match: ${next.title}`] : []),
+      ...(!next.answer && next.title ? [`Best match: ${next.title}`] : []),
       ...((next.lines || []).length ? next.lines : ["I couldn't find a strong follow-up answer from the CRM data."]),
     ],
     askedQuestion: normalizedReply,
@@ -856,31 +943,39 @@ const buildAskCrmAnswer = (question, records, tasks, acts, feedbackEntries=[], p
       });
     if(activityMatches.length){
       const topMatches = activityMatches.slice(0,8);
-      const linkedRecords = [...new Map(topMatches.map(match => [recordKey(match.record), match.record])).values()].slice(0,8);
+      const linkedRecords = [...new Map(topMatches.map(match => [recordKey(match.record), match.record])).values()].slice(0, wantsPeople ? 3 : 8);
       const bestMatch = topMatches[0];
       const bestPerson = describeAskContact(bestMatch.contact) || "No named contact";
-      const lines = topMatches.map(match => {
-        const person = describeAskContact(match.contact) || (wantsPeople ? getAskRecordContacts(match.record).slice(0,2).map(describeAskContact).filter(Boolean).join(" ;; ") : "");
-        return [match.act.date || "No date", displayOwner(match.act.created_by), match.record.company, person, match.act.note || ""].filter(Boolean).join(" | ");
-      });
-      const title = wantsPeople ? "People from activity" : (owner ? `${owner}'s activity` : "Activity results");
-      const summaryParts = [];
+      const lines = wantsPeople
+        ? topMatches.slice(0,3).map((match, index) => {
+            const person = describeAskContact(match.contact) || "No named contact saved";
+            const prefix = index===0 ? "Why I picked that:" : "Also worth checking:";
+            return `${prefix} ${person} at ${match.record.company} on ${match.act.date || "an unknown date"}. ${summarizeActivityNote(match.act.note)}`;
+          })
+        : topMatches.map(match => {
+            const person = describeAskContact(match.contact) || "";
+            return [match.act.date || "No date", displayOwner(match.act.created_by), match.record.company, person, match.act.note || ""].filter(Boolean).join(" | ");
+          });
+      const title = wantsPeople ? "Best answer" : (owner ? `${owner}'s activity` : "Activity results");
+      const answerParts = [];
       if(wantsPeople){
-        summaryParts.push(
+        answerParts.push(
           wantsPositiveInterest
-            ? `${bestPerson} at ${bestMatch.record.company} looked interested on ${bestMatch.act.date || "an unknown date"}.`
+            ? `The clearest interested person I found is ${bestPerson} at ${bestMatch.record.company} on ${bestMatch.act.date || "an unknown date"}.`
             : wantsNegativeInterest
               ? `${bestPerson} at ${bestMatch.record.company} sounded not interested on ${bestMatch.act.date || "an unknown date"}.`
-              : `${bestPerson} at ${bestMatch.record.company} is the strongest match from ${bestMatch.act.date || "the activity log"}.`
+              : `The strongest person match I found is ${bestPerson} at ${bestMatch.record.company} from ${bestMatch.act.date || "the activity log"}.`
         );
       } else {
-        summaryParts.push(`${activityMatches.length} matching activit${activityMatches.length===1?"y":"ies"} found.`);
+        answerParts.push(`${activityMatches.length} matching activit${activityMatches.length===1?"y":"ies"} found.`);
       }
-      if(owner) summaryParts.push(`${owner}'s logs`);
-      if(dateWindow?.label) summaryParts.push(dateWindow.label);
+      const metaSummaryParts = [];
+      if(owner) metaSummaryParts.push(`${owner}'s logs`);
+      if(dateWindow?.label) metaSummaryParts.push(dateWindow.label);
       return {
         title,
-        summary: summaryParts.join(" "),
+        answer: wantsPeople ? answerParts.join(" ") : "",
+        summary: wantsPeople ? (metaSummaryParts.join(" · ") || "Based on your CRM activity log.") : [...answerParts, ...metaSummaryParts].join(" "),
         lines: wantsCount ? [] : lines,
         records: linkedRecords,
         rememberedFeedback,
@@ -2481,6 +2576,11 @@ const taskActivityFromTask = task => ({
                 {!!askResult.records?.length && <div className="mono" style={{fontSize:10,color:"#8ea0bd"}}>{askResult.records.length} quick link{askResult.records.length===1?"":"s"}</div>}
               </div>
               <div style={{padding:"14px 16px",display:"grid",gap:12}}>
+                {!!askResult.answer && (
+                  <div style={{fontSize:16,color:"#172033",fontWeight:700,lineHeight:1.55,whiteSpace:"pre-wrap"}}>
+                    {askResult.answer}
+                  </div>
+                )}
                 {!!askResult.lines?.length && <div style={{display:"grid",gap:8}}>
                   {askResult.lines.map((line, index)=><div key={`${askResult.title}-${index}`} style={{fontSize:13,color:"#334155",lineHeight:1.6,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{line}</div>)}
                 </div>}
