@@ -1729,12 +1729,11 @@ const taskActivityFromTask = task => ({
     if(!feedback || !question) return;
     const followupQuestion = buildAskReplyQuestion(question, feedback, askAsker);
     setAskLoading(true);
-    setAskQuery(feedback);
     setAskConversationQuery(followupQuestion);
     setAskFeedbackText("");
     try{
       const replyResult = buildAskFollowupResult(feedback, buildAskCrmAnswer(followupQuestion, all, tasks, acts, askFeedbackEntries, askAsker));
-      setAskResult(replyResult);
+      setAskResult(withAskedQuestion(replyResult, followupQuestion));
     }catch(err){
       console.error("Ask CRM follow-up error", err);
       setAskResult({
@@ -1746,7 +1745,7 @@ const taskActivityFromTask = task => ({
         ],
         records: [],
         rememberedFeedback: [],
-        askedQuestion: feedback,
+        askedQuestion: followupQuestion,
       });
       toast2("Ask CRM follow-up error: "+(err.message || String(err)));
     }finally{
