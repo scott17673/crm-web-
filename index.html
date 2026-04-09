@@ -728,6 +728,18 @@ const scoreQuestionAgainstRecord = (question, record, recordTasks=[], recordActs
 };
 const formatAskTaskLine = task => [task.due_date || "No due date", task.done ? "Done" : "Open", displayOwner(task.owner), task.title || ""].filter(Boolean).join(" | ");
 const formatAskActivityLine = act => [act.date || "No date", act.type || "Note", displayOwner(act.created_by), act.note || ""].filter(Boolean).join(" | ");
+const withAskedQuestion = (result, askedQuestion) => result ? {...result, askedQuestion:String(askedQuestion || "").trim()} : result;
+const buildAskReplySavedResult = (question, feedback, feedbackEntries=[]) => ({
+  title: "Reply saved",
+  summary: "I saved that reply and will use it on similar questions going forward.",
+  lines: [
+    `For: ${question}`,
+    `Reply: ${feedback}`,
+  ],
+  records: [],
+  rememberedFeedback: findRelevantAskFeedback(question, feedbackEntries),
+  askedQuestion: question,
+});
 const buildAskCrmAnswer = (question, records, tasks, acts, feedbackEntries=[]) => {
   const rawQuestion = String(question || "").trim();
   if(!rawQuestion) return null;
@@ -1520,7 +1532,7 @@ const taskActivityFromTask = task => ({
     setAskFeedbackText("");
     setAskConversationQuery(question);
     window.setTimeout(()=>{
-      setAskResult(buildAskCrmAnswer(question, all, tasks, acts, askFeedbackEntries));
+      setAskResult(withAskedQuestion(buildAskCrmAnswer(question, all, tasks, acts, askFeedbackEntries), question));
       setAskLoading(false);
     }, 0);
   },[askQuery, all, tasks, acts, askFeedbackEntries]);
@@ -1538,10 +1550,11 @@ const taskActivityFromTask = task => ({
     if(looksLikeAskQuestion(feedback)){
       const followupQuestion = composeAskFollowupQuestion(question, feedback);
       setAskLoading(true);
+      setAskQuery(feedback);
       setAskConversationQuery(followupQuestion);
       setAskFeedbackText("");
       window.setTimeout(()=>{
-        setAskResult(buildAskCrmAnswer(followupQuestion, all, tasks, acts, askFeedbackEntries));
+        setAskResult(withAskedQuestion(buildAskCrmAnswer(followupQuestion, all, tasks, acts, askFeedbackEntries), feedback));
         setAskLoading(false);
       },0);
       return;
@@ -1565,7 +1578,7 @@ const taskActivityFromTask = task => ({
         const nextEntries = [savedEntry, ...askFeedbackEntries].sort((a,b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
         saveAskFeedbackEntries(nextEntries);
         setAskFeedbackText("");
-        setAskResult(current => current ? {...current, rememberedFeedback: findRelevantAskFeedback(question, nextEntries)} : current);
+        setAskResult(buildAskReplySavedResult(question, feedback, nextEntries));
         toast2("Ask CRM reply saved");
       }catch(err){
         toast2("Ask CRM reply error: "+err.message);
@@ -2355,6 +2368,7 @@ const taskActivityFromTask = task => ({
                 <div>
                   <div className="condensed" style={{fontSize:20,fontWeight:800,color:"#172033"}}>{askResult.title}</div>
                   <div style={{fontSize:13,color:"#64748b",marginTop:4}}>{askResult.summary}</div>
+                  {!!askResult.askedQuestion && <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:6,letterSpacing:".04em"}}>Asked: {askResult.askedQuestion}</div>}
                 </div>
                 {!!askResult.records?.length && <div className="mono" style={{fontSize:10,color:"#8ea0bd"}}>{askResult.records.length} quick link{askResult.records.length===1?"":"s"}</div>}
               </div>
