@@ -52,9 +52,10 @@ const TASK_OPEN_META = "__task_open__";
 const TASK_DONE_META = "__task_done__";
 const LEGACY_TASKS_KEY = "ed_tasks";
 const ASK_FEEDBACK_KEY = "ed_ask_feedback";
-const ASK_FEEDBACK_CONTACT_TYPE = "__ask_feedback__";
-const ASK_FEEDBACK_ACTIVITY_TYPE = "Ask CRM Reply";
-const ASK_FEEDBACK_OWNER = "Ask CRM";
+const ASK_FEEDBACK_CONTACT_TYPE = "manufacturer";
+const ASK_FEEDBACK_CONTACT_ID = 0;
+const ASK_FEEDBACK_ACTIVITY_TYPE = "Note";
+const ASK_FEEDBACK_CREATED_BY = "__ask_feedback__";
 const PEOPLE = ["Scott","Jeff"];
 const DEFAULT_OWNER = PEOPLE[0];
 const PERSON_COLORS = {Scott:"#1e3a8a",Jeff:"#16a34a"};
@@ -210,7 +211,11 @@ const isTaskActivity = row => {
   const raw = String(row?.created_by || "").trim();
   return raw===TASK_OPEN_META || raw===TASK_DONE_META || raw.startsWith(`${TASK_ACTIVITY_TYPE}|`);
 };
-const isAskFeedbackActivity = row => String(row?.contact_type || "").trim()===ASK_FEEDBACK_CONTACT_TYPE;
+const isAskFeedbackActivity = row => (
+  String(row?.contact_type || "").trim()===ASK_FEEDBACK_CONTACT_TYPE &&
+  Number(row?.contact_id ?? -1)===ASK_FEEDBACK_CONTACT_ID &&
+  String(row?.created_by || "").trim()===ASK_FEEDBACK_CREATED_BY
+);
 const normalizeOwner = value => PEOPLE.includes(value) ? value : DEFAULT_OWNER;
 const parseTaskActivityMeta = value => {
   const raw = String(value || "").trim();
@@ -247,12 +252,12 @@ const askFeedbackActivityFromEntry = entry => {
   const normalized = normalizeAskFeedbackEntry(entry);
   if(!normalized) return null;
   return {
-    contact_id: 0,
+    contact_id: ASK_FEEDBACK_CONTACT_ID,
     contact_type: ASK_FEEDBACK_CONTACT_TYPE,
     type: ASK_FEEDBACK_ACTIVITY_TYPE,
     note: JSON.stringify({question:normalized.question, feedback:normalized.feedback}),
     date: String(normalized.created_at || today()).slice(0,10),
-    created_by: ASK_FEEDBACK_OWNER,
+    created_by: ASK_FEEDBACK_CREATED_BY,
   };
 };
 const askFeedbackFromActivity = row => {
