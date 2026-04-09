@@ -525,6 +525,131 @@ const exportRecordRows = (records, tab, acts=[], tasks=[]) => {
 const tokenizeQuestion = value => String(value || "").toLowerCase().match(/[a-z0-9]+/g) || [];
 const normalizeFeedbackQuestion = value => tokenizeQuestion(value).filter(token => token.length>1).join(" ");
 const questionIncludes = (question, phrases) => phrases.some(phrase => String(question || "").toLowerCase().includes(phrase));
+const formatLocalDate = date => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth()+1).padStart(2,"0");
+  const day = String(date.getDate()).padStart(2,"0");
+  return `${year}-${month}-${day}`;
+};
+const dateDaysAgo = days => {
+  const next = new Date();
+  next.setHours(12,0,0,0);
+  next.setDate(next.getDate()-days);
+  return formatLocalDate(next);
+};
+const weekStartDate = weeksAgo => {
+  const next = new Date();
+  next.setHours(12,0,0,0);
+  const mondayOffset = (next.getDay()+6)%7;
+  next.setDate(next.getDate()-mondayOffset-(weeksAgo*7));
+  return formatLocalDate(next);
+};
+const weekEndDate = weeksAgo => {
+  const next = new Date();
+  next.setHours(12,0,0,0);
+  const mondayOffset = (next.getDay()+6)%7;
+  next.setDate(next.getDate()+(6-mondayOffset)-(weeksAgo*7));
+  return formatLocalDate(next);
+};
+const parseQuestionDateWindow = question => {
+  const normalized = String(question || "").toLowerCase();
+  if(!normalized) return null;
+  if(normalized.includes("today")) return {from:today(), to:today(), label:"today"};
+  if(normalized.includes("yesterday")) return {from:dateDaysAgo(1), to:dateDaysAgo(1), label:"yesterday"};
+  if(questionIncludes(normalized, ["couple days ago","a couple days ago","few days ago","a few days ago"])) return {from:dateDaysAgo(4), to:dateDaysAgo(1), label:"the last few days"};
+  const exactDaysAgo = normalized.match(/(\d+)\s+days?\s+ago/);
+  if(exactDaysAgo){
+    const exactDate = dateDaysAgo(parseInt(exactDaysAgo[1],10) || 0);
+    return {from:exactDate, to:exactDate, label:`${exactDaysAgo[1]} days ago`};
+  }
+  const recentDays = normalized.match(/(?:last|past)\s+(\d+)\s+days?/);
+  if(recentDays){
+    const days = Math.max(1, parseInt(recentDays[1],10) || 1);
+    return {from:dateDaysAgo(days), to:today(), label:`the last ${days} days`};
+  }
+  if(normalized.includes("this week")) return {from:weekStartDate(0), to:today(), label:"this week"};
+  if(normalized.includes("last week")) return {from:weekStartDate(1), to:weekEndDate(1), label:"last week"};
+  if(questionIncludes(normalized, ["recently","lately"])) return {from:dateDaysAgo(7), to:today(), label:"recently"};
+  return null;
+};
+const activityMatchesDateWindow = (activity, window) => {
+  if(!window) return true;
+  const activityDate = String(activity?.date || "");
+  if(!activityDate) return false;
+  if(window.from && activityDate < window.from) return false;
+  if(window.to && activityDate > window.to) return false;
+  return true;
+};
+const getAskRecordContacts = record => {
+  if(!record) return [];
+  if(record.type==="manufacturer") return record.contacts || [];
+  const name = String(record.name || "").trim();
+  if(!name) return [];
+  return [{name,title:record.title || "",linkedin:record.email || record.phone || ""}];
+};
+const describeAskContact = contact => [contact?.name, contact?.title].filter(Boolean).join(" | ");
+const detectActivityContact = (activity, record) => {
+  const contacts = getAskRecordContacts(record);
+  if(!contacts.length) return null;
+  const note = String(activity?.note || "").toLowerCase();
+  const direct = contacts.find(contact => {
+    const name = String(contact?.name || "").trim();
+    if(!name) return false;
+    const compactName = normalizeCompanyKey(name);
+    if(compactName && normalizeCompanyKey(note).includes(compactName)) return true;
+    const nameTokens = tokenizeCompanyName(name).filter(token => token.length>2);
+    return !!nameTokens.length && nameTokens.every(token => note.includes(token));
+  });
+  if(direct) return direct;
+  return contacts.length===1 ? contacts[0] : null;
+};
+const detectActivityInterestState = activity => {
+  const note = String(activity?.note || "").toLowerCase();
+  if(questionIncludes(note, ["not interested","no interest","uninterested"])) return "negative";
+  if(questionIncludes(note, ["interested","interest","keen","open to","wants quote","wants pricing","wants info","positive","liked it"])) return "positive";
+  return "neutral";
+};
+const activityTypeMatchesQuestion = (question, activity) => {
+  const normalized = String(question || "").toLowerCase();
+  const type = String(activity?.type || "").toLowerCase();
+  if(questionIncludes(normalized, ["call","called","phone","voicemail"]) && type==="call") return true;
+  if(questionIncludes(normalized, ["email","emailed"]) && type==="email") return true;
+  if(questionIncludes(normalized, ["meeting","met"]) && type==="meeting") return true;
+  if(questionIncludes(normalized, ["note","noted","logged"]) && type==="note") return true;
+  return false;
+};
+const scoreQuestionAgainstActivity = (question, activity, record, contact, dateWindow, owner, wantsPositiveInterest, wantsNegativeInterest) => {
+  const normalized = String(question || "").toLowerCase();
+  const haystack = [
+    activity?.type,
+    activity?.note,
+    activity?.date,
+    activity?.created_by,
+    record?.company,
+    record?.stage,
+    record?.industry,
+    contact?.name,
+    contact?.title,
+    ...getAskRecordContacts(record).flatMap(item => [item?.name, item?.title]),
+  ].filter(Boolean).join(" ").toLowerCase();
+  let score = 0;
+  tokenizeQuestion(normalized).forEach(token => {
+    if(token.length>2 && haystack.includes(token)) score += 0.08;
+  });
+  if(owner && displayOwner(activity?.created_by)===owner) score += 0.8;
+  if(activityMatchesDateWindow(activity, dateWindow)) score += 0.55;
+  if(activityTypeMatchesQuestion(normalized, activity)) score += 0.28;
+  const interestState = detectActivityInterestState(activity);
+  if(wantsPositiveInterest){
+    score += interestState==="positive" ? 1.25 : -0.35;
+  }
+  if(wantsNegativeInterest){
+    score += interestState==="negative" ? 1.25 : -0.35;
+  }
+  if(contact?.name) score += 0.12;
+  if(companySimilarityScore(question, record?.company || "") > 0.8) score += 1.2;
+  return score;
+};
 const feedbackSimilarityScore = (left, right) => {
   const leftNorm = normalizeFeedbackQuestion(left);
   const rightNorm = normalizeFeedbackQuestion(right);
@@ -601,6 +726,12 @@ const buildAskCrmAnswer = (question, records, tasks, acts, feedbackEntries=[]) =
   const wantsOverdue = questionIncludes(normalized, ["overdue","due today","due / overdue","due/overdue"]);
   const wantsUpcoming = questionIncludes(normalized, ["upcoming","future","next up"]);
   const wantsCompleted = questionIncludes(normalized, ["completed","done","finished"]);
+  const wantsPeople = questionIncludes(normalized, ["who","person","people","name","names"]);
+  const wantsNegativeInterest = questionIncludes(normalized, ["not interested","uninterested","no interest"]);
+  const wantsPositiveInterest = !wantsNegativeInterest && questionIncludes(normalized, ["interested","interest","keen","open to","wants quote","wants pricing","wants info"]);
+  const activityContext = wantsActivities || questionIncludes(normalized, ["reached","reach","spoke","talked","called","emailed","messaged","connected","contacted","followed up","followed-up","replied","responded","response","logged"]);
+  const dateWindow = parseQuestionDateWindow(normalized);
+  const activityDrivenQuestion = activityContext || wantsPositiveInterest || wantsNegativeInterest || (wantsPeople && (owner || dateWindow || questionIncludes(normalized, ["reached","interest","interested","called","emailed","messaged","talked","spoke","responded","replied"])));
 
   const scoredRecords = (records || []).map(record => {
     const recordTasks = (tasks || []).filter(task => taskMatchesRecord(task, record));
@@ -608,6 +739,53 @@ const buildAskCrmAnswer = (question, records, tasks, acts, feedbackEntries=[]) =
     return {record, score:scoreQuestionAgainstRecord(normalized, record, recordTasks, recordActs)};
   }).sort((a,b) => b.score - a.score);
   const bestRecord = scoredRecords[0]?.score >= 0.56 ? scoredRecords[0].record : null;
+
+  if(activityDrivenQuestion){
+    let activityPool = [...(acts || [])];
+    if(owner) activityPool = activityPool.filter(act => displayOwner(act.created_by)===owner);
+    if(type) activityPool = activityPool.filter(act => (act.contact_type || "manufacturer")===type);
+    if(dateWindow) activityPool = activityPool.filter(act => activityMatchesDateWindow(act, dateWindow));
+    const activityMatches = activityPool
+      .map(act => {
+        const record = records.find(item => `${act.contact_type || "manufacturer"}:${act.contactId}`===recordKey(item));
+        if(!record) return null;
+        if(stage && normalizeStage(record.stage)!==stage) return null;
+        if(industry && getIndustryBucket(record.industry)!==industry) return null;
+        const contact = detectActivityContact(act, record);
+        const interestState = detectActivityInterestState(act);
+        if(wantsPositiveInterest && interestState!=="positive") return null;
+        if(wantsNegativeInterest && interestState!=="negative") return null;
+        const score = scoreQuestionAgainstActivity(normalized, act, record, contact, dateWindow, owner, wantsPositiveInterest, wantsNegativeInterest);
+        return {act, record, contact, score};
+      })
+      .filter(Boolean)
+      .sort((a,b) => {
+        if(b.score !== a.score) return b.score - a.score;
+        return String(b.act.date || "").localeCompare(String(a.act.date || ""));
+      });
+    if(activityMatches.length){
+      const topMatches = activityMatches.slice(0,8);
+      const linkedRecords = [...new Map(topMatches.map(match => [recordKey(match.record), match.record])).values()].slice(0,8);
+      const lines = topMatches.map(match => {
+        const person = describeAskContact(match.contact) || (wantsPeople ? getAskRecordContacts(match.record).slice(0,2).map(describeAskContact).filter(Boolean).join(" ;; ") : "");
+        return [match.act.date || "No date", displayOwner(match.act.created_by), match.record.company, person, match.act.note || ""].filter(Boolean).join(" | ");
+      });
+      const title = wantsPeople ? "People from activity" : (owner ? `${owner}'s activity` : "Activity results");
+      const summaryParts = [];
+      summaryParts.push(`${activityMatches.length} matching activit${activityMatches.length===1?"y":"ies"} found.`);
+      if(owner) summaryParts.push(`${owner}'s logs`);
+      if(dateWindow?.label) summaryParts.push(dateWindow.label);
+      if(wantsPositiveInterest) summaryParts.push("showing interested replies");
+      if(wantsNegativeInterest) summaryParts.push("showing not interested replies");
+      return {
+        title,
+        summary: summaryParts.join(" · "),
+        lines: wantsCount ? [] : lines,
+        records: linkedRecords,
+        rememberedFeedback,
+      };
+    }
+  }
 
   if(bestRecord){
     const recordTasks = sortTasksByNearest((tasks || []).filter(task => taskMatchesRecord(task, bestRecord)));
@@ -2171,6 +2349,12 @@ const taskActivityFromTask = task => ({
                     style={{minHeight:76}}
                     value={askFeedbackText}
                     onChange={e=>setAskFeedbackText(e.target.value)}
+                    onKeyDown={e=>{
+                      if(e.key==="Enter" && !e.shiftKey){
+                        e.preventDefault();
+                        if(askFeedbackText.trim() && askQuery.trim()) saveAskFeedback();
+                      }
+                    }}
                     placeholder="Answer it back, correct it, or add missing context..."
                   />
                   <div style={{display:"flex",justifyContent:"flex-end",gap:8}}>
