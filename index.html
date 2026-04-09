@@ -729,6 +729,25 @@ const scoreQuestionAgainstRecord = (question, record, recordTasks=[], recordActs
 const formatAskTaskLine = task => [task.due_date || "No due date", task.done ? "Done" : "Open", displayOwner(task.owner), task.title || ""].filter(Boolean).join(" | ");
 const formatAskActivityLine = act => [act.date || "No date", act.type || "Note", displayOwner(act.created_by), act.note || ""].filter(Boolean).join(" | ");
 const withAskedQuestion = (result, askedQuestion) => result ? {...result, askedQuestion:String(askedQuestion || "").trim()} : result;
+const buildAskFollowupResult = (reply, result) => {
+  const normalizedReply = String(reply || "").trim();
+  const next = result || {
+    title: "Reply answer",
+    summary: "I could not find a clear answer to that follow-up in the CRM data.",
+    lines: [],
+    records: [],
+    rememberedFeedback: [],
+  };
+  return {
+    ...next,
+    title: next.title || "Reply answer",
+    lines: [
+      ...(normalizedReply ? [`You replied: ${normalizedReply}`] : []),
+      ...((next.lines || []).length ? next.lines : ["I couldn't find a strong follow-up answer from the CRM data."]),
+    ],
+    askedQuestion: normalizedReply,
+  };
+};
 const buildAskReplySavedResult = (question, feedback, feedbackEntries=[]) => ({
   title: "Reply saved",
   summary: "I saved that reply and will use it on similar questions going forward.",
@@ -1553,7 +1572,7 @@ const taskActivityFromTask = task => ({
     setAskConversationQuery(followupQuestion);
     setAskFeedbackText("");
     window.setTimeout(()=>{
-      setAskResult(withAskedQuestion(buildAskCrmAnswer(followupQuestion, all, tasks, acts, askFeedbackEntries), feedback));
+      setAskResult(buildAskFollowupResult(feedback, buildAskCrmAnswer(followupQuestion, all, tasks, acts, askFeedbackEntries)));
       setAskLoading(false);
     },0);
   },[askFeedbackText, askConversationQuery, askQuery, all, tasks, acts, askFeedbackEntries]);
