@@ -740,9 +740,11 @@ const buildAskFollowupResult = (reply, result) => {
   };
   return {
     ...next,
-    title: next.title || "Reply answer",
+    title: "Reply answer",
+    summary: next.summary ? `Follow-up result: ${next.summary}` : "Follow-up result from your CRM data.",
     lines: [
       ...(normalizedReply ? [`You replied: ${normalizedReply}`] : []),
+      ...(next.title ? [`Best match: ${next.title}`] : []),
       ...((next.lines || []).length ? next.lines : ["I couldn't find a strong follow-up answer from the CRM data."]),
     ],
     askedQuestion: normalizedReply,
@@ -1550,10 +1552,21 @@ const taskActivityFromTask = task => ({
     setAskLoading(true);
     setAskFeedbackText("");
     setAskConversationQuery(question);
-    window.setTimeout(()=>{
+    try{
       setAskResult(withAskedQuestion(buildAskCrmAnswer(question, all, tasks, acts, askFeedbackEntries), question));
+    }catch(err){
+      console.error("Ask CRM error", err);
+      setAskResult(withAskedQuestion({
+        title: "Ask CRM error",
+        summary: "I hit a problem while answering that question.",
+        lines: [err.message || String(err)],
+        records: [],
+        rememberedFeedback: [],
+      }, question));
+      toast2("Ask CRM error: "+(err.message || String(err)));
+    }finally{
       setAskLoading(false);
-    }, 0);
+    }
   },[askQuery, all, tasks, acts, askFeedbackEntries]);
   const clearAskCrm = useCallback(() => {
     setAskQuery("");
@@ -1571,10 +1584,26 @@ const taskActivityFromTask = task => ({
     setAskQuery(feedback);
     setAskConversationQuery(followupQuestion);
     setAskFeedbackText("");
-    window.setTimeout(()=>{
-      setAskResult(buildAskFollowupResult(feedback, buildAskCrmAnswer(followupQuestion, all, tasks, acts, askFeedbackEntries)));
+    try{
+      const replyResult = buildAskFollowupResult(feedback, buildAskCrmAnswer(followupQuestion, all, tasks, acts, askFeedbackEntries));
+      setAskResult(replyResult);
+    }catch(err){
+      console.error("Ask CRM follow-up error", err);
+      setAskResult({
+        title: "Reply answer",
+        summary: "I hit a problem while answering that follow-up.",
+        lines: [
+          `You replied: ${feedback}`,
+          err.message || String(err),
+        ],
+        records: [],
+        rememberedFeedback: [],
+        askedQuestion: feedback,
+      });
+      toast2("Ask CRM follow-up error: "+(err.message || String(err)));
+    }finally{
       setAskLoading(false);
-    },0);
+    }
   },[askFeedbackText, askConversationQuery, askQuery, all, tasks, acts, askFeedbackEntries]);
   const saveAskFeedback = useCallback(() => {
     const feedback = askFeedbackText.trim();
