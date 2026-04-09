@@ -536,12 +536,51 @@ const looksLikeAskQuestion = value => {
   if(normalized.includes("?")) return true;
   return /^(who|what|when|where|why|how|which|did|do|does|is|are|was|were|can|could|would|should|will|what about|and what about)\b/.test(normalized);
 };
-const composeAskFollowupQuestion = (baseQuestion, reply) => {
+const asksForPeople = question => questionIncludes(String(question || "").toLowerCase(), ["who","person","people","name","names","guy","girl","contact"]);
+const extractAskDatePhrase = question => {
+  const normalized = String(question || "").toLowerCase();
+  if(!normalized) return "";
+  if(normalized.includes("today")) return "today";
+  if(normalized.includes("yesterday")) return "yesterday";
+  if(questionIncludes(normalized, ["couple days ago","a couple days ago"])) return "a couple days ago";
+  if(questionIncludes(normalized, ["few days ago","a few days ago"])) return "a few days ago";
+  const exactDaysAgo = normalized.match(/(\d+)\s+days?\s+ago/);
+  if(exactDaysAgo) return `${exactDaysAgo[1]} days ago`;
+  const recentDays = normalized.match(/(?:last|past)\s+(\d+)\s+days?/);
+  if(recentDays) return `the last ${recentDays[1]} days`;
+  if(normalized.includes("this week")) return "this week";
+  if(normalized.includes("last week")) return "last week";
+  if(questionIncludes(normalized, ["recently","lately"])) return "recently";
+  return "";
+};
+const detectInterestIntent = question => {
+  const normalized = String(question || "").toLowerCase();
+  if(questionIncludes(normalized, ["not interested","uninterested","no interest"])) return "negative";
+  if(questionIncludes(normalized, ["interested","interest","keen","open to","wants quote","wants pricing","wants info"])) return "positive";
+  return null;
+};
+const buildAskReplyQuestion = (baseQuestion, reply, preferredOwner=null) => {
   const base = String(baseQuestion || "").trim();
   const next = String(reply || "").trim();
-  if(!base) return next;
-  if(!next) return base;
-  return `${base}\nFollow-up: ${next}`;
+  if(!next) return "";
+  const normalizedBase = base.toLowerCase();
+  const normalizedNext = next.toLowerCase();
+  const followupSubject = next.replace(/^(?:and\s+)?what about\s+/i, "").replace(/\?+$/,"").trim() || next;
+  const pieces = [];
+  if(asksForPeople(base) && !asksForPeople(next)){
+    pieces.push(`who ${followupSubject}`.trim());
+  } else {
+    pieces.push(followupSubject);
+  }
+  const owner = detectQuestionOwner(normalizedNext) || detectQuestionOwner(normalizedBase) || (PEOPLE.includes(preferredOwner) ? preferredOwner : null);
+  if(owner && !detectQuestionOwner(normalizedNext)) pieces.push(`for ${owner}`);
+  const datePhrase = extractAskDatePhrase(base);
+  if(datePhrase && !parseQuestionDateWindow(normalizedNext)) pieces.push(datePhrase);
+  const interestIntent = detectInterestIntent(base);
+  if(interestIntent && !detectInterestIntent(next)){
+    pieces.push(interestIntent==="positive" ? "that was interested" : "that was not interested");
+  }
+  return pieces.filter(Boolean).join(" ");
 };
 const formatLocalDate = date => {
   const year = date.getFullYear();
@@ -761,12 +800,12 @@ const buildAskReplySavedResult = (question, feedback, feedbackEntries=[]) => ({
   rememberedFeedback: findRelevantAskFeedback(question, feedbackEntries),
   askedQuestion: question,
 });
-const buildAskCrmAnswer = (question, records, tasks, acts, feedbackEntries=[]) => {
+const buildAskCrmAnswer = (question, records, tasks, acts, feedbackEntries=[], preferredOwner=null) => {
   const rawQuestion = String(question || "").trim();
   if(!rawQuestion) return null;
   const normalized = rawQuestion.toLowerCase();
   const rememberedFeedback = findRelevantAskFeedback(rawQuestion, feedbackEntries);
-  const owner = detectQuestionOwner(normalized);
+  const owner = detectQuestionOwner(normalized) || (PEOPLE.includes(preferredOwner) ? preferredOwner : null);
   const stage = detectQuestionStage(normalized);
   const industry = detectQuestionIndustry(normalized);
   const type = detectQuestionType(normalized);
@@ -818,20 +857,30 @@ const buildAskCrmAnswer = (question, records, tasks, acts, feedbackEntries=[]) =
     if(activityMatches.length){
       const topMatches = activityMatches.slice(0,8);
       const linkedRecords = [...new Map(topMatches.map(match => [recordKey(match.record), match.record])).values()].slice(0,8);
+      const bestMatch = topMatches[0];
+      const bestPerson = describeAskContact(bestMatch.contact) || "No named contact";
       const lines = topMatches.map(match => {
         const person = describeAskContact(match.contact) || (wantsPeople ? getAskRecordContacts(match.record).slice(0,2).map(describeAskContact).filter(Boolean).join(" ;; ") : "");
         return [match.act.date || "No date", displayOwner(match.act.created_by), match.record.company, person, match.act.note || ""].filter(Boolean).join(" | ");
       });
       const title = wantsPeople ? "People from activity" : (owner ? `${owner}'s activity` : "Activity results");
       const summaryParts = [];
-      summaryParts.push(`${activityMatches.length} matching activit${activityMatches.length===1?"y":"ies"} found.`);
+      if(wantsPeople){
+        summaryParts.push(
+          wantsPositiveInterest
+            ? `${bestPerson} at ${bestMatch.record.company} looked interested on ${bestMatch.act.date || "an unknown date"}.`
+            : wantsNegativeInterest
+              ? `${bestPerson} at ${bestMatch.record.company} sounded not interested on ${bestMatch.act.date || "an unknown date"}.`
+              : `${bestPerson} at ${bestMatch.record.company} is the strongest match from ${bestMatch.act.date || "the activity log"}.`
+        );
+      } else {
+        summaryParts.push(`${activityMatches.length} matching activit${activityMatches.length===1?"y":"ies"} found.`);
+      }
       if(owner) summaryParts.push(`${owner}'s logs`);
       if(dateWindow?.label) summaryParts.push(dateWindow.label);
-      if(wantsPositiveInterest) summaryParts.push("showing interested replies");
-      if(wantsNegativeInterest) summaryParts.push("showing not interested replies");
       return {
         title,
-        summary: summaryParts.join(" · "),
+        summary: summaryParts.join(" "),
         lines: wantsCount ? [] : lines,
         records: linkedRecords,
         rememberedFeedback,
@@ -1289,6 +1338,7 @@ function App(){
   const [detailPanelHeight,setDetailPanelHeight] = useState(280);
   const [askQuery,setAskQuery] = useState("");
   const [askConversationQuery,setAskConversationQuery] = useState("");
+  const [askAsker,setAskAsker] = useState(DEFAULT_OWNER);
   const [askResult,setAskResult] = useState(null);
   const [askLoading,setAskLoading] = useState(false);
   const [askFeedbackText,setAskFeedbackText] = useState("");
@@ -1556,7 +1606,7 @@ const taskActivityFromTask = task => ({
     setAskFeedbackText("");
     setAskConversationQuery(question);
     try{
-      setAskResult(withAskedQuestion(buildAskCrmAnswer(question, all, tasks, acts, askFeedbackEntries), question));
+      setAskResult(withAskedQuestion(buildAskCrmAnswer(question, all, tasks, acts, askFeedbackEntries, askAsker), question));
     }catch(err){
       console.error("Ask CRM error", err);
       setAskResult(withAskedQuestion({
@@ -1570,7 +1620,7 @@ const taskActivityFromTask = task => ({
     }finally{
       setAskLoading(false);
     }
-  },[askQuery, all, tasks, acts, askFeedbackEntries]);
+  },[askQuery, all, tasks, acts, askFeedbackEntries, askAsker]);
   const clearAskCrm = useCallback(() => {
     setAskQuery("");
     setAskConversationQuery("");
@@ -1582,13 +1632,13 @@ const taskActivityFromTask = task => ({
     const feedback = askFeedbackText.trim();
     const question = (askConversationQuery || askQuery).trim();
     if(!feedback || !question) return;
-    const followupQuestion = composeAskFollowupQuestion(question, feedback);
+    const followupQuestion = buildAskReplyQuestion(question, feedback, askAsker);
     setAskLoading(true);
     setAskQuery(feedback);
     setAskConversationQuery(followupQuestion);
     setAskFeedbackText("");
     try{
-      const replyResult = buildAskFollowupResult(feedback, buildAskCrmAnswer(followupQuestion, all, tasks, acts, askFeedbackEntries));
+      const replyResult = buildAskFollowupResult(feedback, buildAskCrmAnswer(followupQuestion, all, tasks, acts, askFeedbackEntries, askAsker));
       setAskResult(replyResult);
     }catch(err){
       console.error("Ask CRM follow-up error", err);
@@ -1607,7 +1657,7 @@ const taskActivityFromTask = task => ({
     }finally{
       setAskLoading(false);
     }
-  },[askFeedbackText, askConversationQuery, askQuery, all, tasks, acts, askFeedbackEntries]);
+  },[askFeedbackText, askConversationQuery, askQuery, all, tasks, acts, askFeedbackEntries, askAsker]);
   const saveAskFeedback = useCallback(() => {
     const feedback = askFeedbackText.trim();
     const question = (askConversationQuery || askQuery).trim();
@@ -2404,7 +2454,10 @@ const taskActivityFromTask = task => ({
         <div style={{display:"grid",gap:12,marginBottom:18}}>
           <div style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,padding:"14px 16px",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
             <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase",marginBottom:10}}>Ask CRM</div>
-            <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) auto auto",gap:8,alignItems:"center"}}>
+            <div style={{display:"grid",gridTemplateColumns:"140px minmax(0,1fr) auto auto",gap:8,alignItems:"center"}}>
+              <select className="field" value={askAsker} onChange={e=>{ setAskAsker(e.target.value); setAskConversationQuery(""); setAskResult(null); setAskFeedbackText(""); }} style={{cursor:"pointer"}}>
+                {PEOPLE.map(person => <option key={person} value={person}>{person}</option>)}
+              </select>
               <input
                 className="field"
                 value={askQuery}
@@ -2413,9 +2466,9 @@ const taskActivityFromTask = task => ({
                 placeholder="Ask CRM: Which prospects have overdue tasks?"
               />
               <button onClick={askCrm} style={{padding:"8px 16px",border:"none",borderRadius:4,background:"#1e3a8a",color:"#fff",cursor:"pointer",fontWeight:700,minWidth:88}}>{askLoading ? "..." : "Ask"}</button>
-              <button onClick={clearAskCrm} style={{padding:"8px 14px",border:"1px solid #cbd5e1",borderRadius:4,background:"#fff",color:"#64748b",cursor:"pointer"}}>Clear</button>
+              <button onClick={clearAskCrm} style={{padding:"8px 14px",border:"1px solid #cbd5e1",borderRadius:4,background:"#fff",color:"#64748b",cursor:"pointer"}}>Reset</button>
             </div>
-            <div style={{fontSize:12,color:"#8ea0bd",marginTop:8}}>Answers are based on the companies, contacts, notes, activities, and follow-ups already in this CRM.</div>
+            <div style={{fontSize:12,color:"#8ea0bd",marginTop:8}}>Answers are based on the companies, contacts, notes, activities, and follow-ups already in this CRM, with the current asker set to {askAsker}.</div>
           </div>
           {askResult && (
             <div className="fade" style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
@@ -2428,16 +2481,6 @@ const taskActivityFromTask = task => ({
                 {!!askResult.records?.length && <div className="mono" style={{fontSize:10,color:"#8ea0bd"}}>{askResult.records.length} quick link{askResult.records.length===1?"":"s"}</div>}
               </div>
               <div style={{padding:"14px 16px",display:"grid",gap:12}}>
-                {!!askResult.rememberedFeedback?.length && (
-                  <div style={{background:"#f8fbff",border:"1px solid #d8e2ef",borderRadius:6,padding:"10px 12px",display:"grid",gap:8}}>
-                    <div className="mono" style={{fontSize:10,color:"#6f84a6",letterSpacing:".12em",textTransform:"uppercase"}}>Saved Replies</div>
-                    {askResult.rememberedFeedback.map(entry => (
-                      <div key={entry.id} style={{fontSize:12,color:"#475569",lineHeight:1.6,whiteSpace:"pre-wrap"}}>
-                        <span style={{fontWeight:700,color:"#172033"}}>For "{entry.question}":</span> {entry.feedback}
-                      </div>
-                    ))}
-                  </div>
-                )}
                 {!!askResult.lines?.length && <div style={{display:"grid",gap:8}}>
                   {askResult.lines.map((line, index)=><div key={`${askResult.title}-${index}`} style={{fontSize:13,color:"#334155",lineHeight:1.6,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{line}</div>)}
                 </div>}
@@ -2446,6 +2489,7 @@ const taskActivityFromTask = task => ({
                 </div>}
                 <div style={{display:"grid",gap:8,paddingTop:4,borderTop:"1px solid #eef3f9"}}>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",textTransform:"uppercase"}}>Reply To Ask CRM</div>
+                  <div className="mono" style={{fontSize:10,color:"#94a3b8"}}>Current asker: {askAsker}</div>
                   <textarea
                     className="fieldbox"
                     style={{minHeight:76}}
@@ -2457,11 +2501,10 @@ const taskActivityFromTask = task => ({
                         if(askFeedbackText.trim() && (askConversationQuery.trim() || askQuery.trim())) sendAskReply();
                       }
                     }}
-                    placeholder="Ask a follow-up, answer it back, or correct it..."
+                    placeholder="Ask a follow-up question or send a reply..."
                   />
                   <div style={{display:"flex",justifyContent:"flex-end",gap:8}}>
                     <button onClick={()=>setAskFeedbackText("")} style={{padding:"8px 12px",border:"1px solid #cbd5e1",borderRadius:4,background:"#fff",color:"#64748b",cursor:"pointer"}}>Clear Reply</button>
-                    <button onClick={saveAskFeedback} disabled={!askFeedbackText.trim() || !(askConversationQuery.trim() || askQuery.trim())} style={{padding:"8px 12px",border:"1px solid #16a34a",borderRadius:4,background:"#fff",color:askFeedbackText.trim()&&(askConversationQuery.trim() || askQuery.trim())?"#16a34a":"#94a3b8",cursor:askFeedbackText.trim()&&(askConversationQuery.trim() || askQuery.trim())?"pointer":"not-allowed",fontWeight:700}}>Remember Reply</button>
                     <button onClick={sendAskReply} disabled={!askFeedbackText.trim() || !(askConversationQuery.trim() || askQuery.trim())} style={{padding:"8px 14px",border:"none",borderRadius:4,background:askFeedbackText.trim()&&(askConversationQuery.trim() || askQuery.trim())?"#16a34a":"#cbd5e1",color:"#fff",cursor:askFeedbackText.trim()&&(askConversationQuery.trim() || askQuery.trim())?"pointer":"not-allowed",fontWeight:700}}>Send Reply</button>
                   </div>
                 </div>
