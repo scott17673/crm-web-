@@ -1305,6 +1305,9 @@ function App(){
   const [showTasksModal,setShowTasksModal] = useState(false);
   const [showUnmatchedTasksModal,setShowUnmatchedTasksModal] = useState(false);
   const [taskSearch,setTaskSearch] = useState("");
+  const [dueTaskOwnerFilter,setDueTaskOwnerFilter] = useState("All");
+  const [upcomingTaskOwnerFilter,setUpcomingTaskOwnerFilter] = useState("All");
+  const [allTasksOwnerFilter,setAllTasksOwnerFilter] = useState("All");
   const [unmatchedLegacyTasks,setUnmatchedLegacyTasks] = useState(()=>safeJson(localStorage.getItem(LEGACY_TASKS_KEY), []).map(task => normalizeLegacyTask(task, [], true)));
 
   const toast2 = msg => { setToast(msg); setTimeout(()=>setToast(""),3000); };
@@ -2314,11 +2317,13 @@ const taskActivityFromTask = task => ({
 
   if(loading) return <div style={{minHeight:"100vh",display:"grid",placeItems:"center"}}><div style={{display:"grid",gap:14,justifyItems:"center"}}><div className="spinner"/><div className="condensed" style={{letterSpacing:".1em",fontWeight:700,color:"#64748b"}}>LOADING</div></div></div>;
 
-  const overdue = sortTasksByNearest(tasks.filter(t=>!t.done&&t.due_date&&t.due_date<=today()));
-  const upcoming = sortTasksByNearest(tasks.filter(t=>!t.done&&(!t.due_date||t.due_date>today())));
+  const matchesTaskOwnerFilter = (task, ownerFilter) => ownerFilter==="All" || normalizeOwner(task.owner)===ownerFilter;
+  const overdue = sortTasksByNearest(tasks.filter(t=>!t.done&&t.due_date&&t.due_date<=today()&&matchesTaskOwnerFilter(t, dueTaskOwnerFilter)));
+  const upcoming = sortTasksByNearest(tasks.filter(t=>!t.done&&(!t.due_date||t.due_date>today())&&matchesTaskOwnerFilter(t, upcomingTaskOwnerFilter)));
   const taskSearchQuery = taskSearch.trim().toLowerCase();
   const filteredTaskList = sortTasksByNearest(tasks.filter(task => {
     if(task.done) return false;
+    if(!matchesTaskOwnerFilter(task, allTasksOwnerFilter)) return false;
     if(!taskSearchQuery) return true;
     const haystack = [task.title, task.company, task.due_date, task.contact_type, task.owner].filter(Boolean).join(" ").toLowerCase();
     return haystack.includes(taskSearchQuery);
@@ -2526,6 +2531,10 @@ const taskActivityFromTask = task => ({
                 <div style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #d8e2ef",background:"#f8fbff",gap:12}}>
                   <div className="mono" style={{fontSize:11,letterSpacing:".16em",color:"#6f84a6",textTransform:"uppercase"}}>⚠ Due / Overdue</div>
                   <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <select value={dueTaskOwnerFilter} onChange={e=>setDueTaskOwnerFilter(e.target.value)} style={{padding:"6px 10px",border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",color:"#475569",fontSize:12,cursor:"pointer"}}>
+                      <option value="All">All</option>
+                      {PEOPLE.map(person => <option key={person} value={person}>{person}</option>)}
+                    </select>
                     {unmatchedLegacyTasks.length>0 && <button onClick={()=>setShowUnmatchedTasksModal(true)} style={{border:"none",background:"transparent",color:"#ef4444",cursor:"pointer",fontSize:12,fontWeight:700}}>Review Unmatched ({unmatchedLegacyTasks.length})</button>}
                     <button onClick={()=>setShowTasksModal(true)} style={{border:"none",background:"transparent",color:"#1e3a8a",cursor:"pointer",fontSize:12,fontWeight:700}}>View All</button>
                   </div>
@@ -2549,7 +2558,13 @@ const taskActivityFromTask = task => ({
               <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
                 <div style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #d8e2ef",background:"#f8fbff",gap:12}}>
                   <div className="mono" style={{fontSize:11,letterSpacing:".16em",color:"#6f84a6",textTransform:"uppercase"}}>📋 Upcoming Tasks</div>
-                  <button onClick={()=>setShowTasksModal(true)} style={{border:"none",background:"transparent",color:"#1e3a8a",cursor:"pointer",fontSize:12,fontWeight:700}}>View All</button>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <select value={upcomingTaskOwnerFilter} onChange={e=>setUpcomingTaskOwnerFilter(e.target.value)} style={{padding:"6px 10px",border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",color:"#475569",fontSize:12,cursor:"pointer"}}>
+                      <option value="All">All</option>
+                      {PEOPLE.map(person => <option key={person} value={person}>{person}</option>)}
+                    </select>
+                    <button onClick={()=>setShowTasksModal(true)} style={{border:"none",background:"transparent",color:"#1e3a8a",cursor:"pointer",fontSize:12,fontWeight:700}}>View All</button>
+                  </div>
                 </div>
                 <div style={{minHeight:302}}>
                   {upcoming.length===0
@@ -2836,7 +2851,13 @@ const taskActivityFromTask = task => ({
               <button onClick={()=>setShowTasksModal(false)} style={{width:30,height:30,border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",cursor:"pointer",color:"#94a3b8"}}>×</button>
             </div>
             <div style={{padding:"18px 24px",display:"grid",gap:14}}>
-              <input className="field" value={taskSearch} onChange={e=>setTaskSearch(e.target.value)} placeholder="Search by company, task, or owner..." />
+              <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 140px",gap:10}}>
+                <input className="field" value={taskSearch} onChange={e=>setTaskSearch(e.target.value)} placeholder="Search by company, task, or owner..." />
+                <select className="field" value={allTasksOwnerFilter} onChange={e=>setAllTasksOwnerFilter(e.target.value)} style={{cursor:"pointer"}}>
+                  <option value="All">All owners</option>
+                  {PEOPLE.map(person => <option key={person} value={person}>{person}</option>)}
+                </select>
+              </div>
               <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,overflow:"hidden"}}>
                 <div style={{display:"grid",gridTemplateColumns:"44px minmax(0,1fr) 170px 110px",gap:12,padding:"12px 16px",borderBottom:"1px solid #e8eef6",background:"#f8fbff"}}>
                   <div />
