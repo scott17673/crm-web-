@@ -1543,22 +1543,24 @@ const taskActivityFromTask = task => ({
     setAskLoading(false);
     setAskFeedbackText("");
   },[]);
+  const sendAskReply = useCallback(() => {
+    const feedback = askFeedbackText.trim();
+    const question = (askConversationQuery || askQuery).trim();
+    if(!feedback || !question) return;
+    const followupQuestion = composeAskFollowupQuestion(question, feedback);
+    setAskLoading(true);
+    setAskQuery(feedback);
+    setAskConversationQuery(followupQuestion);
+    setAskFeedbackText("");
+    window.setTimeout(()=>{
+      setAskResult(withAskedQuestion(buildAskCrmAnswer(followupQuestion, all, tasks, acts, askFeedbackEntries), feedback));
+      setAskLoading(false);
+    },0);
+  },[askFeedbackText, askConversationQuery, askQuery, all, tasks, acts, askFeedbackEntries]);
   const saveAskFeedback = useCallback(() => {
     const feedback = askFeedbackText.trim();
     const question = (askConversationQuery || askQuery).trim();
     if(!feedback || !question) return;
-    if(looksLikeAskQuestion(feedback)){
-      const followupQuestion = composeAskFollowupQuestion(question, feedback);
-      setAskLoading(true);
-      setAskQuery(feedback);
-      setAskConversationQuery(followupQuestion);
-      setAskFeedbackText("");
-      window.setTimeout(()=>{
-        setAskResult(withAskedQuestion(buildAskCrmAnswer(followupQuestion, all, tasks, acts, askFeedbackEntries), feedback));
-        setAskLoading(false);
-      },0);
-      return;
-    }
     return (async () => {
       try{
         const entry = normalizeAskFeedbackEntry({
@@ -1584,7 +1586,7 @@ const taskActivityFromTask = task => ({
         toast2("Ask CRM reply error: "+err.message);
       }
     })();
-  },[askFeedbackEntries, askFeedbackText, askQuery, askConversationQuery, all, tasks, acts]);
+  },[askFeedbackEntries, askFeedbackText, askQuery, askConversationQuery]);
   const activitySearchByRecord = useMemo(()=>{
     const map = new Map();
     acts.forEach(act => {
@@ -2399,14 +2401,15 @@ const taskActivityFromTask = task => ({
                     onKeyDown={e=>{
                       if(e.key==="Enter" && !e.shiftKey){
                         e.preventDefault();
-                        if(askFeedbackText.trim() && (askConversationQuery.trim() || askQuery.trim())) saveAskFeedback();
+                        if(askFeedbackText.trim() && (askConversationQuery.trim() || askQuery.trim())) sendAskReply();
                       }
                     }}
                     placeholder="Ask a follow-up, answer it back, or correct it..."
                   />
                   <div style={{display:"flex",justifyContent:"flex-end",gap:8}}>
                     <button onClick={()=>setAskFeedbackText("")} style={{padding:"8px 12px",border:"1px solid #cbd5e1",borderRadius:4,background:"#fff",color:"#64748b",cursor:"pointer"}}>Clear Reply</button>
-                    <button onClick={saveAskFeedback} disabled={!askFeedbackText.trim() || !(askConversationQuery.trim() || askQuery.trim())} style={{padding:"8px 14px",border:"none",borderRadius:4,background:askFeedbackText.trim()&&(askConversationQuery.trim() || askQuery.trim())?"#16a34a":"#cbd5e1",color:"#fff",cursor:askFeedbackText.trim()&&(askConversationQuery.trim() || askQuery.trim())?"pointer":"not-allowed",fontWeight:700}}>Send Reply</button>
+                    <button onClick={saveAskFeedback} disabled={!askFeedbackText.trim() || !(askConversationQuery.trim() || askQuery.trim())} style={{padding:"8px 12px",border:"1px solid #16a34a",borderRadius:4,background:"#fff",color:askFeedbackText.trim()&&(askConversationQuery.trim() || askQuery.trim())?"#16a34a":"#94a3b8",cursor:askFeedbackText.trim()&&(askConversationQuery.trim() || askQuery.trim())?"pointer":"not-allowed",fontWeight:700}}>Remember Reply</button>
+                    <button onClick={sendAskReply} disabled={!askFeedbackText.trim() || !(askConversationQuery.trim() || askQuery.trim())} style={{padding:"8px 14px",border:"none",borderRadius:4,background:askFeedbackText.trim()&&(askConversationQuery.trim() || askQuery.trim())?"#16a34a":"#cbd5e1",color:"#fff",cursor:askFeedbackText.trim()&&(askConversationQuery.trim() || askQuery.trim())?"pointer":"not-allowed",fontWeight:700}}>Send Reply</button>
                   </div>
                 </div>
               </div>
