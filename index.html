@@ -51,6 +51,7 @@ const TASK_ACTIVITY_DB_TYPE = "Note";
 const TASK_OPEN_META = "__task_open__";
 const TASK_DONE_META = "__task_done__";
 const LEGACY_TASKS_KEY = "ed_tasks";
+const ASK_FEEDBACK_KEY = "ed_ask_feedback";
 const PEOPLE = ["Scott","Jeff"];
 const DEFAULT_OWNER = PEOPLE[0];
 const PERSON_COLORS = {Scott:"#1e3a8a",Jeff:"#16a34a"};
@@ -476,7 +477,29 @@ const exportRecordRows = (records, tab, acts=[], tasks=[]) => {
   }));
 };
 const tokenizeQuestion = value => String(value || "").toLowerCase().match(/[a-z0-9]+/g) || [];
+const normalizeFeedbackQuestion = value => tokenizeQuestion(value).filter(token => token.length>1).join(" ");
 const questionIncludes = (question, phrases) => phrases.some(phrase => String(question || "").toLowerCase().includes(phrase));
+const feedbackSimilarityScore = (left, right) => {
+  const leftNorm = normalizeFeedbackQuestion(left);
+  const rightNorm = normalizeFeedbackQuestion(right);
+  if(!leftNorm || !rightNorm) return 0;
+  if(leftNorm===rightNorm) return 1;
+  const leftTokens = tokenizeQuestion(leftNorm).filter(token => token.length>2);
+  const rightTokens = tokenizeQuestion(rightNorm).filter(token => token.length>2);
+  if(!leftTokens.length || !rightTokens.length) return companySimilarityScore(leftNorm, rightNorm);
+  const rightSet = new Set(rightTokens);
+  const overlap = leftTokens.filter(token => rightSet.has(token)).length;
+  const tokenScore = overlap / Math.max(leftTokens.length, rightTokens.length, 1);
+  return Math.max(tokenScore, companySimilarityScore(leftNorm, rightNorm));
+};
+const findRelevantAskFeedback = (question, feedbackEntries=[]) => [...(feedbackEntries || [])]
+  .map(entry => ({...entry, score:feedbackSimilarityScore(question, entry.question)}))
+  .filter(entry => entry.score >= 0.45)
+  .sort((a,b) => {
+    if(b.score !== a.score) return b.score - a.score;
+    return String(b.created_at || "").localeCompare(String(a.created_at || ""));
+  })
+  .slice(0,3);
 const detectQuestionOwner = question => PEOPLE.find(person => String(question || "").toLowerCase().includes(person.toLowerCase())) || null;
 const detectQuestionStage = question => STAGES.find(stage => String(question || "").toLowerCase().includes(stage.toLowerCase())) || null;
 const detectQuestionIndustry = question => INDUSTRY_OPTIONS.find(industry => String(question || "").toLowerCase().includes(String(industry || "").toLowerCase())) || null;
@@ -515,10 +538,11 @@ const scoreQuestionAgainstRecord = (question, record, recordTasks=[], recordActs
 };
 const formatAskTaskLine = task => [task.due_date || "No due date", task.done ? "Done" : "Open", displayOwner(task.owner), task.title || ""].filter(Boolean).join(" | ");
 const formatAskActivityLine = act => [act.date || "No date", act.type || "Note", displayOwner(act.created_by), act.note || ""].filter(Boolean).join(" | ");
-const buildAskCrmAnswer = (question, records, tasks, acts) => {
+const buildAskCrmAnswer = (question, records, tasks, acts, feedbackEntries=[]) => {
   const rawQuestion = String(question || "").trim();
   if(!rawQuestion) return null;
   const normalized = rawQuestion.toLowerCase();
+  const rememberedFeedback = findRelevantAskFeedback(rawQuestion, feedbackEntries);
   const owner = detectQuestionOwner(normalized);
   const stage = detectQuestionStage(normalized);
   const industry = detectQuestionIndustry(normalized);
@@ -557,6 +581,7 @@ const buildAskCrmAnswer = (question, records, tasks, acts) => {
         summary: contactLines.length ? `${contactLines.length} contact ${contactLines.length===1?"entry":"entries"} found.` : "No contacts saved on this record yet.",
         lines: contactLines.length ? contactLines : ["No contacts saved yet."],
         records: [bestRecord],
+        rememberedFeedback,
       };
     }
     if(wantsTasks){
@@ -565,6 +590,7 @@ const buildAskCrmAnswer = (question, records, tasks, acts) => {
         summary: `${wantsCompleted ? doneTasks.length : openTasks.length} ${wantsCompleted ? "completed" : "open"} follow-up${(wantsCompleted ? doneTasks.length : openTasks.length)===1?"":"s"} found.`,
         lines: taskLines.length ? taskLines : [`No ${wantsCompleted ? "completed" : "open"} follow-ups found.`],
         records: [bestRecord],
+        rememberedFeedback,
       };
     }
     if(wantsActivities){
@@ -573,6 +599,7 @@ const buildAskCrmAnswer = (question, records, tasks, acts) => {
         summary: recordActs.length ? `Last activity: ${bestRecord.lastContact || recordActs[0]?.date || "Unknown"}.` : "No activity logged yet.",
         lines: activityLines.length ? activityLines : ["No activities logged yet."],
         records: [bestRecord],
+        rememberedFeedback,
       };
     }
     return {
@@ -585,6 +612,7 @@ const buildAskCrmAnswer = (question, records, tasks, acts) => {
         ...(richNotesPlainText(bestRecord.notes || "") ? [`Notes: ${richNotesPlainText(bestRecord.notes || "").slice(0,1200)}`] : []),
       ],
       records: [bestRecord],
+      rememberedFeedback,
     };
   }
 
@@ -603,6 +631,7 @@ const buildAskCrmAnswer = (question, records, tasks, acts) => {
       summary: wantsCount ? `${sortedTasks.length} matching follow-up${sortedTasks.length===1?"":"s"}.` : `${sortedTasks.length} matching follow-up${sortedTasks.length===1?"":"s"} found.`,
       lines: wantsCount ? [] : (sortedTasks.slice(0,8).map(formatAskTaskLine).length ? sortedTasks.slice(0,8).map(formatAskTaskLine) : ["No follow-ups matched that question."]),
       records: linkedRecords,
+      rememberedFeedback,
     };
   }
 
@@ -616,6 +645,7 @@ const buildAskCrmAnswer = (question, records, tasks, acts) => {
       summary: wantsCount ? `${sortedActs.length} matching activit${sortedActs.length===1?"y":"ies"}.` : `${sortedActs.length} matching activit${sortedActs.length===1?"y":"ies"} found.`,
       lines: wantsCount ? [] : (sortedActs.slice(0,8).map(formatAskActivityLine).length ? sortedActs.slice(0,8).map(formatAskActivityLine) : ["No activities matched that question."]),
       records: linkedRecords,
+      rememberedFeedback,
     };
   }
 
@@ -634,6 +664,7 @@ const buildAskCrmAnswer = (question, records, tasks, acts) => {
       summary: `${sortedRecords.length} matching compan${sortedRecords.length===1?"y":"ies"} found.`,
       lines: wantsCount ? [] : sortedRecords.slice(0,10).map(record => [record.company, TYPE_CFG[record.type]?.label?.slice(0,-1) || record.type, record.stage || "", getIndustryBucket(record.industry), record.lastContact ? `Last activity ${record.lastContact}` : ""].filter(Boolean).join(" | ")),
       records: sortedRecords.slice(0,10),
+      rememberedFeedback,
     };
   }
 
@@ -644,6 +675,7 @@ const buildAskCrmAnswer = (question, records, tasks, acts) => {
       summary: `I found ${fallbackMatches.length} likely match${fallbackMatches.length===1?"":"es"} based on your question.`,
       lines: fallbackMatches.map(record => [record.company, TYPE_CFG[record.type]?.label?.slice(0,-1) || record.type, record.stage || "", getIndustryBucket(record.industry), record.lastContact ? `Last activity ${record.lastContact}` : ""].filter(Boolean).join(" | ")),
       records: fallbackMatches,
+      rememberedFeedback,
     };
   }
 
@@ -655,6 +687,7 @@ const buildAskCrmAnswer = (question, records, tasks, acts) => {
       "Example: Which prospects have overdue tasks?",
     ],
     records: [],
+    rememberedFeedback,
   };
 };
 const contactsTextFromRecord = record => (record?.contacts || []).map(contact => [contact.name, contact.title, contact.linkedin].filter(Boolean).join(", ")).join("\n");
@@ -981,6 +1014,8 @@ function App(){
   const [askQuery,setAskQuery] = useState("");
   const [askResult,setAskResult] = useState(null);
   const [askLoading,setAskLoading] = useState(false);
+  const [askFeedbackText,setAskFeedbackText] = useState("");
+  const [askFeedbackEntries,setAskFeedbackEntries] = useState(()=>safeJson(localStorage.getItem(ASK_FEEDBACK_KEY), []));
   const notesBoxRef = useRef(null);
   const contactsBoxRef = useRef(null);
   const companyNameSaveRef = useRef({timer:null, record:null, value:""});
@@ -996,6 +1031,10 @@ function App(){
   const [unmatchedLegacyTasks,setUnmatchedLegacyTasks] = useState(()=>safeJson(localStorage.getItem(LEGACY_TASKS_KEY), []).map(task => normalizeLegacyTask(task, [], true)));
 
   const toast2 = msg => { setToast(msg); setTimeout(()=>setToast(""),3000); };
+  const saveAskFeedbackEntries = next => {
+    setAskFeedbackEntries(next);
+    localStorage.setItem(ASK_FEEDBACK_KEY, JSON.stringify(next));
+  };
   const saveTaskDrafts = next => { setTaskDrafts(next); localStorage.setItem("ed_task_drafts",JSON.stringify(next)); };
   const saveActivityDrafts = next => { setActivityDrafts(next); localStorage.setItem("ed_activity_drafts",JSON.stringify(next)); };
   const syncTaskDraft = (record, patch) => {
@@ -1203,16 +1242,36 @@ const taskActivityFromTask = task => ({
     const question = askQuery.trim();
     if(!question) return;
     setAskLoading(true);
+    setAskFeedbackText("");
     window.setTimeout(()=>{
-      setAskResult(buildAskCrmAnswer(question, all, tasks, acts));
+      setAskResult(buildAskCrmAnswer(question, all, tasks, acts, askFeedbackEntries));
       setAskLoading(false);
     }, 0);
-  },[askQuery, all, tasks, acts]);
+  },[askQuery, all, tasks, acts, askFeedbackEntries]);
   const clearAskCrm = useCallback(() => {
     setAskQuery("");
     setAskResult(null);
     setAskLoading(false);
+    setAskFeedbackText("");
   },[]);
+  const saveAskFeedback = useCallback(() => {
+    const feedback = askFeedbackText.trim();
+    const question = askQuery.trim();
+    if(!feedback || !question) return;
+    const nextEntries = [
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+        question,
+        feedback,
+        created_at: new Date().toISOString(),
+      },
+      ...askFeedbackEntries,
+    ].slice(0,80);
+    saveAskFeedbackEntries(nextEntries);
+    setAskFeedbackText("");
+    setAskResult(current => current ? {...current, rememberedFeedback: findRelevantAskFeedback(question, nextEntries)} : current);
+    toast2("Ask CRM feedback saved");
+  },[askFeedbackEntries, askFeedbackText, askQuery]);
   const activitySearchByRecord = useMemo(()=>{
     const map = new Map();
     acts.forEach(act => {
@@ -2000,12 +2059,36 @@ const taskActivityFromTask = task => ({
                 {!!askResult.records?.length && <div className="mono" style={{fontSize:10,color:"#8ea0bd"}}>{askResult.records.length} quick link{askResult.records.length===1?"":"s"}</div>}
               </div>
               <div style={{padding:"14px 16px",display:"grid",gap:12}}>
+                {!!askResult.rememberedFeedback?.length && (
+                  <div style={{background:"#f8fbff",border:"1px solid #d8e2ef",borderRadius:6,padding:"10px 12px",display:"grid",gap:8}}>
+                    <div className="mono" style={{fontSize:10,color:"#6f84a6",letterSpacing:".12em",textTransform:"uppercase"}}>Remembered Feedback</div>
+                    {askResult.rememberedFeedback.map(entry => (
+                      <div key={entry.id} style={{fontSize:12,color:"#475569",lineHeight:1.6,whiteSpace:"pre-wrap"}}>
+                        <span style={{fontWeight:700,color:"#172033"}}>For "{entry.question}":</span> {entry.feedback}
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {!!askResult.lines?.length && <div style={{display:"grid",gap:8}}>
                   {askResult.lines.map((line, index)=><div key={`${askResult.title}-${index}`} style={{fontSize:13,color:"#334155",lineHeight:1.6,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{line}</div>)}
                 </div>}
                 {!!askResult.records?.length && <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
                   {askResult.records.map(record => <button key={recordKey(record)} onClick={()=>openAskRecord(record)} style={{padding:"7px 12px",border:"1px solid #1e3a8a",borderRadius:999,background:"#eff6ff",color:"#1e3a8a",cursor:"pointer",fontSize:12,fontWeight:700}}>{record.company}</button>)}
                 </div>}
+                <div style={{display:"grid",gap:8,paddingTop:4,borderTop:"1px solid #eef3f9"}}>
+                  <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",textTransform:"uppercase"}}>Teach Ask CRM</div>
+                  <textarea
+                    className="fieldbox"
+                    style={{minHeight:76}}
+                    value={askFeedbackText}
+                    onChange={e=>setAskFeedbackText(e.target.value)}
+                    placeholder="Correct the answer, add missing context, or explain how this should be answered next time..."
+                  />
+                  <div style={{display:"flex",justifyContent:"flex-end",gap:8}}>
+                    <button onClick={()=>setAskFeedbackText("")} style={{padding:"8px 12px",border:"1px solid #cbd5e1",borderRadius:4,background:"#fff",color:"#64748b",cursor:"pointer"}}>Clear Feedback</button>
+                    <button onClick={saveAskFeedback} disabled={!askFeedbackText.trim() || !askQuery.trim()} style={{padding:"8px 14px",border:"none",borderRadius:4,background:askFeedbackText.trim()&&askQuery.trim()?"#16a34a":"#cbd5e1",color:"#fff",cursor:askFeedbackText.trim()&&askQuery.trim()?"pointer":"not-allowed",fontWeight:700}}>Save Feedback</button>
+                  </div>
+                </div>
               </div>
             </div>
           )}
