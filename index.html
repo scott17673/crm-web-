@@ -475,6 +475,188 @@ const exportRecordRows = (records, tab, acts=[], tasks=[]) => {
     last_activity: record.lastContact || "",
   }));
 };
+const tokenizeQuestion = value => String(value || "").toLowerCase().match(/[a-z0-9]+/g) || [];
+const questionIncludes = (question, phrases) => phrases.some(phrase => String(question || "").toLowerCase().includes(phrase));
+const detectQuestionOwner = question => PEOPLE.find(person => String(question || "").toLowerCase().includes(person.toLowerCase())) || null;
+const detectQuestionStage = question => STAGES.find(stage => String(question || "").toLowerCase().includes(stage.toLowerCase())) || null;
+const detectQuestionIndustry = question => INDUSTRY_OPTIONS.find(industry => String(question || "").toLowerCase().includes(String(industry || "").toLowerCase())) || null;
+const detectQuestionType = question => {
+  const normalized = String(question || "").toLowerCase();
+  if(normalized.includes("vendor")) return "vendor";
+  if(normalized.includes("lost")) return "lost";
+  if(normalized.includes("manufacturer") || normalized.includes("company") || normalized.includes("prospect")) return "manufacturer";
+  return null;
+};
+const scoreQuestionAgainstRecord = (question, record, recordTasks=[], recordActs=[]) => {
+  const normalized = String(question || "").trim().toLowerCase();
+  if(!normalized) return 0;
+  const questionKey = normalizeCompanyKey(normalized);
+  const company = record.company || "";
+  const companyKey = normalizeCompanyKey(company);
+  let score = 0;
+  if(companyKey && questionKey.includes(companyKey)) score += 1.3;
+  score += companySimilarityScore(normalized, company);
+  tokenizeCompanyName(company).forEach(token => { if(normalized.includes(token)) score += 0.08; });
+  const haystack = [
+    record.company,
+    record.name,
+    record.title,
+    record.email,
+    record.phone,
+    record.stage,
+    record.industry,
+    richNotesPlainText(record.notes || ""),
+    ...(record.contacts || []).flatMap(contact => [contact.name, contact.title, contact.linkedin]),
+    ...recordTasks.flatMap(task => [task.title, task.owner, task.due_date]),
+    ...recordActs.flatMap(act => [act.type, act.note, act.created_by, act.date]),
+  ].filter(Boolean).join(" ").toLowerCase();
+  tokenizeQuestion(normalized).forEach(token => { if(token.length>2 && haystack.includes(token)) score += 0.02; });
+  return score;
+};
+const formatAskTaskLine = task => [task.due_date || "No due date", task.done ? "Done" : "Open", displayOwner(task.owner), task.title || ""].filter(Boolean).join(" | ");
+const formatAskActivityLine = act => [act.date || "No date", act.type || "Note", displayOwner(act.created_by), act.note || ""].filter(Boolean).join(" | ");
+const buildAskCrmAnswer = (question, records, tasks, acts) => {
+  const rawQuestion = String(question || "").trim();
+  if(!rawQuestion) return null;
+  const normalized = rawQuestion.toLowerCase();
+  const owner = detectQuestionOwner(normalized);
+  const stage = detectQuestionStage(normalized);
+  const industry = detectQuestionIndustry(normalized);
+  const type = detectQuestionType(normalized);
+  const wantsCount = questionIncludes(normalized, ["how many","count","number of"]);
+  const wantsTasks = questionIncludes(normalized, ["task","tasks","follow up","follow-up","followups"]);
+  const wantsActivities = questionIncludes(normalized, ["activity","activities","last activity","last touch","calls","emails","meetings","logged"]);
+  const wantsContacts = questionIncludes(normalized, ["contact","contacts","linkedin","email","phone"]);
+  const wantsNotes = questionIncludes(normalized, ["note","notes","about","know about","info","information"]);
+  const wantsOverdue = questionIncludes(normalized, ["overdue","due today","due / overdue","due/overdue"]);
+  const wantsUpcoming = questionIncludes(normalized, ["upcoming","future","next up"]);
+  const wantsCompleted = questionIncludes(normalized, ["completed","done","finished"]);
+
+  const scoredRecords = (records || []).map(record => {
+    const recordTasks = (tasks || []).filter(task => taskMatchesRecord(task, record));
+    const recordActs = (acts || []).filter(act => `${act.contact_type || "manufacturer"}:${act.contactId}`===recordKey(record));
+    return {record, score:scoreQuestionAgainstRecord(normalized, record, recordTasks, recordActs)};
+  }).sort((a,b) => b.score - a.score);
+  const bestRecord = scoredRecords[0]?.score >= 0.56 ? scoredRecords[0].record : null;
+
+  if(bestRecord){
+    const recordTasks = sortTasksByNearest((tasks || []).filter(task => taskMatchesRecord(task, bestRecord)));
+    const openTasks = recordTasks.filter(task => !task.done);
+    const doneTasks = recordTasks.filter(task => task.done);
+    const recordActs = [...(acts || [])]
+      .filter(act => `${act.contact_type || "manufacturer"}:${act.contactId}`===recordKey(bestRecord))
+      .sort((a,b) => String(b.date || "").localeCompare(String(a.date || "")));
+    const taskLines = (wantsCompleted ? doneTasks : openTasks).slice(0,8).map(formatAskTaskLine);
+    const activityLines = recordActs.slice(0,8).map(formatAskActivityLine);
+    const contactLines = bestRecord.type==="manufacturer"
+      ? (bestRecord.contacts || []).map(contact => [contact.name, contact.title, contact.linkedin].filter(Boolean).join(" | "))
+      : [[bestRecord.name, bestRecord.title, bestRecord.email, bestRecord.phone].filter(Boolean).join(" | ")].filter(Boolean);
+    if(wantsContacts){
+      return {
+        title: `Contacts for ${bestRecord.company}`,
+        summary: contactLines.length ? `${contactLines.length} contact ${contactLines.length===1?"entry":"entries"} found.` : "No contacts saved on this record yet.",
+        lines: contactLines.length ? contactLines : ["No contacts saved yet."],
+        records: [bestRecord],
+      };
+    }
+    if(wantsTasks){
+      return {
+        title: `${wantsCompleted ? "Completed" : "Open"} follow-ups for ${bestRecord.company}`,
+        summary: `${wantsCompleted ? doneTasks.length : openTasks.length} ${wantsCompleted ? "completed" : "open"} follow-up${(wantsCompleted ? doneTasks.length : openTasks.length)===1?"":"s"} found.`,
+        lines: taskLines.length ? taskLines : [`No ${wantsCompleted ? "completed" : "open"} follow-ups found.`],
+        records: [bestRecord],
+      };
+    }
+    if(wantsActivities){
+      return {
+        title: `Activity for ${bestRecord.company}`,
+        summary: recordActs.length ? `Last activity: ${bestRecord.lastContact || recordActs[0]?.date || "Unknown"}.` : "No activity logged yet.",
+        lines: activityLines.length ? activityLines : ["No activities logged yet."],
+        records: [bestRecord],
+      };
+    }
+    return {
+      title: bestRecord.company,
+      summary: [TYPE_CFG[bestRecord.type]?.label?.slice(0,-1) || bestRecord.type, bestRecord.stage || "", bestRecord.industry || OTHER_INDUSTRY_LABEL, bestRecord.lastContact ? `Last activity ${bestRecord.lastContact}` : ""].filter(Boolean).join(" · "),
+      lines: [
+        ...(contactLines.length ? [`Contacts: ${contactLines.slice(0,4).join(" ;; ")}`] : []),
+        ...(openTasks.length ? [`Open follow-ups: ${openTasks.slice(0,4).map(formatAskTaskLine).join(" ;; ")}`] : []),
+        ...(activityLines.length ? [`Recent activity: ${activityLines.slice(0,4).join(" ;; ")}`] : []),
+        ...(richNotesPlainText(bestRecord.notes || "") ? [`Notes: ${richNotesPlainText(bestRecord.notes || "").slice(0,1200)}`] : []),
+      ],
+      records: [bestRecord],
+    };
+  }
+
+  if(wantsTasks){
+    let taskPool = [...(tasks || [])];
+    if(owner) taskPool = taskPool.filter(task => displayOwner(task.owner)===owner);
+    if(type) taskPool = taskPool.filter(task => (task.contact_type || "manufacturer")===type);
+    if(wantsCompleted) taskPool = taskPool.filter(task => task.done);
+    else taskPool = taskPool.filter(task => !task.done);
+    if(wantsOverdue) taskPool = taskPool.filter(task => task.due_date && task.due_date<=today());
+    if(wantsUpcoming) taskPool = taskPool.filter(task => !task.due_date || task.due_date>today());
+    const sortedTasks = sortTasksByNearest(taskPool);
+    const linkedRecords = sortedTasks.map(task => records.find(record => taskMatchesRecord(task, record))).filter(Boolean).slice(0,6);
+    return {
+      title: owner ? `${owner}'s follow-ups` : "Follow-ups",
+      summary: wantsCount ? `${sortedTasks.length} matching follow-up${sortedTasks.length===1?"":"s"}.` : `${sortedTasks.length} matching follow-up${sortedTasks.length===1?"":"s"} found.`,
+      lines: wantsCount ? [] : (sortedTasks.slice(0,8).map(formatAskTaskLine).length ? sortedTasks.slice(0,8).map(formatAskTaskLine) : ["No follow-ups matched that question."]),
+      records: linkedRecords,
+    };
+  }
+
+  if(wantsActivities){
+    let activityPool = [...(acts || [])];
+    if(owner) activityPool = activityPool.filter(act => displayOwner(act.created_by)===owner);
+    const sortedActs = activityPool.sort((a,b) => String(b.date || "").localeCompare(String(a.date || "")));
+    const linkedRecords = sortedActs.map(act => records.find(record => `${act.contact_type || "manufacturer"}:${act.contactId}`===recordKey(record))).filter(Boolean).slice(0,6);
+    return {
+      title: owner ? `${owner}'s activity` : "Activity results",
+      summary: wantsCount ? `${sortedActs.length} matching activit${sortedActs.length===1?"y":"ies"}.` : `${sortedActs.length} matching activit${sortedActs.length===1?"y":"ies"} found.`,
+      lines: wantsCount ? [] : (sortedActs.slice(0,8).map(formatAskActivityLine).length ? sortedActs.slice(0,8).map(formatAskActivityLine) : ["No activities matched that question."]),
+      records: linkedRecords,
+    };
+  }
+
+  let recordPool = [...(records || [])];
+  if(type) recordPool = recordPool.filter(record => record.type===type);
+  if(stage) recordPool = recordPool.filter(record => normalizeStage(record.stage)===stage);
+  if(industry) recordPool = recordPool.filter(record => getIndustryBucket(record.industry)===industry);
+  if(owner){
+    const ownerKeys = new Set((tasks || []).filter(task => displayOwner(task.owner)===owner).map(task => `${task.contact_type || "manufacturer"}:${task.contact_id}`));
+    recordPool = recordPool.filter(record => ownerKeys.has(recordKey(record)));
+  }
+  if(stage || industry || type || owner){
+    const sortedRecords = [...recordPool].sort((a,b) => String(a.company || "").localeCompare(String(b.company || "")));
+    return {
+      title: "CRM results",
+      summary: `${sortedRecords.length} matching compan${sortedRecords.length===1?"y":"ies"} found.`,
+      lines: wantsCount ? [] : sortedRecords.slice(0,10).map(record => [record.company, TYPE_CFG[record.type]?.label?.slice(0,-1) || record.type, record.stage || "", getIndustryBucket(record.industry), record.lastContact ? `Last activity ${record.lastContact}` : ""].filter(Boolean).join(" | ")),
+      records: sortedRecords.slice(0,10),
+    };
+  }
+
+  const fallbackMatches = scoredRecords.filter(item => item.score>=0.18).slice(0,8).map(item => item.record);
+  if(fallbackMatches.length){
+    return {
+      title: "Closest CRM matches",
+      summary: `I found ${fallbackMatches.length} likely match${fallbackMatches.length===1?"":"es"} based on your question.`,
+      lines: fallbackMatches.map(record => [record.company, TYPE_CFG[record.type]?.label?.slice(0,-1) || record.type, record.stage || "", getIndustryBucket(record.industry), record.lastContact ? `Last activity ${record.lastContact}` : ""].filter(Boolean).join(" | ")),
+      records: fallbackMatches,
+    };
+  }
+
+  return {
+    title: "No strong match",
+    summary: "I couldn't find a clear answer from the CRM data I have loaded right now.",
+    lines: [
+      "Try a company name, stage, industry, owner, task, or activity question.",
+      "Example: Which prospects have overdue tasks?",
+    ],
+    records: [],
+  };
+};
 const contactsTextFromRecord = record => (record?.contacts || []).map(contact => [contact.name, contact.title, contact.linkedin].filter(Boolean).join(", ")).join("\n");
 const vendorContactTextFromRecord = record => [
   [record?.name, record?.title].filter(Boolean).join(", "),
@@ -796,8 +978,12 @@ function App(){
   const [notesDraft,setNotesDraft] = useState("");
   const [contactsDraft,setContactsDraft] = useState("");
   const [detailPanelHeight,setDetailPanelHeight] = useState(280);
+  const [askQuery,setAskQuery] = useState("");
+  const [askResult,setAskResult] = useState(null);
+  const [askLoading,setAskLoading] = useState(false);
   const notesBoxRef = useRef(null);
   const contactsBoxRef = useRef(null);
+  const companyNameSaveRef = useRef({timer:null, record:null, value:""});
   const [showEmailFmt,setShowEmailFmt] = useState(false);
   const [efName,setEfName] = useState("");
   const [efDomain,setEfDomain] = useState("");
@@ -1007,6 +1193,26 @@ const taskActivityFromTask = task => ({
     setTab(record.type);
     openRecord(record);
   },[resolveTaskRecord]);
+  const openAskRecord = record => {
+    if(!record) return;
+    setView("contacts");
+    setTab(record.type);
+    openRecord(record);
+  };
+  const askCrm = useCallback(() => {
+    const question = askQuery.trim();
+    if(!question) return;
+    setAskLoading(true);
+    window.setTimeout(()=>{
+      setAskResult(buildAskCrmAnswer(question, all, tasks, acts));
+      setAskLoading(false);
+    }, 0);
+  },[askQuery, all, tasks, acts]);
+  const clearAskCrm = useCallback(() => {
+    setAskQuery("");
+    setAskResult(null);
+    setAskLoading(false);
+  },[]);
   const activitySearchByRecord = useMemo(()=>{
     const map = new Map();
     acts.forEach(act => {
@@ -1086,35 +1292,68 @@ const taskActivityFromTask = task => ({
   };
 
   const saveMfrField = async (field, value, options={}) => {
-    if(!selected || selected.type!=="manufacturer") return;
+    const target = options.record || selected;
+    if(!target || target.type!=="manufacturer") return;
     const quiet = !!options.quiet;
-    const currentValue = String(field==="notes" ? (selected.notes || "") : (selected[field] ?? ""));
+    const currentValue = String(field==="notes" ? (target.notes || "") : (target[field] ?? ""));
     const nextValue = String(value ?? "");
     if(currentValue===nextValue) return true;
     const dbField = manufacturerDbField(field);
-    const { error } = await sb.from("manufacturers").update({[dbField]:value}).eq("id",selected.id);
+    const { error } = await sb.from("manufacturers").update({[dbField]:value}).eq("id",target.id);
     if(error){ toast2("Save error: "+error.message); return false; }
     const patch = dbField===field ? {[field]:value} : {[field]:value,[dbField]:value};
-    setSelected(cur => cur ? {...cur,...patch} : cur);
-    setMfrs(list => list.map(m => m.id===selected.id ? {...m,...patch} : m));
+    setSelected(cur => cur && cur.id===target.id && cur.type==="manufacturer" ? {...cur,...patch} : cur);
+    setMfrs(list => list.map(m => m.id===target.id ? {...m,...patch} : m));
     if(!quiet) toast2("Saved");
     return true;
   };
 
   const saveVendorField = async (field, value, options={}) => {
-    if(!selected || selected.type!=="vendor") return false;
+    const target = options.record || selected;
+    if(!target || target.type!=="vendor") return false;
     const quiet = !!options.quiet;
-    const currentValue = String(field==="notes" ? (selected.notes || "") : (selected[field] ?? ""));
+    const currentValue = String(field==="notes" ? (target.notes || "") : (target[field] ?? ""));
     const nextValue = String(value ?? "");
     if(currentValue===nextValue) return true;
-    const { error } = await sb.from("vendors").update({[field]:value}).eq("id",selected.id);
+    const { error } = await sb.from("vendors").update({[field]:value}).eq("id",target.id);
     if(error){ toast2("Save error: "+error.message); return false; }
     const patch = {[field]:value};
-    setSelected(cur => cur ? {...cur,...patch} : cur);
-    setVendors(list => list.map(record => record.id===selected.id ? {...record,...patch} : record));
+    setSelected(cur => cur && cur.id===target.id && cur.type==="vendor" ? {...cur,...patch} : cur);
+    setVendors(list => list.map(record => record.id===target.id ? {...record,...patch} : record));
     if(!quiet) toast2("Saved");
     return true;
   };
+
+  const flushCompanyNameSave = useCallback(() => {
+    const pending = companyNameSaveRef.current;
+    if(!pending.record) return;
+    if(pending.timer){
+      window.clearTimeout(pending.timer);
+      pending.timer = null;
+    }
+    const record = pending.record;
+    const nextValue = pending.value;
+    companyNameSaveRef.current = {timer:null, record:null, value:""};
+    if(record.type==="manufacturer") return saveMfrField("company", nextValue, {quiet:true, record});
+    if(record.type==="vendor") return saveVendorField("company", nextValue, {quiet:true, record});
+  },[saveMfrField, saveVendorField]);
+
+  const queueCompanyNameSave = useCallback((record, nextValue) => {
+    if(!record || !["manufacturer","vendor"].includes(record.type)) return;
+    companyNameSaveRef.current.record = {id:record.id, type:record.type, company:record.company || ""};
+    companyNameSaveRef.current.value = nextValue;
+    if(companyNameSaveRef.current.timer) window.clearTimeout(companyNameSaveRef.current.timer);
+    companyNameSaveRef.current.timer = window.setTimeout(()=>{ flushCompanyNameSave(); }, 180);
+  },[flushCompanyNameSave]);
+
+  const handleCompanyNameChange = value => {
+    const current = selected;
+    if(!current || !["manufacturer","vendor"].includes(current.type)) return;
+    setSelected(cur => cur ? {...cur, company:value} : cur);
+    queueCompanyNameSave(current, value);
+  };
+
+  useEffect(()=>()=>{ flushCompanyNameSave(); },[selected?.id, selected?.type, flushCompanyNameSave]);
 
   const touchRecordLastActivity = async (record, activityDate=today()) => {
     if(!record?.id || !record?.type || !activityDate) return;
@@ -1735,6 +1974,42 @@ const taskActivityFromTask = task => ({
       </header>
 
       <main style={{flex:1,padding:28}}>
+        <div style={{display:"grid",gap:12,marginBottom:18}}>
+          <div style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,padding:"14px 16px",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+            <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase",marginBottom:10}}>Ask CRM</div>
+            <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) auto auto",gap:8,alignItems:"center"}}>
+              <input
+                className="field"
+                value={askQuery}
+                onChange={e=>setAskQuery(e.target.value)}
+                onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); askCrm(); } }}
+                placeholder="Ask CRM: Which prospects have overdue tasks?"
+              />
+              <button onClick={askCrm} style={{padding:"8px 16px",border:"none",borderRadius:4,background:"#1e3a8a",color:"#fff",cursor:"pointer",fontWeight:700,minWidth:88}}>{askLoading ? "..." : "Ask"}</button>
+              <button onClick={clearAskCrm} style={{padding:"8px 14px",border:"1px solid #cbd5e1",borderRadius:4,background:"#fff",color:"#64748b",cursor:"pointer"}}>Clear</button>
+            </div>
+            <div style={{fontSize:12,color:"#8ea0bd",marginTop:8}}>Answers are based on the companies, contacts, notes, activities, and follow-ups already in this CRM.</div>
+          </div>
+          {askResult && (
+            <div className="fade" style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+              <div style={{padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,borderBottom:"1px solid #e8eef6",background:"#f8fbff"}}>
+                <div>
+                  <div className="condensed" style={{fontSize:20,fontWeight:800,color:"#172033"}}>{askResult.title}</div>
+                  <div style={{fontSize:13,color:"#64748b",marginTop:4}}>{askResult.summary}</div>
+                </div>
+                {!!askResult.records?.length && <div className="mono" style={{fontSize:10,color:"#8ea0bd"}}>{askResult.records.length} quick link{askResult.records.length===1?"":"s"}</div>}
+              </div>
+              <div style={{padding:"14px 16px",display:"grid",gap:12}}>
+                {!!askResult.lines?.length && <div style={{display:"grid",gap:8}}>
+                  {askResult.lines.map((line, index)=><div key={`${askResult.title}-${index}`} style={{fontSize:13,color:"#334155",lineHeight:1.6,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{line}</div>)}
+                </div>}
+                {!!askResult.records?.length && <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                  {askResult.records.map(record => <button key={recordKey(record)} onClick={()=>openAskRecord(record)} style={{padding:"7px 12px",border:"1px solid #1e3a8a",borderRadius:999,background:"#eff6ff",color:"#1e3a8a",cursor:"pointer",fontSize:12,fontWeight:700}}>{record.company}</button>)}
+                </div>}
+              </div>
+            </div>
+          )}
+        </div>
         {view==="dashboard" && (
           <div className="fade" style={{display:"grid",gap:20}}>
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:16}}>
@@ -1942,7 +2217,7 @@ const taskActivityFromTask = task => ({
               <div style={{flex:1}}>
                 <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:8}}>
                   {selected.type==="manufacturer" || selected.type==="vendor"
-                    ? <input className="field condensed" style={{fontSize:22,fontWeight:800,maxWidth:360,border:"none",padding:0,background:"transparent",color:"#172033"}} value={selected.company||""} onChange={e=>setSelected(cur=>({...cur,company:e.target.value}))} onBlur={e=>selected.type==="manufacturer" ? saveMfrField("company",e.target.value) : saveVendorField("company",e.target.value)} />
+                    ? <input className="field condensed" style={{fontSize:22,fontWeight:800,maxWidth:360,border:"none",padding:0,background:"transparent",color:"#172033"}} value={selected.company||""} onChange={e=>handleCompanyNameChange(e.target.value)} onBlur={()=>flushCompanyNameSave()} />
                     : <div className="condensed" style={{fontSize:22,fontWeight:800,color:"#172033"}}>{selected.company}</div>}
                   {selected.type==="lost"
                     ? <Tag label={TYPE_CFG[selected.type].icon+" "+TYPE_CFG[selected.type].label.slice(0,-1)} color={TYPE_CFG[selected.type].color} />
