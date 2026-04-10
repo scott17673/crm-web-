@@ -528,6 +528,8 @@ const exportRecordRows = (records, tab, acts=[], tasks=[]) => {
   }));
 };
 const tokenizeQuestion = value => String(value || "").toLowerCase().match(/[a-z0-9]+/g) || [];
+const ASK_QUERY_STOPWORDS = new Set(["the","that","with","from","this","these","those","what","when","where","which","who","whom","whose","why","how","did","does","do","was","were","is","are","for","and","but","too","into","onto","about","other","day","days","ago","last","past","there","them","they","their","your","you","our","his","her","guy"]);
+const meaningfulQuestionTokens = value => tokenizeQuestion(value).filter(token => token.length>2 && !ASK_QUERY_STOPWORDS.has(token));
 const normalizeFeedbackQuestion = value => tokenizeQuestion(value).filter(token => token.length>1).join(" ");
 const questionIncludes = (question, phrases) => phrases.some(phrase => String(question || "").toLowerCase().includes(phrase));
 const looksLikeAskQuestion = value => {
@@ -770,8 +772,14 @@ const scoreQuestionAgainstActivity = (question, activity, record, contact, dateW
     ...getAskRecordContacts(record).flatMap(item => [item?.name, item?.title]),
   ].filter(Boolean).join(" ").toLowerCase();
   let score = 0;
-  tokenizeQuestion(normalized).forEach(token => {
-    if(token.length>2 && haystack.includes(token)) score += 0.08;
+  meaningfulQuestionTokens(normalized).forEach(token => {
+    if(haystack.includes(token)) score += 0.08;
+  });
+  tokenizeCompanyName(record?.company || "").forEach(token => {
+    if(token.length>3 && normalized.includes(token)) score += 0.45;
+  });
+  tokenizeCompanyName(contact?.name || "").forEach(token => {
+    if(token.length>2 && normalized.includes(token)) score += 0.6;
   });
   if(owner && displayOwner(activity?.created_by)===owner) score += 0.8;
   if(activityMatchesDateWindow(activity, dateWindow)) score += 0.55;
@@ -791,6 +799,19 @@ const summarizeActivityNote = note => {
   const cleaned = String(note || "").replace(/\s+/g, " ").trim();
   if(!cleaned) return "";
   return cleaned.length > 190 ? `${cleaned.slice(0,187).trim()}...` : cleaned;
+};
+const buildAskActivityAnswer = (match, { wantsPositiveInterest=false, wantsNegativeInterest=false }={}) => {
+  if(!match) return "";
+  const person = describeAskContact(match.contact) || extractActivityPersonFromNote(match.act) || "someone there";
+  const company = match.record?.company || "that company";
+  const date = match.act?.date || "an unknown date";
+  const note = summarizeActivityNote(match.act?.note || "");
+  const lead = wantsPositiveInterest
+    ? `${person} at ${company} looks like the best interested hit from ${date}.`
+    : wantsNegativeInterest
+      ? `${person} at ${company} looks like the clearest not-interested hit from ${date}.`
+      : `${person} at ${company} is the best match from ${date}.`;
+  return [lead, note].filter(Boolean).join(" ");
 };
 const feedbackSimilarityScore = (left, right) => {
   const leftNorm = normalizeFeedbackQuestion(left);
@@ -907,6 +928,7 @@ const buildAskCrmAnswer = (question, records, tasks, acts, feedbackEntries=[], p
   const wantsPeople = questionIncludes(normalized, ["who","person","people","name","names"]);
   const wantsNegativeInterest = questionIncludes(normalized, ["not interested","uninterested","no interest"]);
   const wantsPositiveInterest = !wantsNegativeInterest && questionIncludes(normalized, ["interested","interest","keen","open to","wants quote","wants pricing","wants info"]);
+  const wantsNarrativeActivity = questionIncludes(normalized, ["what happened","what happened with","what happened to","what did","what was said","tell me about","what about"]);
   const activityContext = wantsActivities || questionIncludes(normalized, ["reached","reach","spoke","talked","called","emailed","messaged","connected","contacted","followed up","followed-up","replied","responded","response","logged"]);
   const dateWindow = parseQuestionDateWindow(normalized);
   const activityDrivenQuestion = activityContext || wantsPositiveInterest || wantsNegativeInterest || (wantsPeople && (owner || dateWindow || questionIncludes(normalized, ["reached","interest","interested","called","emailed","messaged","talked","spoke","responded","replied"])));
@@ -943,10 +965,9 @@ const buildAskCrmAnswer = (question, records, tasks, acts, feedbackEntries=[], p
       });
     if(activityMatches.length){
       const topMatches = activityMatches.slice(0,8);
-      const linkedRecords = [...new Map(topMatches.map(match => [recordKey(match.record), match.record])).values()].slice(0, wantsPeople ? 3 : 8);
+      const linkedRecords = [...new Map(topMatches.map(match => [recordKey(match.record), match.record])).values()].slice(0, (wantsPeople || wantsNarrativeActivity) ? 3 : 8);
       const bestMatch = topMatches[0];
-      const bestPerson = describeAskContact(bestMatch.contact) || "No named contact";
-      const lines = wantsPeople
+      const lines = (wantsPeople || wantsNarrativeActivity)
         ? topMatches.slice(0,3).map((match, index) => {
             const person = describeAskContact(match.contact) || "No named contact saved";
             const prefix = index===0 ? "Why I picked that:" : "Also worth checking:";
@@ -956,16 +977,10 @@ const buildAskCrmAnswer = (question, records, tasks, acts, feedbackEntries=[], p
             const person = describeAskContact(match.contact) || "";
             return [match.act.date || "No date", displayOwner(match.act.created_by), match.record.company, person, match.act.note || ""].filter(Boolean).join(" | ");
           });
-      const title = wantsPeople ? "Best answer" : (owner ? `${owner}'s activity` : "Activity results");
+      const title = (wantsPeople || wantsNarrativeActivity) ? "Best answer" : (owner ? `${owner}'s activity` : "Activity results");
       const answerParts = [];
-      if(wantsPeople){
-        answerParts.push(
-          wantsPositiveInterest
-            ? `The clearest interested person I found is ${bestPerson} at ${bestMatch.record.company} on ${bestMatch.act.date || "an unknown date"}.`
-            : wantsNegativeInterest
-              ? `${bestPerson} at ${bestMatch.record.company} sounded not interested on ${bestMatch.act.date || "an unknown date"}.`
-              : `The strongest person match I found is ${bestPerson} at ${bestMatch.record.company} from ${bestMatch.act.date || "the activity log"}.`
-        );
+      if(wantsPeople || wantsNarrativeActivity){
+        answerParts.push(buildAskActivityAnswer(bestMatch, { wantsPositiveInterest, wantsNegativeInterest }));
       } else {
         answerParts.push(`${activityMatches.length} matching activit${activityMatches.length===1?"y":"ies"} found.`);
       }
