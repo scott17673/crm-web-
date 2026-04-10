@@ -1159,6 +1159,22 @@ const buildAskCrmAnswer = (question, records, tasks, acts, feedbackEntries=[], p
   };
 };
 const contactsTextFromRecord = record => (record?.contacts || []).map(contact => [contact.name, contact.title, contact.linkedin].filter(Boolean).join(", ")).join("\n");
+const parseManufacturerContactsText = raw => dedupeContacts(
+  String(raw || "")
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => {
+      const parts = line.split(",").map(part => part.trim());
+      return {
+        name: parts[0] || "",
+        title: parts[1] || "",
+        linkedin: parts.slice(2).join(", "),
+      };
+    })
+    .filter(contact => contact.name)
+);
+const manufacturerContactsSignature = contacts => dedupeContacts(contacts || []).map(contact => [contact.name, contact.title, contact.linkedin].join("|")).join(";;");
 const vendorContactTextFromRecord = record => [
   [record?.name, record?.title].filter(Boolean).join(", "),
   record?.email ? `Email: ${record.email}` : "",
@@ -1489,6 +1505,7 @@ function App(){
   const notesBoxRef = useRef(null);
   const contactsBoxRef = useRef(null);
   const companyNameSaveRef = useRef({timer:null, record:null, value:""});
+  const contactSaveQueueRef = useRef(new Map());
   const [showEmailFmt,setShowEmailFmt] = useState(false);
   const [efName,setEfName] = useState("");
   const [efDomain,setEfDomain] = useState("");
@@ -1505,6 +1522,42 @@ function App(){
   const [unmatchedLegacyTasks,setUnmatchedLegacyTasks] = useState(()=>safeJson(localStorage.getItem(LEGACY_TASKS_KEY), []).map(task => normalizeLegacyTask(task, [], true)));
 
   const toast2 = msg => { setToast(msg); setTimeout(()=>setToast(""),3000); };
+  const queueLatestContactSave = useCallback((saveKey, raw, worker) => {
+    if(!saveKey || typeof worker !== "function") return Promise.resolve(false);
+    const queue = contactSaveQueueRef.current;
+    let state = queue.get(saveKey);
+    if(!state){
+      state = {inFlight:false,pendingRaw:null,pendingWorker:null,resolvers:[]};
+      queue.set(saveKey, state);
+    }
+    return new Promise(resolve => {
+      state.pendingRaw = raw;
+      state.pendingWorker = worker;
+      state.resolvers.push(resolve);
+      const run = async () => {
+        if(state.inFlight || state.pendingWorker == null) return;
+        state.inFlight = true;
+        const nextRaw = state.pendingRaw;
+        const nextWorker = state.pendingWorker;
+        const resolvers = state.resolvers.splice(0, state.resolvers.length);
+        state.pendingRaw = null;
+        state.pendingWorker = null;
+        let result = false;
+        try{
+          result = await nextWorker(nextRaw);
+        }finally{
+          resolvers.forEach(done => done(result));
+          state.inFlight = false;
+          if(state.pendingWorker != null){
+            run();
+          }else if(!state.resolvers.length){
+            queue.delete(saveKey);
+          }
+        }
+      };
+      run();
+    });
+  },[]);
   const saveAskFeedbackEntries = next => {
     setAskFeedbackEntries(next);
   };
@@ -1997,26 +2050,48 @@ const taskActivityFromTask = task => ({
     setSelected(current => current && current.id===record.id && current.type===record.type ? {...current,lastContact:activityDate,last_contact:activityDate} : current);
   };
 
-  const saveContacts = async raw => {
-    if(!selected || selected.type!=="manufacturer") return;
+  const persistManufacturerContacts = useCallback(async (target, raw, options={}) => {
+    if(!target || target.type!=="manufacturer") return false;
+    const quiet = !!options.quiet;
+    const nextContacts = parseManufacturerContactsText(raw);
+    const currentRecord = mfrs.find(record => record.id===target.id) || selected;
+    const currentSignature = manufacturerContactsSignature(currentRecord?.contacts || []);
+    const nextSignature = manufacturerContactsSignature(nextContacts);
+    setContactsDraft(raw);
+    if(currentSignature===nextSignature) return true;
     try{
-      const rows=raw.split("\n").map(line=>line.trim()).filter(Boolean).map(line=>{ const p=line.split(",").map(x=>x.trim()); return {manufacturer_id:selected.id,name:p[0]||"",title:p[1]||"",linkedin:p[2]||""}; }).filter(c=>c.name);
-      ensureOk(await sb.from("manufacturer_contacts").delete().eq("manufacturer_id",selected.id));
-      if(rows.length) ensureOk(await sb.from("manufacturer_contacts").insert(rows));
-      await hydrate();
-      setContactsDraft(raw);
-      toast2("Saved");
+      await replaceManufacturerContacts(target.id, nextContacts);
+      setSelected(current => current && current.id===target.id && current.type==="manufacturer" ? {...current, contacts:nextContacts} : current);
+      setMfrs(list => list.map(record => record.id===target.id ? {...record, contacts:nextContacts} : record));
+      if(!quiet) toast2("Saved");
       return true;
     }catch(err){
       toast2("Save error: "+err.message);
       return false;
     }
-  };
+  },[mfrs, selected]);
 
-  const saveVendorContacts = async raw => {
-    if(!selected || selected.type!=="vendor") return false;
+  const saveContacts = useCallback((raw, options={}) => {
+    const target = options.record || selected;
+    if(!target || target.type!=="manufacturer") return Promise.resolve(false);
+    return queueLatestContactSave(`manufacturer:${target.id}`, raw, nextRaw => persistManufacturerContacts(target, nextRaw, options));
+  },[selected, queueLatestContactSave, persistManufacturerContacts]);
+
+  const persistVendorContacts = useCallback(async (target, raw, options={}) => {
+    if(!target || target.type!=="vendor") return false;
+    const quiet = !!options.quiet;
+    const parsed = parseVendorContactText(raw);
+    const currentRecord = vendors.find(record => record.id===target.id) || selected;
+    const unchanged =
+      String(currentRecord?.name || "")===parsed.name &&
+      String(currentRecord?.title || "")===parsed.title &&
+      String(currentRecord?.email || "")===parsed.email &&
+      String(currentRecord?.phone || "")===parsed.phone &&
+      String(currentRecord?.industry || "")===parsed.industry &&
+      String(currentRecord?.region || "")===parsed.region;
+    setContactsDraft(raw);
+    if(unchanged) return true;
     try{
-      const parsed = parseVendorContactText(raw);
       const payload = {
         name: parsed.name,
         title: parsed.title,
@@ -2025,18 +2100,22 @@ const taskActivityFromTask = task => ({
         industry: parsed.industry,
         region: parsed.region,
       };
-      ensureOk(await sb.from("vendors").update(payload).eq("id",selected.id));
-      const nextRecord = {...selected, ...payload};
-      setSelected(nextRecord);
-      setVendors(list => list.map(record => record.id===selected.id ? {...record,...payload} : record));
-      setContactsDraft(vendorContactTextFromRecord(nextRecord));
-      toast2("Saved");
+      ensureOk(await sb.from("vendors").update(payload).eq("id",target.id));
+      setSelected(current => current && current.id===target.id && current.type==="vendor" ? {...current, ...payload} : current);
+      setVendors(list => list.map(record => record.id===target.id ? {...record,...payload} : record));
+      if(!quiet) toast2("Saved");
       return true;
     }catch(err){
       toast2("Save error: "+err.message);
       return false;
     }
-  };
+  },[vendors, selected]);
+
+  const saveVendorContacts = useCallback((raw, options={}) => {
+    const target = options.record || selected;
+    if(!target || target.type!=="vendor") return Promise.resolve(false);
+    return queueLatestContactSave(`vendor:${target.id}`, raw, nextRaw => persistVendorContacts(target, nextRaw, options));
+  },[selected, queueLatestContactSave, persistVendorContacts]);
 
   const addTask = () => {
     if(!selected || !taskTitle.trim()) return;
@@ -2975,8 +3054,9 @@ const taskActivityFromTask = task => ({
                       placeholder={selected.type==="manufacturer" ? "Name, Title, LinkedIn URL" : "Name, Title\nEmail: person@company.com\nPhone: 555-555-5555\nIndustry: Others\nRegion: Ontario"}
                       value={contactsDraft}
                       onChange={setContactsDraft}
+                      onAutoSave={nextValue=>selected.type==="manufacturer" ? saveContacts(nextValue, {quiet:true, record:selected}) : saveVendorContacts(nextValue, {quiet:true, record:selected})}
                       onMeasure={syncDetailPanelHeight}
-                      onBlurSave={selected.type==="manufacturer" ? saveContacts : saveVendorContacts}
+                      onBlurSave={nextValue=>selected.type==="manufacturer" ? saveContacts(nextValue, {quiet:true, record:selected}) : saveVendorContacts(nextValue, {quiet:true, record:selected})}
                     />
                     <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:6}}>{selected.type==="manufacturer" ? "One per line: Name, Title, LinkedIn" : "First line: Name, Title. Then Email:, Phone:, Industry:, Region:"}</div>
                   </div>
