@@ -925,7 +925,7 @@ const buildAskCrmAnswer = (question, records, tasks, acts, feedbackEntries=[], p
   const wantsOverdue = questionIncludes(normalized, ["overdue","due today","due / overdue","due/overdue"]);
   const wantsUpcoming = questionIncludes(normalized, ["upcoming","future","next up"]);
   const wantsCompleted = questionIncludes(normalized, ["completed","done","finished"]);
-  const wantsPeople = questionIncludes(normalized, ["who","person","people","name","names"]);
+  const wantsPeople = questionIncludes(normalized, ["who","person","people","name","names","guy","girl","contact"]);
   const wantsNegativeInterest = questionIncludes(normalized, ["not interested","uninterested","no interest"]);
   const wantsPositiveInterest = !wantsNegativeInterest && questionIncludes(normalized, ["interested","interest","keen","open to","wants quote","wants pricing","wants info"]);
   const wantsNarrativeActivity = questionIncludes(normalized, ["what happened","what happened with","what happened to","what did","what was said","tell me about","what about"]);
@@ -979,7 +979,7 @@ const buildAskCrmAnswer = (question, records, tasks, acts, feedbackEntries=[], p
           });
       const title = (wantsPeople || wantsNarrativeActivity) ? "Best answer" : (owner ? `${owner}'s activity` : "Activity results");
       const answerParts = [];
-      if(wantsPeople || wantsNarrativeActivity){
+      if(wantsPeople || wantsNarrativeActivity || wantsPositiveInterest || wantsNegativeInterest){
         answerParts.push(buildAskActivityAnswer(bestMatch, { wantsPositiveInterest, wantsNegativeInterest }));
       } else {
         answerParts.push(`${activityMatches.length} matching activit${activityMatches.length===1?"y":"ies"} found.`);
@@ -989,8 +989,8 @@ const buildAskCrmAnswer = (question, records, tasks, acts, feedbackEntries=[], p
       if(dateWindow?.label) metaSummaryParts.push(dateWindow.label);
       return {
         title,
-        answer: wantsPeople ? answerParts.join(" ") : "",
-        summary: wantsPeople ? (metaSummaryParts.join(" · ") || "Based on your CRM activity log.") : [...answerParts, ...metaSummaryParts].join(" "),
+        answer: (wantsPeople || wantsNarrativeActivity || wantsPositiveInterest || wantsNegativeInterest) ? answerParts.join(" ") : "",
+        summary: (wantsPeople || wantsNarrativeActivity || wantsPositiveInterest || wantsNegativeInterest) ? (metaSummaryParts.join(" · ") || "Based on your CRM activity log.") : [...answerParts, ...metaSummaryParts].join(" "),
         lines: wantsCount ? [] : lines,
         records: linkedRecords,
         rememberedFeedback,
@@ -2591,12 +2591,15 @@ const taskActivityFromTask = task => ({
               </div>
               <div style={{padding:"14px 16px",display:"grid",gap:12}}>
                 {!!askResult.answer && (
-                  <div style={{fontSize:16,color:"#172033",fontWeight:700,lineHeight:1.55,whiteSpace:"pre-wrap"}}>
-                    {askResult.answer}
+                  <div style={{background:"#f8fbff",border:"1px solid #cfe0ff",borderLeft:"4px solid #1e3a8a",borderRadius:8,padding:"14px 16px",display:"grid",gap:8}}>
+                    <div className="mono" style={{fontSize:10,color:"#6f84a6",letterSpacing:".12em",textTransform:"uppercase"}}>Best Answer</div>
+                    <div style={{fontSize:18,color:"#172033",fontWeight:800,lineHeight:1.5,whiteSpace:"pre-wrap"}}>
+                      {askResult.answer}
+                    </div>
                   </div>
                 )}
                 {!!askResult.lines?.length && <div style={{display:"grid",gap:8}}>
-                  {askResult.lines.map((line, index)=><div key={`${askResult.title}-${index}`} style={{fontSize:13,color:"#334155",lineHeight:1.6,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{line}</div>)}
+                  {askResult.lines.map((line, index)=><div key={`${askResult.title}-${index}`} style={{fontSize:13,color:"#334155",lineHeight:1.6,whiteSpace:"pre-wrap",wordBreak:"break-word",background:index===0&&askResult.answer?"#fff":"transparent",padding:index===0&&askResult.answer?"0":"0"}}>{line}</div>)}
                 </div>}
                 {!!askResult.records?.length && <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
                   {askResult.records.map(record => <button key={recordKey(record)} onClick={()=>openAskRecord(record)} style={{padding:"7px 12px",border:"1px solid #1e3a8a",borderRadius:999,background:"#eff6ff",color:"#1e3a8a",cursor:"pointer",fontSize:12,fontWeight:700}}>{record.company}</button>)}
