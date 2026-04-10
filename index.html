@@ -1741,7 +1741,12 @@ const taskActivityFromTask = task => ({
   const sendAskReply = useCallback(() => {
     const feedback = askFeedbackText.trim();
     const question = (askConversationQuery || askQuery).trim();
-    if(!feedback || !question) return;
+    if(!feedback) return;
+    if(!question){
+      setAskQuery(feedback);
+      setAskFeedbackText("");
+      return askCrm();
+    }
     const followupQuestion = buildAskReplyQuestion(question, feedback, askAsker);
     setAskLoading(true);
     setAskConversationQuery(followupQuestion);
@@ -1766,7 +1771,7 @@ const taskActivityFromTask = task => ({
     }finally{
       setAskLoading(false);
     }
-  },[askFeedbackText, askConversationQuery, askQuery, all, tasks, acts, askFeedbackEntries, askAsker]);
+  },[askFeedbackText, askConversationQuery, askQuery, all, tasks, acts, askFeedbackEntries, askAsker, askCrm]);
   const saveAskFeedback = useCallback(() => {
     const feedback = askFeedbackText.trim();
     const question = (askConversationQuery || askQuery).trim();
@@ -2615,14 +2620,14 @@ const taskActivityFromTask = task => ({
                     onKeyDown={e=>{
                       if(e.key==="Enter" && !e.shiftKey){
                         e.preventDefault();
-                        if(askFeedbackText.trim() && (askConversationQuery.trim() || askQuery.trim())) sendAskReply();
+                        if(askFeedbackText.trim()) sendAskReply();
                       }
                     }}
                     placeholder="Ask a follow-up question or send a reply..."
                   />
                   <div style={{display:"flex",justifyContent:"flex-end",gap:8}}>
                     <button onClick={()=>setAskFeedbackText("")} style={{padding:"8px 12px",border:"1px solid #cbd5e1",borderRadius:4,background:"#fff",color:"#64748b",cursor:"pointer"}}>Clear Reply</button>
-                    <button onClick={sendAskReply} disabled={!askFeedbackText.trim() || !(askConversationQuery.trim() || askQuery.trim())} style={{padding:"8px 14px",border:"none",borderRadius:4,background:askFeedbackText.trim()&&(askConversationQuery.trim() || askQuery.trim())?"#16a34a":"#cbd5e1",color:"#fff",cursor:askFeedbackText.trim()&&(askConversationQuery.trim() || askQuery.trim())?"pointer":"not-allowed",fontWeight:700}}>Send Reply</button>
+                    <button onClick={sendAskReply} disabled={!askFeedbackText.trim()} style={{padding:"8px 14px",border:"none",borderRadius:4,background:askFeedbackText.trim()?"#16a34a":"#cbd5e1",color:"#fff",cursor:askFeedbackText.trim()?"pointer":"not-allowed",fontWeight:700}}>Send Reply</button>
                   </div>
                 </div>
               </div>
