@@ -60,6 +60,8 @@ const PEOPLE = ["Scott","Jeff"];
 const DEFAULT_OWNER = PEOPLE[0];
 const INTERNAL_TAG_PREFIX = "__";
 const IMPORT_BATCH_NEW_PREFIX = "__import_batch_new:";
+const ACTIVITY_TYPES = ["Call","Email","Meeting","Note"];
+const ACTIVITY_COLORS = {Call:"#1e3a8a",Email:"#ef4444",Meeting:"#16a34a",Note:"#f97316",All:"#475569"};
 const PERSON_COLORS = {Scott:"#1e3a8a",Jeff:"#16a34a"};
 const IND_COLORS = {"Food and Beverage":"#f97316","Concrete":"#78716c","Metal Refineries":"#64748b","Recycling":"#22c55e","Mining/Aggregate":"#a16207","Asphalt Plants":"#334155","Building Products":"#1d4ed8","Others":"#475569"};
 const IND_ICONS = {"Food and Beverage":"◍","Concrete":"▦","Metal Refineries":"◉","Recycling":"↻","Mining/Aggregate":"⛏","Asphalt Plants":"▣","Building Products":"▥","Others":"◧"};
@@ -1513,6 +1515,8 @@ function App(){
   const [importRows,setImportRows] = useState(null);
   const [importMode,setImportMode] = useState("merge");
   const [selectedImportBatchId,setSelectedImportBatchId] = useState("");
+  const [showWeeklyActivityModal,setShowWeeklyActivityModal] = useState(false);
+  const [weeklyActivityFilter,setWeeklyActivityFilter] = useState("All");
   const [showTasksModal,setShowTasksModal] = useState(false);
   const [showUnmatchedTasksModal,setShowUnmatchedTasksModal] = useState(false);
   const [taskSearch,setTaskSearch] = useState("");
@@ -1777,6 +1781,11 @@ const taskActivityFromTask = task => ({
     setSelectedImportBatchId(current => importBatches.some(batch => batch.id===current) ? current : (importBatches[0]?.id || ""));
   },[importBatches]);
   const detailActs = selected ? acts.filter(a=>a.contactId===selected.id) : [];
+  const resolveActivityRecord = useCallback(activity => {
+    if(!activity) return null;
+    const activityType = activity.contact_type || "manufacturer";
+    return all.find(record => record.id===activity.contactId && record.type===activityType) || null;
+  },[all]);
   const resolveTaskRecord = useCallback(task => {
     if(!task) return null;
     if(task.contact_id){
@@ -1801,6 +1810,14 @@ const taskActivityFromTask = task => ({
     setTab(record.type);
     openRecord(record);
   };
+  const openWeeklyActivityRecord = useCallback(activity => {
+    const record = resolveActivityRecord(activity);
+    if(!record) return toast2("Company not found");
+    setShowWeeklyActivityModal(false);
+    setView("contacts");
+    setTab(record.type);
+    openRecord(record);
+  },[resolveActivityRecord]);
   const askCrm = useCallback(() => {
     const question = askQuery.trim();
     if(!question) return;
@@ -2676,6 +2693,10 @@ const taskActivityFromTask = task => ({
     }
     setSaving(false);
   };
+  const openWeeklyActivityLog = type => {
+    setWeeklyActivityFilter(type || "All");
+    setShowWeeklyActivityModal(true);
+  };
   const pipe = mfrs.filter(m=>!["Closed Won","Closed Lost"].includes(m.stage)).length;
   const hot = mfrs.filter(m=>(m.tags||[]).includes("Hot")).length;
   const lostValue = lost.reduce((sum,r)=>sum+(r.value||0),0);
@@ -2685,6 +2706,23 @@ const taskActivityFromTask = task => ({
   const stageStats = STAGES.map(stage => ({ stage, count: mfrs.filter(m=>normalizeStage(m.stage)===stage).length }));
   const maxIndustryCount = Math.max(1, ...industryStats.map(item => item.count));
   const maxStageCount = Math.max(1, ...stageStats.map(item => item.count));
+  const dashboardWeekStart = weekStartDate(0);
+  const dashboardWeekEnd = formatLocalDate(new Date());
+  const weeklyActivities = [...acts]
+    .filter(activity => {
+      const activityDate = String(activity.date || "");
+      return activityDate && activityDate >= dashboardWeekStart && activityDate <= dashboardWeekEnd;
+    })
+    .sort((left,right) => {
+      const byDate = String(right.date || "").localeCompare(String(left.date || ""));
+      if(byDate) return byDate;
+      return String(right.id || "").localeCompare(String(left.id || ""));
+    });
+  const weeklyActivityStats = [{type:"All",count:weeklyActivities.length}, ...ACTIVITY_TYPES.map(type => ({type,count:weeklyActivities.filter(activity => activity.type===type).length}))];
+  const filteredWeeklyActivities = weeklyActivityFilter==="All"
+    ? weeklyActivities
+    : weeklyActivities.filter(activity => activity.type===weeklyActivityFilter);
+  const weeklyOwnerStats = PEOPLE.map(owner => ({owner,count:weeklyActivities.filter(activity => displayOwner(activity.created_by)===owner).length}));
   const stagePriority = {Negotiation:0,Proposal:1,Qualified:2,"Not Interested":3,Outreach:4,Prospect:5,Unqualified:6};
   const hotProspects = [...mfrs]
     .filter(m=>!["Closed Won","Closed Lost"].includes(m.stage))
@@ -2888,6 +2926,36 @@ const taskActivityFromTask = task => ({
                 </div>
               </section>
             </div>
+
+            <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+              <div style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #d8e2ef",background:"#f8fbff",gap:12}}>
+                <div>
+                  <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase"}}>Weekly Activity Log</div>
+                  <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:4}}>{dashboardWeekStart} to {dashboardWeekEnd}</div>
+                </div>
+                <button onClick={()=>openWeeklyActivityLog("All")} style={{border:"none",background:"transparent",color:"#1e3a8a",cursor:"pointer",fontSize:12,fontWeight:700}}>View Weekly Log</button>
+              </div>
+              <div style={{padding:"16px 18px",display:"grid",gap:14}}>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10}}>
+                  {weeklyActivityStats.map(item=>(
+                    <button
+                      key={item.type}
+                      onClick={()=>openWeeklyActivityLog(item.type)}
+                      style={{padding:"14px 12px",border:"1px solid "+(ACTIVITY_COLORS[item.type] || "#64748b")+"33",borderRadius:6,background:(ACTIVITY_COLORS[item.type] || "#64748b")+"10",cursor:"pointer",textAlign:"left"}}
+                    >
+                      <div className="mono" style={{fontSize:10,letterSpacing:".12em",color:ACTIVITY_COLORS[item.type] || "#64748b",textTransform:"uppercase",marginBottom:10}}>{item.type==="All" ? "Total" : item.type}</div>
+                      <div className="condensed" style={{fontSize:28,fontWeight:800,color:"#18233a",lineHeight:1}}>{item.count}</div>
+                    </button>
+                  ))}
+                </div>
+                <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"center",justifyContent:"space-between"}}>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                    {weeklyOwnerStats.map(item => <Tag key={item.owner} label={`${item.owner} (${item.count})`} color={PERSON_COLORS[item.owner] || "#64748b"} />)}
+                  </div>
+                  <div className="mono" style={{fontSize:10,color:"#8ea0bd"}}>Click any count to see the full list and who logged it.</div>
+                </div>
+              </div>
+            </section>
 
             <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
               <div style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #d8e2ef",background:"#f8fbff",gap:12}}>
@@ -3147,6 +3215,60 @@ const taskActivityFromTask = task => ({
                     </div>
                   ))}
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showWeeklyActivityModal && (
+        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.5)",display:"grid",placeItems:"center",padding:20,zIndex:104}} onClick={e=>e.target===e.currentTarget&&setShowWeeklyActivityModal(false)}>
+          <div className="slide" style={{width:"min(980px,100%)",maxHeight:"90vh",overflow:"auto",background:"#fff",borderRadius:8,border:"1px solid #d7dfeb",boxShadow:"0 24px 60px rgba(0,0,0,.18)"}}>
+            <div style={{borderTop:"3px solid #1e3a8a"}} />
+            <div style={{padding:"18px 24px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:16,borderBottom:"1px solid #e8eef6"}}>
+              <div>
+                <div className="condensed" style={{fontSize:22,fontWeight:800,color:"#172033"}}>Weekly Activity Log</div>
+                <div className="mono" style={{fontSize:11,color:"#8ea0bd",marginTop:3}}>{filteredWeeklyActivities.length} matching activit{filteredWeeklyActivities.length===1?"y":"ies"} · {dashboardWeekStart} to {dashboardWeekEnd}</div>
+              </div>
+              <button onClick={()=>setShowWeeklyActivityModal(false)} style={{width:30,height:30,border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",cursor:"pointer",color:"#94a3b8"}}>×</button>
+            </div>
+            <div style={{padding:"18px 24px",display:"grid",gap:14}}>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                {["All", ...ACTIVITY_TYPES].map(type => (
+                  <button
+                    key={type}
+                    onClick={()=>setWeeklyActivityFilter(type)}
+                    style={{padding:"7px 12px",borderRadius:999,border:"1px solid "+((weeklyActivityFilter===type ? ACTIVITY_COLORS[type] : "#d7dfeb")),background:weeklyActivityFilter===type ? ((ACTIVITY_COLORS[type] || "#64748b")+"12") : "#fff",color:weeklyActivityFilter===type ? (ACTIVITY_COLORS[type] || "#64748b") : "#64748b",cursor:"pointer",fontWeight:700,fontSize:12}}
+                  >
+                    {type} ({weeklyActivityStats.find(item => item.type===type)?.count || 0})
+                  </button>
+                ))}
+              </div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                {weeklyOwnerStats.map(item => <Tag key={item.owner} label={`${item.owner}: ${item.count}`} color={PERSON_COLORS[item.owner] || "#64748b"} />)}
+              </div>
+              <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,overflow:"hidden"}}>
+                {!filteredWeeklyActivities.length
+                  ? <div className="mono" style={{padding:"18px 20px",fontSize:12,color:"#8ea0bd"}}>No activities logged for this filter during {dashboardWeekStart} to {dashboardWeekEnd}.</div>
+                  : filteredWeeklyActivities.map(activity => {
+                      const linkedRecord = resolveActivityRecord(activity);
+                      const typeColor = ACTIVITY_COLORS[activity.type] || "#64748b";
+                      return (
+                        <div key={activity.id} style={{padding:"14px 16px",borderBottom:"1px solid #eef3f9",display:"grid",gap:8}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+                            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                              <Pill label={activity.type || "Note"} color={typeColor} />
+                              <div className="mono" style={{fontSize:11,color:"#64748b"}}>{activity.date || "No date"}</div>
+                              <OwnerTag owner={activity.created_by} />
+                            </div>
+                            {linkedRecord
+                              ? <button onClick={()=>openWeeklyActivityRecord(activity)} style={{fontSize:12,color:"#1e3a8a",border:"none",background:"transparent",padding:0,cursor:"pointer",fontWeight:700,textDecoration:"underline",textAlign:"left"}}>{linkedRecord.company}</button>
+                              : <div style={{fontSize:12,color:"#64748b",fontWeight:700}}>{activity.company || "Unknown company"}</div>}
+                          </div>
+                          <div style={{fontSize:13,color:"#334155",lineHeight:1.6,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{activity.note || "—"}</div>
+                        </div>
+                      );
+                    })}
               </div>
             </div>
           </div>
