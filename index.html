@@ -631,6 +631,18 @@ const dateDaysAgo = days => {
   next.setDate(next.getDate()-days);
   return formatLocalDate(next);
 };
+const startOfWeekDate = value => {
+  const next = value instanceof Date ? new Date(value) : new Date(value);
+  next.setHours(12,0,0,0);
+  const mondayOffset = (next.getDay()+6)%7;
+  next.setDate(next.getDate()-mondayOffset);
+  return next;
+};
+const weeksBetweenDates = (later, earlier) => {
+  const laterWeek = startOfWeekDate(later);
+  const earlierWeek = startOfWeekDate(earlier);
+  return Math.max(0, Math.floor((laterWeek.getTime() - earlierWeek.getTime()) / (7 * 24 * 60 * 60 * 1000)));
+};
 const weekStartDate = weeksAgo => {
   const next = new Date();
   next.setHours(12,0,0,0);
@@ -1517,6 +1529,7 @@ function App(){
   const [selectedImportBatchId,setSelectedImportBatchId] = useState("");
   const [showWeeklyActivityModal,setShowWeeklyActivityModal] = useState(false);
   const [weeklyActivityFilter,setWeeklyActivityFilter] = useState("All");
+  const [weeklyWeekOffset,setWeeklyWeekOffset] = useState(0);
   const [showTasksModal,setShowTasksModal] = useState(false);
   const [showUnmatchedTasksModal,setShowUnmatchedTasksModal] = useState(false);
   const [taskSearch,setTaskSearch] = useState("");
@@ -2706,8 +2719,22 @@ const taskActivityFromTask = task => ({
   const stageStats = STAGES.map(stage => ({ stage, count: mfrs.filter(m=>normalizeStage(m.stage)===stage).length }));
   const maxIndustryCount = Math.max(1, ...industryStats.map(item => item.count));
   const maxStageCount = Math.max(1, ...stageStats.map(item => item.count));
-  const dashboardWeekStart = weekStartDate(0);
-  const dashboardWeekEnd = formatLocalDate(new Date());
+  const earliestWeeklyActivityDate = [...acts].map(activity => String(activity.date || "").trim()).filter(Boolean).sort()[0] || "";
+  const maxWeeklyWeekOffset = earliestWeeklyActivityDate ? weeksBetweenDates(new Date(), new Date(`${earliestWeeklyActivityDate}T12:00:00`)) : 0;
+  const effectiveWeeklyWeekOffset = Math.min(weeklyWeekOffset, maxWeeklyWeekOffset);
+  const weeklyWeekOptions = Array.from({length:maxWeeklyWeekOffset + 1}, (_, offset) => {
+    const start = weekStartDate(offset);
+    const end = offset===0 ? today() : weekEndDate(offset);
+    const label = offset===0
+      ? `This week | ${start} to ${end}`
+      : offset===1
+        ? `Last week | ${start} to ${end}`
+        : `${start} to ${end}`;
+    return {offset,start,end,label};
+  });
+  const selectedWeeklyWeek = weeklyWeekOptions.find(option => option.offset===effectiveWeeklyWeekOffset) || weeklyWeekOptions[0] || {offset:0,start:weekStartDate(0),end:today(),label:`This week | ${weekStartDate(0)} to ${today()}`};
+  const dashboardWeekStart = selectedWeeklyWeek.start;
+  const dashboardWeekEnd = selectedWeeklyWeek.end;
   const weeklyActivities = [...acts]
     .filter(activity => {
       const activityDate = String(activity.date || "");
@@ -2933,7 +2960,12 @@ const taskActivityFromTask = task => ({
                   <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase"}}>Weekly Activity Log</div>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:4}}>{dashboardWeekStart} to {dashboardWeekEnd}</div>
                 </div>
-                <button onClick={()=>openWeeklyActivityLog("All")} style={{border:"none",background:"transparent",color:"#1e3a8a",cursor:"pointer",fontSize:12,fontWeight:700}}>View Weekly Log</button>
+                <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",justifyContent:"flex-end"}}>
+                  <select className="field mono" value={String(effectiveWeeklyWeekOffset)} onChange={e=>setWeeklyWeekOffset(parseInt(e.target.value,10) || 0)} style={{width:220,cursor:"pointer"}}>
+                    {weeklyWeekOptions.map(option => <option key={option.offset} value={option.offset}>{option.label}</option>)}
+                  </select>
+                  <button onClick={()=>openWeeklyActivityLog("All")} style={{border:"none",background:"transparent",color:"#1e3a8a",cursor:"pointer",fontSize:12,fontWeight:700}}>View Weekly Log</button>
+                </div>
               </div>
               <div style={{padding:"16px 18px",display:"grid",gap:14}}>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10}}>
@@ -2952,7 +2984,7 @@ const taskActivityFromTask = task => ({
                   <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
                     {weeklyOwnerStats.map(item => <Tag key={item.owner} label={`${item.owner} (${item.count})`} color={PERSON_COLORS[item.owner] || "#64748b"} />)}
                   </div>
-                  <div className="mono" style={{fontSize:10,color:"#8ea0bd"}}>Click any count to see the full list and who logged it.</div>
+                  <div className="mono" style={{fontSize:10,color:"#8ea0bd"}}>Click any count to see the full list and who logged it for that week.</div>
                 </div>
               </div>
             </section>
@@ -3230,7 +3262,12 @@ const taskActivityFromTask = task => ({
                 <div className="condensed" style={{fontSize:22,fontWeight:800,color:"#172033"}}>Weekly Activity Log</div>
                 <div className="mono" style={{fontSize:11,color:"#8ea0bd",marginTop:3}}>{filteredWeeklyActivities.length} matching activit{filteredWeeklyActivities.length===1?"y":"ies"} · {dashboardWeekStart} to {dashboardWeekEnd}</div>
               </div>
-              <button onClick={()=>setShowWeeklyActivityModal(false)} style={{width:30,height:30,border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",cursor:"pointer",color:"#94a3b8"}}>×</button>
+              <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",justifyContent:"flex-end"}}>
+                <select className="field mono" value={String(effectiveWeeklyWeekOffset)} onChange={e=>setWeeklyWeekOffset(parseInt(e.target.value,10) || 0)} style={{width:220,cursor:"pointer"}}>
+                  {weeklyWeekOptions.map(option => <option key={option.offset} value={option.offset}>{option.label}</option>)}
+                </select>
+                <button onClick={()=>setShowWeeklyActivityModal(false)} style={{width:30,height:30,border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",cursor:"pointer",color:"#94a3b8"}}>×</button>
+              </div>
             </div>
             <div style={{padding:"18px 24px",display:"grid",gap:14}}>
               <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
