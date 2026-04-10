@@ -58,6 +58,8 @@ const ASK_FEEDBACK_ACTIVITY_TYPE = "Note";
 const ASK_FEEDBACK_CREATED_BY = "__ask_feedback__";
 const PEOPLE = ["Scott","Jeff"];
 const DEFAULT_OWNER = PEOPLE[0];
+const INTERNAL_TAG_PREFIX = "__";
+const IMPORT_BATCH_NEW_PREFIX = "__import_batch_new:";
 const PERSON_COLORS = {Scott:"#1e3a8a",Jeff:"#16a34a"};
 const IND_COLORS = {"Food and Beverage":"#f97316","Concrete":"#78716c","Metal Refineries":"#64748b","Recycling":"#22c55e","Mining/Aggregate":"#a16207","Asphalt Plants":"#334155","Building Products":"#1d4ed8","Others":"#475569"};
 const IND_ICONS = {"Food and Beverage":"◍","Concrete":"▦","Metal Refineries":"◉","Recycling":"↻","Mining/Aggregate":"⛏","Asphalt Plants":"▣","Building Products":"▥","Others":"◧"};
@@ -191,6 +193,37 @@ const matchesActivityDate = (lastContact, targetDate, mode) => {
   if(mode==="on") return lastContact===targetDate;
   if(mode==="on_or_before") return lastContact<=targetDate;
   return lastContact>=targetDate;
+};
+const uniqueTags = tags => [...new Set((tags || []).map(tag => String(tag || "").trim()).filter(Boolean))];
+const isInternalTag = tag => String(tag || "").trim().startsWith(INTERNAL_TAG_PREFIX);
+const visibleTags = tags => uniqueTags(tags).filter(tag => !isInternalTag(tag));
+const internalTags = tags => uniqueTags(tags).filter(isInternalTag);
+const padDatePart = value => String(value).padStart(2,"0");
+const makeImportBatchId = () => {
+  const now = new Date();
+  return `${now.getFullYear()}${padDatePart(now.getMonth()+1)}${padDatePart(now.getDate())}-${padDatePart(now.getHours())}${padDatePart(now.getMinutes())}${padDatePart(now.getSeconds())}`;
+};
+const formatImportBatchId = batchId => {
+  const match = String(batchId || "").match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/);
+  if(!match) return String(batchId || "");
+  return `${match[1]}-${match[2]}-${match[3]} ${match[4]}:${match[5]}:${match[6]}`;
+};
+const importBatchIdFromTag = tag => {
+  const normalized = String(tag || "").trim();
+  return normalized.startsWith(IMPORT_BATCH_NEW_PREFIX) ? normalized.slice(IMPORT_BATCH_NEW_PREFIX.length) : "";
+};
+const buildImportBatchSummaries = records => {
+  const batches = new Map();
+  (records || []).forEach(record => {
+    uniqueTags(record?.tags).forEach(tag => {
+      const batchId = importBatchIdFromTag(tag);
+      if(!batchId) return;
+      const current = batches.get(batchId) || {id:batchId,label:formatImportBatchId(batchId),count:0};
+      current.count += 1;
+      batches.set(batchId, current);
+    });
+  });
+  return [...batches.values()].sort((left,right) => right.id.localeCompare(left.id));
 };
 const sortRecordsByActivity = (records, sortBy) => {
   if(sortBy==="activity_asc") return [...records].sort((a,b)=>(a.lastContact||"9999").localeCompare(b.lastContact||"9999"));
@@ -399,7 +432,7 @@ const extractContactsFromNotes = notes => {
   return dedupeContacts([...contacts, ...linkedinContacts]);
 };
 const buildImportNotes = row => [firstFilled(row.notes, row.note, row.internal_notes), firstFilled(row.chat_gpt_search_result, row.search_result, row.research_notes, row.research_result)].filter(Boolean).join("\n\n");
-const parseImportTags = row => firstFilled(row.tags, row.tag, row.labels).split(/[;,]/).map(tag => tag.trim()).filter(Boolean);
+const parseImportTags = row => visibleTags(firstFilled(row.tags, row.tag, row.labels).split(/[;,]/).map(tag => tag.trim()).filter(Boolean));
 const preferIncomingText = (current, incoming) => String(incoming || "").trim() ? incoming : current;
 const appendUniqueText = (current, incoming, separator="\n\n") => {
   const left = String(current || "").trim();
@@ -489,7 +522,7 @@ const exportRecordRows = (records, tab, acts=[], tasks=[]) => {
       contacts: (record.contacts || []).map(contact => [contact.name, contact.title, contact.linkedin].filter(Boolean).join(" | ")).join(" ;; "),
       activities: exportActivitiesForRecord(record, acts),
       follow_ups: exportTasksForRecord(record, tasks),
-      tags: (record.tags || []).join(", "),
+      tags: visibleTags(record.tags).join(", "),
       last_activity: record.lastContact || "",
     }));
   }
@@ -506,7 +539,7 @@ const exportRecordRows = (records, tab, acts=[], tasks=[]) => {
       notes: record.notes || "",
       activities: exportActivitiesForRecord(record, acts),
       follow_ups: exportTasksForRecord(record, tasks),
-      tags: (record.tags || []).join(", "),
+      tags: visibleTags(record.tags).join(", "),
       last_activity: record.lastContact || "",
     }));
   }
@@ -523,7 +556,7 @@ const exportRecordRows = (records, tab, acts=[], tasks=[]) => {
     notes: record.notes || "",
     activities: exportActivitiesForRecord(record, acts),
     follow_ups: exportTasksForRecord(record, tasks),
-    tags: (record.tags || []).join(", "),
+    tags: visibleTags(record.tags).join(", "),
     last_activity: record.lastContact || "",
   }));
 };
@@ -1462,6 +1495,7 @@ function App(){
   const [efFmt,setEfFmt] = useState("{first}.{last}");
   const [importRows,setImportRows] = useState(null);
   const [importMode,setImportMode] = useState("merge");
+  const [selectedImportBatchId,setSelectedImportBatchId] = useState("");
   const [showTasksModal,setShowTasksModal] = useState(false);
   const [showUnmatchedTasksModal,setShowUnmatchedTasksModal] = useState(false);
   const [taskSearch,setTaskSearch] = useState("");
@@ -1683,7 +1717,12 @@ const taskActivityFromTask = task => ({
     if(newAct.type !== activityDraft.type || newAct.note !== activityDraft.note || newAct.date !== activityDraft.date || newAct.created_by !== normalizeOwner(activityDraft.created_by)) setNewAct({...activityDraft, created_by:normalizeOwner(activityDraft.created_by)});
   },[selected?.id, selected?.type, taskDrafts, activityDrafts]);
 
-  const all = [...mfrs,...vendors,...lost];
+  const all = useMemo(() => [...mfrs,...vendors,...lost], [mfrs,vendors,lost]);
+  const importBatches = useMemo(() => buildImportBatchSummaries(all), [all]);
+  const selectedImportBatch = importBatches.find(batch => batch.id===selectedImportBatchId) || importBatches[0] || null;
+  useEffect(()=>{
+    setSelectedImportBatchId(current => importBatches.some(batch => batch.id===current) ? current : (importBatches[0]?.id || ""));
+  },[importBatches]);
   const detailActs = selected ? acts.filter(a=>a.contactId===selected.id) : [];
   const resolveTaskRecord = useCallback(task => {
     if(!task) return null;
@@ -1828,7 +1867,7 @@ const taskActivityFromTask = task => ({
       record.industry,
       richNotesPlainText(record.notes),
       record.end_product,
-      ...(record.tags || []),
+      ...visibleTags(record.tags),
       ...(record.contacts || []).flatMap(contact => [contact.name, contact.title, contact.linkedin]),
       activitySearchByRecord.get(recordKey(record)),
       taskSearchByRecord.get(recordKey(record)),
@@ -1848,7 +1887,7 @@ const taskActivityFromTask = task => ({
       record.stage,
       record.lostReason,
       record.notes,
-      ...(record.tags || []),
+      ...visibleTags(record.tags),
       activitySearchByRecord.get(recordKey(record)),
       taskSearchByRecord.get(recordKey(record)),
     ].filter(Boolean).join(" ").toLowerCase();
@@ -2167,6 +2206,16 @@ const taskActivityFromTask = task => ({
     await deleteRecords([rec]);
   };
 
+  const deleteImportBatch = async batchId => {
+    const normalizedBatchId = String(batchId || "").trim();
+    if(!normalizedBatchId) return;
+    const batchTag = `${IMPORT_BATCH_NEW_PREFIX}${normalizedBatchId}`;
+    const records = all.filter(record => uniqueTags(record.tags).includes(batchTag));
+    if(!records.length) return toast2("No tracked companies are left in that batch.");
+    if(!window.confirm(`Delete ${records.length} record${records.length===1?"":"s"} from import batch ${formatImportBatchId(normalizedBatchId)}?`)) return;
+    await deleteRecords(records);
+  };
+
   const deleteManufacturersByIds = async manufacturerIds => {
     const uniqueIds = [...new Set((manufacturerIds || []).filter(Boolean))];
     if(!uniqueIds.length) return;
@@ -2287,8 +2336,8 @@ const taskActivityFromTask = task => ({
 
   const openForm = (type=tab, rec=null) => {
     setFormType(type);
-      setForm(rec ? {...rec, tags:(rec.tags||[]).join(", "), contactsText:(rec.contacts||[]).map(c=>[c.name,c.title,c.linkedin].filter(Boolean).join(", ")).join("\n")} : {
-      company:"",name:"",title:"",email:"",phone:"",industry:"",region:"",stage:"Prospect",lostReason:"",value:"",tags:"",notes:"",contactsText:""
+      setForm(rec ? {...rec, tags:visibleTags(rec.tags).join(", "), internalTags:internalTags(rec.tags), contactsText:(rec.contacts||[]).map(c=>[c.name,c.title,c.linkedin].filter(Boolean).join(", ")).join("\n")} : {
+      company:"",name:"",title:"",email:"",phone:"",industry:"",region:"",stage:"Prospect",lostReason:"",value:"",tags:"",notes:"",contactsText:"",internalTags:[]
     });
     setShowForm(true);
   };
@@ -2296,7 +2345,7 @@ const taskActivityFromTask = task => ({
   const saveForm = async () => {
     setSaving(true);
     try{
-      const tags=(form.tags||"").split(",").map(x=>x.trim()).filter(Boolean);
+      const tags=uniqueTags([...(form.internalTags || []), ...(form.tags||"").split(",").map(x=>x.trim()).filter(Boolean)]);
       if(formType==="manufacturer"){
         const row={company:form.company,stage:form.stage||"Prospect",industry:form.industry||"",signals:form.notes||"",tags,last_contact:today()};
         let id=form.id;
@@ -2332,6 +2381,10 @@ const taskActivityFromTask = task => ({
     setSaving(true);
     try{
       const incomingByKey = buildMergedImportRowsByKey(importRows);
+      const shouldTrackImportBatch = importMode==="merge";
+      const importBatchId = shouldTrackImportBatch ? makeImportBatchId() : "";
+      const importBatchTag = importBatchId ? `${IMPORT_BATCH_NEW_PREFIX}${importBatchId}` : "";
+      let createdCount = 0;
 
       const existingByKey = new Map();
       for(const record of mfrs){
@@ -2346,17 +2399,19 @@ const taskActivityFromTask = task => ({
       for(const [key, row] of incomingByKey.entries()){
         const importStage = normalizeStage(row.stage);
         const importContacts = row.importedContacts || [];
-        const payload={
+        const basePayload={
           company: row.company,
           stage: importStage,
           industry: row.industry || "",
           end_product: row.end_product || "",
           signals: row.notes,
-          tags: row.tags || [],
           last_contact: normalizeImportDate(row.date) || today()
         };
         const existingMatches = existingByKey.get(key) || [];
         const keepRecord = existingMatches.find(record => String(record.company || "").trim().toLowerCase()===String(row.company || "").trim().toLowerCase()) || existingMatches[0];
+        const payload = keepRecord
+          ? {...basePayload, tags: uniqueTags([...(keepRecord.tags || []), ...(row.tags || [])])}
+          : {...basePayload, tags: uniqueTags([...(row.tags || []), ...(importBatchTag ? [importBatchTag] : [])])};
 
         if(keepRecord){
           ensureOk(await sb.from("manufacturers").update(payload).eq("id",keepRecord.id));
@@ -2365,6 +2420,7 @@ const taskActivityFromTask = task => ({
         } else {
           const insertedResult = await sb.from("manufacturers").insert(payload).select("id").single();
           ensureOk(insertedResult);
+          createdCount += 1;
           if(insertedResult.data?.id && importContacts.length) await replaceManufacturerContacts(insertedResult.data.id, importContacts);
         }
       }
@@ -2378,7 +2434,13 @@ const taskActivityFromTask = task => ({
       await deleteManufacturersByIds(manufacturerIdsToDelete);
       setImportRows(null);
       await hydrate();
-      toast2(importMode==="replace" ? "Import complete. Manufacturers synced to CSV." : "Import complete");
+      if(importMode==="replace"){
+        toast2("Import complete. Manufacturers synced to CSV.");
+      }else if(createdCount){
+        toast2(`Import complete. Batch ${formatImportBatchId(importBatchId)} is tracking ${createdCount} new compan${createdCount===1?"y":"ies"}.`);
+      }else{
+        toast2("Import complete. Existing companies were updated.");
+      }
     }catch(err){
       toast2("Import error: "+err.message);
     }
@@ -2811,6 +2873,13 @@ const taskActivityFromTask = task => ({
               {tab==="manufacturer" && !!selectedVisibleRecords.length && <div className="mono" style={{fontSize:10,color:"#8ea0bd"}}>Industry dropdown updates selected</div>}
               <button onClick={()=>downloadCsv(exportRecordRows(exportRecords, tab, acts, tasks), exportFileName)} disabled={!exportRecords.length} style={{padding:"8px 14px",border:"1px solid #1e3a8a",borderRadius:4,background:exportRecords.length?"#eff6ff":"#f8fafc",color:exportRecords.length?"#1e3a8a":"#94a3b8",cursor:exportRecords.length?"pointer":"not-allowed"}}>{selectedVisibleRecords.length ? `Export Selected (${selectedVisibleRecords.length})` : "Export CSV"}</button>
               {tab==="manufacturer" && <label style={{padding:"8px 14px",border:"1px solid #22c55e",borderRadius:4,background:"#f0fdf4",color:"#15803d",cursor:"pointer"}}>Import CSV<input type="file" accept=".csv" style={{display:"none"}} onChange={e=>e.target.files?.[0]&&handleImport(e.target.files[0])} /></label>}
+              {tab==="manufacturer" && !!importBatches.length && <>
+                <select className="field" style={{maxWidth:220}} value={selectedImportBatch?.id || ""} onChange={e=>setSelectedImportBatchId(e.target.value)}>
+                  {importBatches.map(batch => <option key={batch.id} value={batch.id}>{batch.label} ({batch.count})</option>)}
+                </select>
+                <button onClick={()=>deleteImportBatch(selectedImportBatch?.id)} disabled={!selectedImportBatch} style={{padding:"8px 14px",border:"1px solid #ef4444",borderRadius:4,background:selectedImportBatch?"#fef2f2":"#f8fafc",color:selectedImportBatch?"#ef4444":"#94a3b8",cursor:selectedImportBatch?"pointer":"not-allowed"}}>{selectedImportBatch ? `Delete Batch (${selectedImportBatch.count})` : "Delete Batch"}</button>
+                <div className="mono" style={{fontSize:10,color:"#8ea0bd"}}>Tracked imports only delete new companies from that upload</div>
+              </>}
             </div>
 
             <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:6,overflow:"hidden"}}>
@@ -2833,7 +2902,7 @@ const taskActivityFromTask = task => ({
                       <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9",fontSize:12,color:"#64748b"}}>{tab==="manufacturer"?((rec.contacts||[]).map(c=>c.name).filter(Boolean).slice(0,2).join(", ")||"—"):(rec.title||"—")}</td>
                       <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9"}}>{tab==="lost"?<Tag label={rec.lostReason||"—"} color="#ef4444" />:<Pill label={rec.stage||"—"} color={STAGE_COLORS[rec.stage]||"#64748b"} />}</td>
                       <td className="mono" style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9",fontSize:11,color:rec.lastContact?"#64748b":"#cbd5e1"}}>{rec.lastContact||"—"}</td>
-                      <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9"}}><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{(rec.tags||[]).map(t=><Tag key={t} label={t} color={TYPE_CFG[rec.type].color} />)}</div></td>
+                      <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9"}}><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{visibleTags(rec.tags).map(t=><Tag key={t} label={t} color={TYPE_CFG[rec.type].color} />)}</div></td>
                     </tr>
                   ))}
                 </tbody>
@@ -2874,7 +2943,7 @@ const taskActivityFromTask = task => ({
                     <input className="field mono" style={{width:180,padding:"5px 10px",height:30,fontSize:12,background:"#fffaf5",color:"#f97316"}} value={selected.industry||""} placeholder={OTHER_INDUSTRY_LABEL} onChange={e=>setSelected(cur=>({...cur,industry:e.target.value}))} onBlur={e=>saveVendorField("industry", e.target.value)} />
                   </>}
                 </div>
-                <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{(selected.tags||[]).map(t=><Tag key={t} label={t} color={TYPE_CFG[selected.type].color} />)}</div>
+                <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{visibleTags(selected.tags).map(t=><Tag key={t} label={t} color={TYPE_CFG[selected.type].color} />)}</div>
               </div>
               <div style={{display:"flex",gap:8}}>
                 <button onClick={()=>deleteRecord(selected)} style={{padding:"10px 18px",border:"none",borderRadius:4,background:"#ef4444",color:"#fff",fontWeight:800,cursor:"pointer",fontSize:12,letterSpacing:".05em"}}>DELETE</button>
