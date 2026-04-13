@@ -8,6 +8,7 @@
 <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.23.5/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.3/dist/umd/supabase.min.js"></script>
+<script src="./crm-config.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Barlow+Condensed:wght@400;500;600;700;800&family=Barlow:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
@@ -35,10 +36,18 @@
 <div id="root"></div>
 <script type="text/babel">
 const { createClient } = supabase.supabase || supabase;
-const sb = createClient(
-  "https://dqqitnvyuebqfvgplcba.supabase.co",
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxcWl0bnZ5dWVicWZ2Z3BsY2JhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxNDcwNDUsImV4cCI6MjA4ODcyMzA0NX0.15H-Ry876rY-Hl4vPzY5DZ95th_qqjDAqqVKlTSMeXY"
-);
+const CRM_CONFIG = window.CRM_CONFIG || {};
+const bootFailure = message => {
+  const root = document.getElementById("root");
+  if(root){
+    root.innerHTML = `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:#f1f5f9;color:#0f172a;font-family:Barlow,sans-serif"><div style="max-width:560px;background:#fff;border:1px solid #dbe2ea;border-radius:8px;padding:20px 22px;box-shadow:0 8px 30px rgba(15,23,42,.08)"><div style="font-size:11px;letter-spacing:.08em;color:#64748b;margin-bottom:8px">CRM CONFIG ERROR</div><div style="font-size:14px;line-height:1.6">${message}</div></div></div>`;
+  }
+  throw new Error(message);
+};
+if(!CRM_CONFIG.supabaseUrl || !CRM_CONFIG.supabaseAnonKey){
+  bootFailure("Missing Supabase URL or anon key in crm-config.js.");
+}
+const sb = createClient(CRM_CONFIG.supabaseUrl, CRM_CONFIG.supabaseAnonKey);
 
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
 const STAGES = ["Unqualified","Prospect","Outreach","Not Interested","Qualified","Proposal","Negotiation","Closed Won","Closed Lost"];
@@ -1473,6 +1482,18 @@ const Pill = ({ label, color }) => <span className="mono" style={pillStyle(color
 const Tag = ({ label, color }) => <span className="mono" style={tagStyle(color || "#1e3a8a")}>{label}</span>;
 const OwnerTag = ({ owner }) => <Tag label={displayOwner(owner)} color={PERSON_COLORS[displayOwner(owner)] || "#64748b"} />;
 
+const FINDER_DEFAULT_PRESETS = [
+  {id:"food_beverage",label:"Food & Beverage"},
+  {id:"concrete",label:"Concrete"},
+  {id:"metal_refineries",label:"Metal Refineries"},
+  {id:"recycling",label:"Recycling"},
+  {id:"mining_aggregate",label:"Mining / Aggregate"},
+  {id:"asphalt_plants",label:"Asphalt Plants"},
+  {id:"building_products",label:"Building Products"},
+  {id:"others",label:"Others"}
+];
+const FINDER_DEFAULT_INDUSTRIES = FINDER_DEFAULT_PRESETS.map(p=>p.id);
+
 function App(){
   const [mfrs,setMfrs] = useState([]);
   const [vendors,setVendors] = useState([]);
@@ -1537,6 +1558,81 @@ function App(){
   const [upcomingTaskOwnerFilter,setUpcomingTaskOwnerFilter] = useState("All");
   const [allTasksOwnerFilter,setAllTasksOwnerFilter] = useState("All");
   const [unmatchedLegacyTasks,setUnmatchedLegacyTasks] = useState(()=>safeJson(localStorage.getItem(LEGACY_TASKS_KEY), []).map(task => normalizeLegacyTask(task, [], true)));
+
+  const [finderState,setFinderState] = useState(null);
+  const [finderError,setFinderError] = useState("");
+  const [finderLogFilter,setFinderLogFilter] = useState("");
+  const [finderRowSearch,setFinderRowSearch] = useState("");
+  const [finderExpandedRow,setFinderExpandedRow] = useState(null);
+  const [finderIndustries,setFinderIndustries] = useState(FINDER_DEFAULT_INDUSTRIES);
+  const [finderCitiesText,setFinderCitiesText] = useState(null);
+  const [finderSettingsSaving,setFinderSettingsSaving] = useState(false);
+  const finderLogRef = useRef(null);
+  const finderFollowLogs = useRef(true);
+  const finderSyncedFromDashboard = useRef(false);
+  const FINDER_URL = CRM_CONFIG.finderDashboardUrl || "http://localhost:8780";
+
+  useEffect(()=>{
+    if(view!=="finder") return;
+    let cancelled=false;
+    const poll=async()=>{
+      try{
+        const r=await fetch(FINDER_URL+"/api/state",{cache:"no-store"});
+        if(!r.ok) throw new Error("Dashboard unreachable");
+        const data=await r.json();
+        if(!cancelled){
+          setFinderState(data);
+          setFinderError("");
+          if(!finderSyncedFromDashboard.current){
+            finderSyncedFromDashboard.current=true;
+            setFinderIndustries(data.settings?.industries||FINDER_DEFAULT_INDUSTRIES);
+            setFinderCitiesText(data.settings?.citiesText||"");
+          }
+        }
+      }catch(e){
+        if(!cancelled) setFinderError(e.message||"Cannot reach lead finder dashboard");
+      }
+    };
+    poll();
+    const id=setInterval(poll,3000);
+    return()=>{cancelled=true;clearInterval(id); finderSyncedFromDashboard.current=false;};
+  },[view]);
+
+  useEffect(()=>{
+    if(finderLogRef.current && finderFollowLogs.current){
+      finderLogRef.current.scrollTop=finderLogRef.current.scrollHeight;
+    }
+  },[finderState?.logs]);
+
+  const finderAction=async(endpoint)=>{
+    try{
+      const r=await fetch(FINDER_URL+endpoint,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+      const data=await r.json();
+      if(!r.ok) throw new Error(data.error||"Request failed");
+      setFinderState(data);
+      toast2(endpoint.includes("start")?"Run started":endpoint.includes("stop")?"Run stopped":"Results cleared");
+    }catch(e){toast2(e.message);}
+  };
+
+  const saveFinderSettings=async()=>{
+    setFinderSettingsSaving(true);
+    try{
+      const payload={...(finderState?.settings||{}),industries:finderIndustries,citiesText:finderCitiesText};
+      const r=await fetch(FINDER_URL+"/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+      const data=await r.json();
+      if(!r.ok) throw new Error(data.error||"Save failed");
+      setFinderState(data);
+      toast2("Settings saved.");
+    }catch(e){toast2(e.message);}
+    setFinderSettingsSaving(false);
+  };
+
+  const toggleFinderIndustry=id=>{
+    setFinderIndustries(prev=>{
+      const cur=prev||[];
+      return cur.includes(id)?cur.filter(x=>x!==id):[...cur,id];
+    });
+  };
 
   const toast2 = msg => { setToast(msg); setTimeout(()=>setToast(""),3000); };
   const queueLatestContactSave = useCallback((saveKey, raw, worker) => {
@@ -2765,7 +2861,7 @@ const taskActivityFromTask = task => ({
       <header style={{height:58,padding:"0 28px",display:"flex",alignItems:"center",justifyContent:"space-between",background:"#fff",borderBottom:"3px solid #ef4444",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
         <div className="condensed" style={{fontSize:22,fontWeight:800,letterSpacing:".04em"}}><span style={{color:"#ef4444"}}>ED</span> <span style={{color:"#1e3a8a"}}>INDUSTRIAL</span><span style={{fontSize:14,color:"#94a3b8",marginLeft:8,letterSpacing:".12em"}}>CRM</span></div>
         <div style={{display:"flex",gap:6}}>
-          {["dashboard","contacts"].map(v=><button key={v} onClick={()=>setView(v)} style={{padding:"7px 16px",border:"none",borderRadius:3,background:view===v?"#1e3a8a":"transparent",color:view===v?"#fff":"#64748b",cursor:"pointer"}}>{v==="dashboard"?"Dashboard":"Contacts"}</button>)}
+          {["dashboard","contacts","finder"].map(v=><button key={v} onClick={()=>setView(v)} style={{padding:"7px 16px",border:"none",borderRadius:3,background:view===v?"#1e3a8a":"transparent",color:view===v?"#fff":"#64748b",cursor:"pointer"}}>{v==="dashboard"?"Dashboard":v==="contacts"?"Contacts":"Lead Finder"}</button>)}
         </div>
         <button onClick={()=>openForm(tab)} style={{padding:"8px 18px",border:"none",borderRadius:3,background:"#ef4444",color:"#fff",fontWeight:700,cursor:"pointer"}}>+ Add Company</button>
       </header>
@@ -3089,6 +3185,194 @@ const taskActivityFromTask = task => ({
             </div>
           </div>
         )}
+
+        {view==="finder" && (()=>{
+          const fs=finderState;
+          const st=fs?.status||{};
+          const res=fs?.results||{};
+          const logs=fs?.logs||[];
+          const rows=res.rows||[];
+          const headers=res.headers||[];
+          const prog=res.progress||{};
+          const sc=res.stageCounts||{};
+          const presets=fs?.presets||FINDER_DEFAULT_PRESETS;
+          const nearbyCities=fs?.nearbyCities||[];
+          const activeCities=(finderCitiesText||"").split(/\n/).map(c=>c.trim()).filter(Boolean);
+          const filteredLogs=finderLogFilter?logs.filter(l=>l.toLowerCase().includes(finderLogFilter.toLowerCase())):logs;
+          const filteredRows=finderRowSearch?rows.filter(r=>Object.values(r).some(v=>String(v).toLowerCase().includes(finderRowSearch.toLowerCase()))):rows;
+          const renderInline=v=>String(v||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/(https?:\/\/[^\s|<>"']+)/g,'<a href="$1" target="_blank" rel="noreferrer" style="color:#1e40af">$1</a>').replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>").replace(/\n/g,"<br>");
+          const settingsDirty = fs && (
+            JSON.stringify(finderIndustries||[]) !== JSON.stringify(fs.settings?.industries||[]) ||
+            (finderCitiesText||"") !== (fs.settings?.citiesText||"")
+          );
+          return (
+          <div className="fade" style={{display:"grid",gap:14}}>
+            {finderError && <div style={{padding:"14px 18px",background:"#fef2f2",border:"1px solid #fecaca",borderRadius:6,color:"#991b1b",fontSize:13}}>{finderError} — make sure the dashboard server is running at <span className="mono">{FINDER_URL}</span></div>}
+
+            {/* Status + Controls */}
+            <div style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,padding:"16px 20px",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                <div>
+                  <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase"}}>Lead Finder</div>
+                  <div style={{fontSize:13,color:"#64748b",marginTop:2}}>{st.summary||"Connecting to dashboard..."}</div>
+                </div>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <span className="mono" style={{fontSize:11,padding:"4px 10px",borderRadius:3,fontWeight:700,letterSpacing:".06em",background:st.cycleRunning?"#dcfce7":st.running?"#fef9c3":"#f1f5f9",color:st.cycleRunning?"#166534":st.running?"#854d0e":"#64748b"}}>{st.cycleRunning?"RUNNING":st.running?"WAITING":"IDLE"}</span>
+                  <button onClick={()=>finderAction("/api/start")} disabled={st.running} style={{padding:"7px 14px",border:"none",borderRadius:4,background:st.running?"#e2e8f0":"#22c55e",color:st.running?"#94a3b8":"#fff",fontWeight:700,cursor:st.running?"default":"pointer",fontSize:12}}>Start</button>
+                  <button onClick={()=>finderAction("/api/stop")} disabled={!st.running} style={{padding:"7px 14px",border:"none",borderRadius:4,background:!st.running?"#e2e8f0":"#ef4444",color:!st.running?"#94a3b8":"#fff",fontWeight:700,cursor:!st.running?"default":"pointer",fontSize:12}}>Stop</button>
+                  <button onClick={()=>finderAction("/api/clear")} disabled={st.running} style={{padding:"7px 14px",border:"1px solid #e2e8f0",borderRadius:4,background:"#f1f5f9",color:st.running?"#cbd5e1":"#64748b",fontWeight:600,cursor:st.running?"default":"pointer",fontSize:12}}>Clear</button>
+                </div>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(100px,1fr))",gap:10}}>
+                {[
+                  {label:"Rows",value:res.total||0,color:"#1e3a8a"},
+                  {label:"Prospects",value:sc.ready||0,color:"#22c55e"},
+                  {label:"Checked",value:prog.checked||0,color:"#64748b"},
+                  {label:"Skipped",value:prog.skipped||0,color:"#ef4444"},
+                  {label:"Phase",value:st.currentPhase||"—",color:"#f97316",text:true},
+                  {label:"Company",value:st.currentCompany||"—",color:"#1e40af",text:true},
+                  {label:"City",value:st.currentCity||"—",color:"#64748b",text:true},
+                ].map(s=>(
+                  <div key={s.label} style={{padding:"10px 12px",background:"#f8fafc",borderRadius:5,border:"1px solid #e8eef6"}}>
+                    <div className="mono" style={{fontSize:10,color:"#94a3b8",letterSpacing:".1em",textTransform:"uppercase"}}>{s.label}</div>
+                    <div className={s.text?"":"mono"} style={{fontSize:s.text?12:18,fontWeight:s.text?500:700,color:s.color,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.value}</div>
+                  </div>
+                ))}
+              </div>
+              {st.currentQuery && <div className="mono" style={{marginTop:10,fontSize:11,color:"#94a3b8",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>Query: {st.currentQuery}</div>}
+              {(st.startedAt||st.finishedAt) && <div className="mono" style={{marginTop:4,fontSize:10,color:"#cbd5e1"}}>{st.startedAt?"Started: "+new Date(st.startedAt).toLocaleString():""}{st.finishedAt?" · Finished: "+new Date(st.finishedAt).toLocaleString():""}</div>}
+            </div>
+
+            {/* Industries + Cities side by side */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+
+              {/* Industry Picker */}
+              <div style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+                <div style={{padding:"12px 18px",borderBottom:"1px solid #e8eef6",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase"}}>Industries <span style={{color:"#cbd5e1"}}>({(finderIndustries||[]).length} selected)</span></div>
+                  <div style={{display:"flex",gap:6}}>
+                    <button onClick={()=>setFinderIndustries(presets.map(p=>p.id))} style={{fontSize:11,padding:"3px 8px",border:"1px solid #e2e8f0",borderRadius:3,background:"#f8fafc",color:"#64748b",cursor:"pointer"}}>All</button>
+                    <button onClick={()=>setFinderIndustries([])} style={{fontSize:11,padding:"3px 8px",border:"1px solid #e2e8f0",borderRadius:3,background:"#f8fafc",color:"#64748b",cursor:"pointer"}}>None</button>
+                  </div>
+                </div>
+                <div style={{padding:"14px 18px",display:"flex",flexDirection:"column",gap:8}}>
+                  {presets.length?presets.map(p=>{
+                    const on=(finderIndustries||[]).includes(p.id);
+                    return (
+                      <label key={p.id} style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",padding:"8px 12px",borderRadius:5,border:"1px solid "+(on?"#1e3a8a":"#e8eef6"),background:on?"#eef4ff":"#f8fafc",transition:"all .12s"}}>
+                        <div onClick={()=>toggleFinderIndustry(p.id)} style={{width:18,height:18,borderRadius:3,border:"2px solid "+(on?"#1e3a8a":"#cbd5e1"),background:on?"#1e3a8a":"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,cursor:"pointer"}}>
+                          {on && <span style={{color:"#fff",fontSize:12,fontWeight:900,lineHeight:1}}>✓</span>}
+                        </div>
+                        <span onClick={()=>toggleFinderIndustry(p.id)} style={{fontSize:13,color:on?"#1e3a8a":"#475569",fontWeight:on?600:400}}>{p.label}</span>
+                      </label>
+                    );
+                  }):<div style={{color:"#94a3b8",fontSize:12}}>Connect to dashboard to load industries.</div>}
+                </div>
+              </div>
+
+              {/* Cities */}
+              <div style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+                <div style={{padding:"12px 18px",borderBottom:"1px solid #e8eef6",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase"}}>Cities <span style={{color:"#cbd5e1"}}>({activeCities.length} active)</span></div>
+                  <div style={{display:"flex",gap:6}}>
+                    <button onClick={()=>setFinderCitiesText(nearbyCities.join("\n"))} style={{fontSize:11,padding:"3px 8px",border:"1px solid #e2e8f0",borderRadius:3,background:"#f8fafc",color:"#64748b",cursor:"pointer"}}>All nearby</button>
+                    <button onClick={()=>setFinderCitiesText("")} style={{fontSize:11,padding:"3px 8px",border:"1px solid #e2e8f0",borderRadius:3,background:"#f8fafc",color:"#64748b",cursor:"pointer"}}>Clear</button>
+                  </div>
+                </div>
+                <div style={{padding:"14px 18px",display:"flex",flexDirection:"column",gap:10}}>
+                  <textarea
+                    value={finderCitiesText||""}
+                    onChange={e=>setFinderCitiesText(e.target.value)}
+                    placeholder={"Milton\nMississauga\nBrampton\n..."}
+                    style={{width:"100%",minHeight:180,padding:"10px 12px",border:"1px solid #d8e2ef",borderRadius:5,fontSize:13,lineHeight:1.7,fontFamily:"'IBM Plex Mono',monospace",resize:"vertical",color:"#334155",background:"#f8fafc"}}
+                  />
+                  {nearbyCities.length>0 && <div>
+                    <div className="mono" style={{fontSize:10,color:"#94a3b8",letterSpacing:".08em",textTransform:"uppercase",marginBottom:6}}>Quick add nearby cities</div>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                      {nearbyCities.slice(0,24).map(city=>{
+                        const active=activeCities.includes(city);
+                        return <button key={city} onClick={()=>{
+                          if(active){setFinderCitiesText(prev=>(prev||"").split("\n").map(c=>c.trim()).filter(c=>c&&c!==city).join("\n"));}
+                          else{setFinderCitiesText(prev=>(prev||"").trim()?prev.trim()+"\n"+city:city);}
+                        }} style={{fontSize:11,padding:"3px 9px",borderRadius:3,border:"1px solid "+(active?"#1e3a8a":"#e2e8f0"),background:active?"#eef4ff":"#f8fafc",color:active?"#1e3a8a":"#64748b",cursor:"pointer",fontWeight:active?600:400}}>{city}</button>;
+                      })}
+                    </div>
+                  </div>}
+                </div>
+              </div>
+            </div>
+
+            {/* Save settings button */}
+            {(settingsDirty||finderSettingsSaving) && (
+              <div style={{display:"flex",justifyContent:"flex-end"}}>
+                <button onClick={saveFinderSettings} disabled={finderSettingsSaving} style={{padding:"9px 22px",border:"none",borderRadius:4,background:finderSettingsSaving?"#e2e8f0":"#1e3a8a",color:finderSettingsSaving?"#94a3b8":"#fff",fontWeight:700,cursor:finderSettingsSaving?"default":"pointer",fontSize:13}}>
+                  {finderSettingsSaving?"Saving...":"Save Settings"}
+                </button>
+              </div>
+            )}
+
+            <div style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+              <div style={{padding:"12px 18px",borderBottom:"1px solid #e8eef6",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase"}}>Live Logs <span style={{color:"#cbd5e1"}}>({filteredLogs.length})</span></div>
+                <input className="field" style={{width:220,padding:"5px 10px",fontSize:12}} placeholder="Filter logs..." value={finderLogFilter} onChange={e=>setFinderLogFilter(e.target.value)} />
+              </div>
+              <pre ref={finderLogRef} onScroll={()=>{if(finderLogRef.current){const el=finderLogRef.current;finderFollowLogs.current=el.scrollHeight-el.scrollTop-el.clientHeight<=30;}}} style={{margin:0,padding:"12px 18px",maxHeight:320,overflow:"auto",fontSize:11,lineHeight:1.7,color:"#334155",background:"#0f172a",fontFamily:"'IBM Plex Mono',monospace",whiteSpace:"pre-wrap",wordBreak:"break-all"}}>
+                {filteredLogs.length?filteredLogs.map((line,i)=>{
+                  const isErr=line.startsWith("[err]");
+                  const isSkip=line.includes("Skipped:");
+                  const isAdd=line.includes("Added row")||line.includes("Updated row");
+                  const isCrm=line.includes("CRM sync:");
+                  const isSearch=line.startsWith("  Search:");
+                  const isEnrich=line.includes("Enriching ");
+                  const color=isErr?"#fca5a5":isSkip?"#fbbf24":isAdd?"#4ade80":isCrm?"#60a5fa":isSearch?"#a78bfa":isEnrich?"#38bdf8":"#94a3b8";
+                  return <div key={i} style={{color}}>{line}</div>;
+                }):<div style={{color:"#64748b"}}>No logs yet. Start a run to see live output.</div>}
+              </pre>
+            </div>
+
+            <div style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+              <div style={{padding:"12px 18px",borderBottom:"1px solid #e8eef6",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase"}}>Found Leads <span style={{color:"#cbd5e1"}}>({filteredRows.length})</span></div>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <input className="field" style={{width:220,padding:"5px 10px",fontSize:12}} placeholder="Search rows..." value={finderRowSearch} onChange={e=>setFinderRowSearch(e.target.value)} />
+                  {st.currentCsvUrl && <a href={FINDER_URL+st.currentCsvUrl} target="_blank" rel="noreferrer" style={{fontSize:11,color:"#1e40af",textDecoration:"none",fontWeight:600}}>CSV</a>}
+                </div>
+              </div>
+              <div style={{maxHeight:500,overflow:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                  <thead>
+                    <tr style={{background:"#f8fafc",position:"sticky",top:0,zIndex:1}}>
+                      <th className="mono" style={{padding:"10px 14px",fontSize:10,color:"#94a3b8",textAlign:"left",letterSpacing:".08em",borderBottom:"2px solid #e2e8f0",width:30}}>#</th>
+                      {headers.map(h=><th key={h} className="mono" style={{padding:"10px 14px",fontSize:10,color:"#94a3b8",textAlign:"left",letterSpacing:".08em",borderBottom:"2px solid #e2e8f0"}}>{h}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredRows.length?filteredRows.map((row,i)=>{
+                      const expanded=finderExpandedRow===i;
+                      return <React.Fragment key={i}>
+                        <tr className="row" onClick={()=>setFinderExpandedRow(expanded?null:i)} style={{background:expanded?"#f0f7ff":"transparent"}}>
+                          <td className="mono" style={{padding:"10px 14px",borderBottom:"1px solid #f1f5f9",color:"#cbd5e1",fontSize:10}}>{i+1}</td>
+                          {headers.map(h=><td key={h} style={{padding:"10px 14px",borderBottom:"1px solid #f1f5f9",maxWidth:h==="company"?200:h==="notes"||h==="contacts"?260:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:expanded?"normal":"nowrap",color:h==="company"?"#0f172a":"#475569",fontWeight:h==="company"?700:400}}>{row[h]||"—"}</td>)}
+                        </tr>
+                        {expanded && <tr><td colSpan={headers.length+1} style={{padding:0,borderBottom:"2px solid #1e3a8a"}}>
+                          <div style={{padding:"16px 20px",background:"#f8fbff",display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+                            {headers.filter(h=>h!=="company"&&h!=="stage").map(h=>(
+                              <div key={h} style={{gridColumn:(h==="notes"||h==="contacts")?"1 / -1":"auto"}}>
+                                <div className="mono" style={{fontSize:10,color:"#94a3b8",letterSpacing:".1em",textTransform:"uppercase",marginBottom:4}}>{h}</div>
+                                <div style={{fontSize:12,color:"#334155",lineHeight:1.7,whiteSpace:"pre-wrap",wordBreak:"break-word"}} dangerouslySetInnerHTML={{__html:renderInline(row[h]||"—")}} />
+                              </div>
+                            ))}
+                          </div>
+                        </td></tr>}
+                      </React.Fragment>;
+                    }):<tr><td colSpan={headers.length+1} style={{padding:"24px 14px",textAlign:"center",color:"#94a3b8"}}>{prog.checked?`No qualified rows yet. Checked ${prog.checked} candidates.`:"No rows yet. Start a run to find leads."}</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          );
+        })()}
       </main>
 
       {selected && (
