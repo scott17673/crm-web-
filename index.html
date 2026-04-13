@@ -3214,7 +3214,13 @@ const taskActivityFromTask = task => ({
           );
           return (
           <div className="fade" style={{display:"grid",gap:14}}>
-            {finderError && <div style={{padding:"14px 18px",background:"#fef2f2",border:"1px solid #fecaca",borderRadius:6,color:"#991b1b",fontSize:13}}>{finderError} — make sure the dashboard server is running at <span className="mono">{FINDER_URL}</span></div>}
+            {finderError && <div style={{padding:"12px 18px",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:6,display:"flex",alignItems:"center",gap:12}}>
+              <span style={{fontSize:18}}>🔌</span>
+              <div>
+                <div style={{fontSize:13,fontWeight:600,color:"#475569"}}>Dashboard not connected</div>
+                <div style={{fontSize:12,color:"#94a3b8",marginTop:2}}>Start the local dashboard server to enable live controls and logs. You can still configure industries and cities below.</div>
+              </div>
+            </div>}
 
             {/* Status + Controls */}
             <div style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,padding:"16px 20px",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
