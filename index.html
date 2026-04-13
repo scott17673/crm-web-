@@ -76,6 +76,7 @@ const PEOPLE = ["Scott","Jeff"];
 const DEFAULT_OWNER = PEOPLE[0];
 const INTERNAL_TAG_PREFIX = "__";
 const IMPORT_BATCH_NEW_PREFIX = "__import_batch_new:";
+const FINDER_SKIP_TAG = "__finder_skip";
 const ACTIVITY_TYPES = ["Call","Email","Meeting","Note"];
 const ACTIVITY_COLORS = {Call:"#1e3a8a",Email:"#ef4444",Meeting:"#16a34a",Note:"#f97316",All:"#475569"};
 const PERSON_COLORS = {Scott:"#1e3a8a",Jeff:"#16a34a"};
@@ -1612,13 +1613,33 @@ function App(){
   },[finderState?.logs]);
 
   const finderAction=async(endpoint)=>{
+    // Try local dashboard first; fall back to Supabase command queue
     try{
       const r=await fetch(FINDER_URL+endpoint,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
       const data=await r.json();
       if(!r.ok) throw new Error(data.error||"Request failed");
       setFinderState(data);
       toast2(endpoint.includes("start")?"Run started":endpoint.includes("stop")?"Run stopped":"Results cleared");
-    }catch(e){toast2(e.message);}
+      return;
+    }catch(localErr){
+      // Local unreachable — try Supabase command queue
+    }
+    if(endpoint.includes("clear")) { toast2("Clear only works when the local dashboard is running."); return; }
+    try{
+      const command=endpoint.includes("stop")?"stop":"start";
+      const payload={
+        command,
+        status:"pending",
+        settings: command==="start"
+          ? {industries: finderIndustries, citiesText: finderCitiesText}
+          : null
+      };
+      const {error}=await sb.from("finder_commands").insert([payload]);
+      if(error) throw error;
+      toast2(command==="start"
+        ? "Start command sent — finder will begin on your local machine."
+        : "Stop command sent — finder will stop on your local machine.");
+    }catch(e){ toast2("Command error: "+e.message); }
   };
 
   const saveFinderSettings=async()=>{
@@ -2081,7 +2102,7 @@ const taskActivityFromTask = task => ({
   },[activitySearchByRecord, taskSearchByRecord]);
   const filteredMfrs = useMemo(()=>{
     const q=search.trim().toLowerCase();
-    const base=mfrs.filter(m=>matchesManufacturerSearch(m, q)&&(stageF==="All"||m.stage===stageF)&&matchesIndustryFilter(m.industry, indF)&&matchesActivityDate(m.lastContact, activityDate, activityMode));
+    const base=mfrs.filter(m=>!m.tags?.includes(FINDER_SKIP_TAG)&&matchesManufacturerSearch(m, q)&&(stageF==="All"||m.stage===stageF)&&matchesIndustryFilter(m.industry, indF)&&matchesActivityDate(m.lastContact, activityDate, activityMode));
     return sortRecordsByActivity(base, sortBy);
   },[mfrs,search,stageF,indF,sortBy,activityDate,activityMode,matchesManufacturerSearch]);
   const filteredOthers = useMemo(()=>{
@@ -2119,6 +2140,9 @@ const taskActivityFromTask = task => ({
     setSelected(cur => cur && cur.id===target.id && cur.type==="manufacturer" ? {...cur,...patch} : cur);
     setMfrs(list => list.map(m => m.id===target.id ? {...m,...patch} : m));
     if(!quiet) toast2("Saved");
+    if(field==="stage" && (value==="Not Interested"||value==="Unqualified"||value==="Closed Lost")){
+      await addFinderSkipTag({...target, ...patch});
+    }
     return true;
   };
 
@@ -2375,6 +2399,16 @@ const taskActivityFromTask = task => ({
     toast2("Logged");
   };
 
+  const addFinderSkipTag = async (record) => {
+    if(record.type!=="manufacturer") return;
+    const tags = Array.isArray(record.tags) ? record.tags : [];
+    if(tags.includes(FINDER_SKIP_TAG)) return;
+    const newTags = [...tags, FINDER_SKIP_TAG];
+    await sb.from("manufacturers").update({tags: newTags}).eq("id", record.id);
+    setMfrs(list => list.map(m => m.id===record.id ? {...m, tags: newTags} : m));
+    setSelected(cur => cur && cur.id===record.id ? {...cur, tags: newTags} : cur);
+  };
+
   const deleteRecords = async records => {
     if(!records.length) return;
     setSaving(true);
@@ -2383,14 +2417,17 @@ const taskActivityFromTask = task => ({
         const { error } = await query;
         if(error) throw error;
       };
-      const manufacturerIds = records.filter(r=>r.type==="manufacturer").map(r=>r.id);
+      // Soft-delete manufacturers — tag with __finder_skip so the finder never re-imports them
+      const manufacturerRecords = records.filter(r=>r.type==="manufacturer");
       const vendorIds = records.filter(r=>r.type==="vendor").map(r=>r.id);
       const lostIds = records.filter(r=>r.type==="lost").map(r=>r.id);
 
-      if(manufacturerIds.length){
-        await run(sb.from("manufacturer_contacts").delete().in("manufacturer_id", manufacturerIds));
-        await run(sb.from("activities").delete().eq("contact_type","manufacturer").in("contact_id", manufacturerIds));
-        await run(sb.from("manufacturers").delete().in("id", manufacturerIds));
+      if(manufacturerRecords.length){
+        for(const mfr of manufacturerRecords){
+          const tags = Array.isArray(mfr.tags) ? mfr.tags : [];
+          const newTags = tags.includes(FINDER_SKIP_TAG) ? tags : [...tags, FINDER_SKIP_TAG];
+          await run(sb.from("manufacturers").update({tags: newTags, stage: "Closed Lost"}).eq("id", mfr.id));
+        }
       }
       if(vendorIds.length){
         await run(sb.from("activities").delete().eq("contact_type","vendor").in("contact_id", vendorIds));
@@ -2406,7 +2443,7 @@ const taskActivityFromTask = task => ({
       setTasks(list => list.filter(task => !records.some(rec => taskMatchesRecord(task, rec))));
       removeDraftsForRecords(records);
       await hydrate();
-      toast2(records.length===1 ? "Deleted" : `Deleted ${records.length} records`);
+      toast2(records.length===1 ? "Removed" : `Removed ${records.length} records`);
     }catch(err){
       toast2("Delete error: "+err.message);
     }
@@ -3214,11 +3251,11 @@ const taskActivityFromTask = task => ({
           );
           return (
           <div className="fade" style={{display:"grid",gap:14}}>
-            {finderError && <div style={{padding:"12px 18px",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:6,display:"flex",alignItems:"center",gap:12}}>
-              <span style={{fontSize:18}}>🔌</span>
+            {finderError && <div style={{padding:"12px 18px",background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:6,display:"flex",alignItems:"center",gap:12}}>
+              <span style={{fontSize:18}}>☁️</span>
               <div>
-                <div style={{fontSize:13,fontWeight:600,color:"#475569"}}>Dashboard not connected</div>
-                <div style={{fontSize:12,color:"#94a3b8",marginTop:2}}>Start the local dashboard server to enable live controls and logs. You can still configure industries and cities below.</div>
+                <div style={{fontSize:13,fontWeight:600,color:"#166534"}}>Remote mode — commands sent via Supabase</div>
+                <div style={{fontSize:12,color:"#4ade80",marginTop:2}}>Start/Stop will queue a command that your local machine picks up automatically. Live logs and rows only show when the local server is running.</div>
               </div>
             </div>}
 
