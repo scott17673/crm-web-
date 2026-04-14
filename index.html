@@ -3207,10 +3207,10 @@ const taskActivityFromTask = task => ({
                   <th style={{padding:"10px 14px",borderBottom:"2px solid #e2e8f0",width:44}}>
                     <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAllVisible} disabled={!list.length} />
                   </th>
-                  {["Company",tab==="manufacturer"?"Industry":"Contact",tab==="manufacturer"?"Contacts":"Title",tab==="lost"?"Loss":"Stage","Last Activity","Tags"].map(h=><th key={h} className="mono" style={{padding:"10px 14px",fontSize:10,color:"#94a3b8",textAlign:"left",letterSpacing:".08em",borderBottom:"2px solid #e2e8f0"}}>{h}</th>)}
+                  {["Company",tab==="manufacturer"?"Industry":"Contact",tab==="manufacturer"?"Contacts":"Title",tab==="lost"?"Loss":"Stage","Last Activity"].map(h=><th key={h} className="mono" style={{padding:"10px 14px",fontSize:10,color:"#94a3b8",textAlign:"left",letterSpacing:".08em",borderBottom:"2px solid #e2e8f0"}}>{h}</th>)}
                 </tr></thead>
                 <tbody>
-                  {!list.length && <tr><td colSpan="7" style={{padding:40,textAlign:"center",color:"#cbd5e1"}}>No records found</td></tr>}
+                  {!list.length && <tr><td colSpan="6" style={{padding:40,textAlign:"center",color:"#cbd5e1"}}>No records found</td></tr>}
                   {list.map(rec=>(
                     <tr key={rec.id} className="row" onClick={()=>openRecord(rec)}>
                       <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9"}} onClick={e=>e.stopPropagation()}>
@@ -3221,7 +3221,6 @@ const taskActivityFromTask = task => ({
                       <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9",fontSize:12,color:"#64748b"}}>{tab==="manufacturer"?((rec.contacts||[]).map(c=>c.name).filter(Boolean).slice(0,2).join(", ")||"—"):(rec.title||"—")}</td>
                       <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9"}}>{tab==="lost"?<Tag label={rec.lostReason||"—"} color="#ef4444" />:<Pill label={rec.stage||"—"} color={STAGE_COLORS[rec.stage]||"#64748b"} />}</td>
                       <td className="mono" style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9",fontSize:11,color:rec.lastContact?"#64748b":"#cbd5e1"}}>{rec.lastContact||"—"}</td>
-                      <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9"}}><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{visibleTags(rec.tags).map(t=><Tag key={t} label={t} color={TYPE_CFG[rec.type].color} />)}</div></td>
                     </tr>
                   ))}
                 </tbody>
@@ -3276,7 +3275,7 @@ const taskActivityFromTask = task => ({
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(100px,1fr))",gap:10}}>
                 {[
                   {label:"Rows",value:res.total||0,color:"#1e3a8a"},
-                  {label:"Prospects",value:sc.ready||0,color:"#22c55e"},
+
                   {label:"Checked",value:prog.checked||0,color:"#64748b"},
                   {label:"Skipped",value:prog.skipped||0,color:"#ef4444"},
                   {label:"Phase",value:st.currentPhase||"—",color:"#f97316",text:true},
@@ -3456,7 +3455,6 @@ const taskActivityFromTask = task => ({
                     <input className="field mono" style={{width:180,padding:"5px 10px",height:30,fontSize:12,background:"#fffaf5",color:"#f97316"}} value={selected.industry||""} placeholder={OTHER_INDUSTRY_LABEL} onChange={e=>setSelected(cur=>({...cur,industry:e.target.value}))} onBlur={e=>saveVendorField("industry", e.target.value)} />
                   </>}
                 </div>
-                <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{visibleTags(selected.tags).map(t=><Tag key={t} label={t} color={TYPE_CFG[selected.type].color} />)}</div>
               </div>
               <div style={{display:"flex",gap:8}}>
                 <button onClick={()=>deleteRecord(selected)} style={{padding:"10px 18px",border:"none",borderRadius:4,background:"#ef4444",color:"#fff",fontWeight:800,cursor:"pointer",fontSize:12,letterSpacing:".05em"}}>DELETE</button>
@@ -3754,7 +3752,6 @@ const taskActivityFromTask = task => ({
                   <input className="field" type="number" placeholder="Deal value" value={form.value||""} onChange={e=>setForm(cur=>({...cur,value:e.target.value}))} />
                 </>}
               </>}
-              <input className="field" style={{gridColumn:"1 / -1"}} placeholder="Tags (comma separated)" value={form.tags||""} onChange={e=>setForm(cur=>({...cur,tags:e.target.value}))} />
               <textarea className="fieldbox" style={{gridColumn:"1 / -1"}} placeholder="Notes" value={form.notes||""} onChange={e=>setForm(cur=>({...cur,notes:e.target.value}))} />
               <div style={{gridColumn:"1 / -1",display:"flex",justifyContent:"flex-end",gap:10}}>
                 <button onClick={()=>setShowForm(false)} style={{padding:"8px 14px",border:"none",borderRadius:4,background:"#f1f5f9",color:"#64748b",cursor:"pointer"}}>Cancel</button>
