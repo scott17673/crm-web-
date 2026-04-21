@@ -88,8 +88,265 @@ const TYPE_CFG = {
   lost: { label: "Lost", color: "#94a3b8", icon: "✕" },
 };
 const STAGE_COLORS = {Unqualified:"#64748b",Prospect:"#94a3b8",Outreach:"#1e40af","Not Interested":"#b45309",Qualified:"#1e3a8a",Proposal:"#ef4444",Negotiation:"#f97316","Closed Won":"#22c55e","Closed Lost":"#64748b"};
+const LEAD_FINDER_STATE_KEY = "ed_lead_finder_state";
+const LEAD_FINDER_CONFIG_KEY = "ed_lead_finder_config";
+const LEAD_FINDER_OPENAI_URL = "https://api.openai.com/v1/responses";
+const LEAD_FINDER_STAGE = "Prospect";
+const LEAD_FINDER_DEFAULT_CITIES = ["Brampton","Burlington","Cambridge","Guelph","Hamilton","Kitchener","Markham","Milton","Mississauga","Oakville","Toronto","Vaughan","Waterloo"];
+const LEAD_FINDER_CITY_CHIPS = ["Milton","Mississauga","Brampton","Oakville","Burlington","Hamilton","Ancaster","Toronto","Etobicoke","North York","Scarborough","Vaughan","Woodbridge","Concord","Markham","Richmond Hill","Whitchurch-Stouffville","Georgetown","Halton Hills","Acton","Guelph","Cambridge","Kitchener","Waterloo"];
+const LEAD_FINDER_STATUS_COLORS = {idle:"#64748b",running:"#16a34a",stopped:"#ef4444"};
+const LEAD_FINDER_BATCH_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    summary: { type: "string" },
+    leads: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          company: { type: "string" },
+          industry: { type: "string" },
+          city: { type: "string" },
+          verification: { type: "string" },
+          end_product: { type: "string" },
+          notes: { type: "string" },
+          duplicate_hint: { type: "string" },
+          facilities: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                address: { type: "string" },
+                phone: { type: "string" },
+              },
+              required: ["address","phone"],
+            },
+          },
+          contacts: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                name: { type: "string" },
+                title: { type: "string" },
+                source: { type: "string" },
+              },
+              required: ["name","title","source"],
+            },
+          },
+          evidence: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                label: { type: "string" },
+                url: { type: "string" },
+              },
+              required: ["label","url"],
+            },
+          },
+        },
+        required: ["company","industry","city","verification","end_product","notes","duplicate_hint","facilities","contacts","evidence"],
+      },
+    },
+  },
+  required: ["summary","leads"],
+};
 
 const today = () => new Date().toISOString().slice(0,10);
+const leadFinderDefaultConfig = () => ({ mode:"endpoint", endpointUrl:"", model:"gpt-5.1", limitPerCity:3 });
+const createLeadFinderDefaultStats = () => ({ rows:0, checked:0, skipped:0, phase:"-", company:"-", city:"-" });
+const normalizeLeadFinderIndustries = values => {
+  const list = Array.isArray(values) ? values : INDUSTRY_OPTIONS;
+  const seen = new Set();
+  return list
+    .map(value => String(value || "").trim())
+    .filter(value => INDUSTRY_OPTIONS.includes(value) && !seen.has(value) && seen.add(value));
+};
+const normalizeLeadFinderCities = raw => {
+  const seen = new Set();
+  return String(raw || "")
+    .split(/\r?\n|,/)
+    .map(value => value.trim())
+    .filter(value => value && !seen.has(value.toLowerCase()) && seen.add(value.toLowerCase()));
+};
+const normalizeLeadFinderCityText = raw => normalizeLeadFinderCities(raw).join("\n");
+const loadLeadFinderState = () => {
+  const saved = safeJson(localStorage.getItem(LEAD_FINDER_STATE_KEY), {});
+  return {
+    industries: normalizeLeadFinderIndustries(saved.industries || INDUSTRY_OPTIONS),
+    citiesText: normalizeLeadFinderCityText(saved.citiesText || LEAD_FINDER_DEFAULT_CITIES.join("\n")),
+    logs: Array.isArray(saved.logs) ? saved.logs : [],
+    results: Array.isArray(saved.results) ? saved.results : [],
+    stats: {...createLeadFinderDefaultStats(), ...(saved.stats || {})},
+    search: String(saved.search || ""),
+    logSearch: String(saved.logSearch || ""),
+  };
+};
+const loadLeadFinderConfig = () => {
+  const saved = safeJson(localStorage.getItem(LEAD_FINDER_CONFIG_KEY), {});
+  const limitPerCity = Math.max(1, Math.min(8, parseInt(saved.limitPerCity, 10) || 3));
+  return {
+    ...leadFinderDefaultConfig(),
+    mode: saved.mode==="browser" ? "browser" : "endpoint",
+    endpointUrl: String(saved.endpointUrl || "").trim(),
+    model: String(saved.model || "gpt-5.1").trim() || "gpt-5.1",
+    limitPerCity,
+  };
+};
+const createLeadFinderLog = (message, tone="info") => ({
+  id: `${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+  time: new Date().toISOString(),
+  tone,
+  message: String(message || "").trim(),
+});
+const formatLeadFinderTime = value => {
+  const date = value ? new Date(value) : new Date();
+  if(Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString("en-CA", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "America/Toronto",
+  }).toLowerCase();
+};
+const normalizeLeadFinderFacility = facility => ({
+  address: String(facility?.address || "").trim(),
+  phone: String(facility?.phone || "").trim(),
+});
+const normalizeLeadFinderContact = contact => ({
+  name: String(contact?.name || "").trim(),
+  title: String(contact?.title || "").trim(),
+  source: String(contact?.source || "").trim(),
+});
+const normalizeLeadFinderEvidence = evidence => ({
+  label: String(evidence?.label || "").trim(),
+  url: normalizeExternalUrl(String(evidence?.url || "").trim()),
+});
+const buildLeadFinderNotes = lead => {
+  const facilityLines = (lead.facilities || [])
+    .map(facility => [facility.address, facility.phone ? `Phone: ${facility.phone}` : ""].filter(Boolean).join(" | "))
+    .filter(Boolean);
+  const contactLines = (lead.contacts || [])
+    .map(contact => [contact.name, contact.title, contact.source].filter(Boolean).join(" | "))
+    .filter(Boolean);
+  return [
+    lead.end_product ? `End product\n${lead.end_product}` : "",
+    lead.verification ? `Facility confirmation\n${lead.verification}` : "",
+    String(lead.notes || "").trim(),
+    facilityLines.length ? `Locations\n${facilityLines.join("\n")}` : "",
+    contactLines.length ? `Production contacts\n${contactLines.join("\n")}` : "",
+  ].filter(Boolean).join("\n\n");
+};
+const normalizeLeadFinderLead = (lead, fallback={}) => {
+  const facilities = (Array.isArray(lead?.facilities) ? lead.facilities : [])
+    .map(normalizeLeadFinderFacility)
+    .filter(facility => facility.address || facility.phone);
+  const contacts = (Array.isArray(lead?.contacts) ? lead.contacts : [])
+    .map(normalizeLeadFinderContact)
+    .filter(contact => contact.name || contact.title || contact.source);
+  const evidence = (Array.isArray(lead?.evidence) ? lead.evidence : [])
+    .map(normalizeLeadFinderEvidence)
+    .filter(item => item.label || item.url);
+  const normalized = {
+    id: String(lead?.id || `${Date.now()}-${Math.random().toString(36).slice(2,8)}`),
+    company: String(lead?.company || fallback.company || "").trim(),
+    industry: String(lead?.industry || fallback.industry || "").trim() || fallback.industry || OTHER_INDUSTRY_LABEL,
+    city: String(lead?.city || fallback.city || "").trim(),
+    stage: LEAD_FINDER_STAGE,
+    verification: String(lead?.verification || "").trim(),
+    end_product: String(lead?.end_product || fallback.end_product || "").trim(),
+    notes: String(lead?.notes || "").trim(),
+    facilities,
+    contacts,
+    evidence,
+    duplicate_hint: String(lead?.duplicate_hint || "").trim(),
+    foundAt: lead?.foundAt || new Date().toISOString(),
+    source: String(lead?.source || fallback.source || "Lead Finder").trim(),
+    status: String(lead?.status || fallback.status || "New").trim(),
+  };
+  return {
+    ...normalized,
+    notes: buildLeadFinderNotes(normalized),
+  };
+};
+const normalizeLeadFinderResponse = payload => {
+  const raw = payload?.result?.leads ? payload.result : payload;
+  const leads = Array.isArray(raw?.leads) ? raw.leads : Array.isArray(raw) ? raw : [];
+  return {
+    summary: String(raw?.summary || "").trim(),
+    logs: Array.isArray(raw?.logs) ? raw.logs.map(item => String(item || "").trim()).filter(Boolean) : [],
+    leads,
+  };
+};
+const extractLeadFinderOutputText = response => {
+  if(response?.output_text) return response.output_text;
+  return (response?.output || [])
+    .flatMap(item => item?.content || [])
+    .map(item => item?.text || "")
+    .join("")
+    .trim();
+};
+const leadFinderIndustryPrompt = industries => {
+  const active = normalizeLeadFinderIndustries(industries);
+  if(!active.length) return "Use any manufacturing industry that fits the geography.";
+  const includesOthers = active.includes(OTHER_INDUSTRY_LABEL);
+  const named = active.filter(industry => industry!==OTHER_INDUSTRY_LABEL);
+  const base = named.length ? `Focus on these industry buckets: ${named.join(", ")}.` : "";
+  if(!includesOthers) return base || "Use any manufacturing industry that fits the geography.";
+  return [base, "You may also include manufacturers outside those named buckets under the label Others."].filter(Boolean).join(" ");
+};
+const buildLeadFinderPrompt = ({ city, industries, limitPerCity, existingCompanies, existingLeadCompanies }) => `
+You are the Lead Finder for Ed Industrial CRM.
+
+Search only for NEW manufacturing leads in ${city}, Ontario, Canada that are in Southern Ontario, the Greater Toronto Area, or within roughly a two-hour drive from the Greater Toronto Area. Do not include anything farther away.
+
+${leadFinderIndustryPrompt(industries)}
+
+A company counts as a lead only after you confirm a real manufacturing or processing facility in range with plant equipment such as machinery, conveyors, processing equipment, packaging equipment, batching equipment, refining equipment, crushers, screens, asphalt equipment, recycling equipment, or similar production assets.
+
+Required workflow:
+1. Confirm the company operates a manufacturing or processing facility in range.
+2. Only after confirmation, keep it as a lead.
+3. Capture what the company produces, processes, or manufactures.
+4. Capture every in-range location and the phone number for each location when public.
+5. Find at least one production-related contact or decision-maker, such as CEO, general manager, plant manager, maintenance manager, plant supervisor, maintenance supervisor, production manager, production supervisor, team lead, or maintenance mechanic.
+6. Skip duplicates already in the CRM or already found in this lead finder session.
+
+Hard exclusions:
+- Distributors, warehouses, offices without production, retailers, staffing firms, installers, service-only businesses, labs without plant production, farms without processing plants, and companies outside the geography.
+- If the facility is not clearly confirmed, skip it.
+
+Existing CRM company names to avoid:
+${existingCompanies.length ? existingCompanies.join("\n") : "- none -"}
+
+Already found in this Lead Finder session:
+${existingLeadCompanies.length ? existingLeadCompanies.join("\n") : "- none -"}
+
+Return JSON only. Find up to ${limitPerCity} verified companies for ${city}. If there are fewer, return fewer.
+`;
+const findLeadFinderDuplicateMatch = (company, crmRecords=[], resultLeads=[]) => {
+  const name = String(company || "").trim();
+  if(!name) return null;
+  const normalized = normalizeCompanyKey(name);
+  if(!normalized) return null;
+  const exactCrm = (crmRecords || []).find(record => normalizeCompanyKey(record?.company || "")===normalized);
+  if(exactCrm) return { source:"crm", label: exactCrm.company, score:1, record: exactCrm };
+  const exactLead = (resultLeads || []).find(lead => normalizeCompanyKey(lead?.company || "")===normalized);
+  if(exactLead) return { source:"leadfinder", label: exactLead.company, score:1, lead: exactLead };
+  const similarMatches = [
+    ...(crmRecords || []).map(record => ({ source:"crm", label: record.company, score: companySimilarityScore(name, record.company), record })),
+    ...(resultLeads || []).map(lead => ({ source:"leadfinder", label: lead.company, score: companySimilarityScore(name, lead.company), lead })),
+  ]
+    .filter(match => match.score >= 0.92)
+    .sort((left,right) => right.score - left.score);
+  return similarMatches[0] || null;
+};
 const createEmptyTaskDraft = () => ({title:"",due_date:"",owner:DEFAULT_OWNER});
 const createEmptyActivityDraft = () => ({type:"Call",note:"",date:today(),created_by:DEFAULT_OWNER});
 const createEmptyTaskEditDraft = () => ({title:"",due_date:"",owner:DEFAULT_OWNER});
@@ -1566,6 +1823,17 @@ function App(){
   const [upcomingTaskOwnerFilter,setUpcomingTaskOwnerFilter] = useState("All");
   const [allTasksOwnerFilter,setAllTasksOwnerFilter] = useState("All");
   const [unmatchedLegacyTasks,setUnmatchedLegacyTasks] = useState(()=>safeJson(localStorage.getItem(LEGACY_TASKS_KEY), []).map(task => normalizeLegacyTask(task, [], true)));
+  const [leadFinderIndustries,setLeadFinderIndustries] = useState(()=>loadLeadFinderState().industries);
+  const [leadFinderCitiesText,setLeadFinderCitiesText] = useState(()=>loadLeadFinderState().citiesText);
+  const [leadFinderLogs,setLeadFinderLogs] = useState(()=>loadLeadFinderState().logs);
+  const [leadFinderResults,setLeadFinderResults] = useState(()=>loadLeadFinderState().results.map(result => normalizeLeadFinderLead(result)));
+  const [leadFinderStats,setLeadFinderStats] = useState(()=>({...createLeadFinderDefaultStats(), ...loadLeadFinderState().stats}));
+  const [leadFinderSearch,setLeadFinderSearch] = useState(()=>loadLeadFinderState().search);
+  const [leadFinderLogSearch,setLeadFinderLogSearch] = useState(()=>loadLeadFinderState().logSearch);
+  const [leadFinderStatus,setLeadFinderStatus] = useState("idle");
+  const [leadFinderConfig,setLeadFinderConfig] = useState(()=>loadLeadFinderConfig());
+  const [leadFinderApiKey,setLeadFinderApiKey] = useState("");
+  const [leadFinderSelected,setLeadFinderSelected] = useState(null);
 
   const [finderState,setFinderState] = useState(null);
   const [finderError,setFinderError] = useState("");
@@ -1673,6 +1941,7 @@ function App(){
   };
 
   const toast2 = msg => { setToast(msg); setTimeout(()=>setToast(""),3000); };
+  const leadFinderRunRef = useRef({cancelled:false,controller:null,runId:0});
   const queueLatestContactSave = useCallback((saveKey, raw, worker) => {
     if(!saveKey || typeof worker !== "function") return Promise.resolve(false);
     const queue = contactSaveQueueRef.current;
@@ -1920,6 +2189,24 @@ const taskActivityFromTask = task => ({
     if(taskOwner !== normalizeOwner(taskDraft.owner)) setTaskOwner(normalizeOwner(taskDraft.owner));
     if(newAct.type !== activityDraft.type || newAct.note !== activityDraft.note || newAct.date !== activityDraft.date || newAct.created_by !== normalizeOwner(activityDraft.created_by)) setNewAct({...activityDraft, created_by:normalizeOwner(activityDraft.created_by)});
   },[selected?.id, selected?.type, taskDrafts, activityDrafts]);
+  useEffect(()=>{
+    localStorage.setItem(LEAD_FINDER_STATE_KEY, JSON.stringify({
+      industries: leadFinderIndustries,
+      citiesText: leadFinderCitiesText,
+      logs: leadFinderLogs.slice(-250),
+      results: leadFinderResults,
+      stats: {...leadFinderStats, rows: leadFinderResults.length},
+      search: leadFinderSearch,
+      logSearch: leadFinderLogSearch,
+    }));
+  },[leadFinderIndustries, leadFinderCitiesText, leadFinderLogs, leadFinderResults, leadFinderStats, leadFinderSearch, leadFinderLogSearch]);
+  useEffect(()=>{
+    localStorage.setItem(LEAD_FINDER_CONFIG_KEY, JSON.stringify(leadFinderConfig));
+  },[leadFinderConfig]);
+  useEffect(()=>()=> {
+    leadFinderRunRef.current.cancelled = true;
+    if(leadFinderRunRef.current.controller) leadFinderRunRef.current.controller.abort();
+  },[]);
 
   const all = useMemo(() => [...mfrs,...vendors,...lost], [mfrs,vendors,lost]);
   const importBatches = useMemo(() => buildImportBatchSummaries(all), [all]);
@@ -2120,6 +2407,244 @@ const taskActivityFromTask = task => ({
     const base=(tab==="vendor"?vendors:lost).filter(r=>matchesOtherSearch(r, q)&&(tab!=="lost"?(stageF==="All"||r.stage===stageF):(reasonF==="All"||r.lostReason===reasonF))&&matchesActivityDate(r.lastContact, activityDate, activityMode));
     return sortRecordsByActivity(base, sortBy);
   },[vendors,lost,tab,search,stageF,reasonF,sortBy,activityDate,activityMode,matchesOtherSearch]);
+  const leadFinderCities = useMemo(() => normalizeLeadFinderCities(leadFinderCitiesText), [leadFinderCitiesText]);
+  const filteredLeadFinderLogs = useMemo(() => {
+    const query = leadFinderLogSearch.trim().toLowerCase();
+    const logs = [...leadFinderLogs].reverse();
+    if(!query) return logs;
+    return logs.filter(log => [log.message, log.tone, log.time].filter(Boolean).join(" ").toLowerCase().includes(query));
+  },[leadFinderLogs, leadFinderLogSearch]);
+  const filteredLeadFinderResults = useMemo(() => {
+    const query = leadFinderSearch.trim().toLowerCase();
+    const results = [...leadFinderResults].sort((left,right) => String(right.foundAt || "").localeCompare(String(left.foundAt || "")));
+    if(!query) return results;
+    return results.filter(result => [
+      result.company,
+      result.city,
+      result.industry,
+      result.end_product,
+      result.notes,
+      ...(result.contacts || []).flatMap(contact => [contact.name, contact.title, contact.source]),
+      ...(result.facilities || []).flatMap(facility => [facility.address, facility.phone]),
+    ].filter(Boolean).join(" ").toLowerCase().includes(query));
+  },[leadFinderResults, leadFinderSearch]);
+  const leadFinderDisplayStats = {...leadFinderStats, rows: leadFinderResults.length};
+  const appendLeadFinderLog = useCallback((message, tone="info") => {
+    setLeadFinderLogs(list => [...list, createLeadFinderLog(message, tone)].slice(-250));
+  },[]);
+  const setLeadFinderCities = nextCities => {
+    setLeadFinderCitiesText(normalizeLeadFinderCityText((nextCities || []).join("\n")));
+  };
+  const toggleLeadFinderIndustry = industry => {
+    setLeadFinderIndustries(list => list.includes(industry) ? list.filter(value => value!==industry) : [...list, industry]);
+  };
+  const toggleLeadFinderCityChip = city => {
+    const currentCities = normalizeLeadFinderCities(leadFinderCitiesText);
+    const normalized = city.toLowerCase();
+    if(currentCities.some(value => value.toLowerCase()===normalized)){
+      setLeadFinderCities(currentCities.filter(value => value.toLowerCase()!==normalized));
+      return;
+    }
+    setLeadFinderCities([...currentCities, city]);
+  };
+  const clearLeadFinderResults = () => {
+    leadFinderRunRef.current.cancelled = true;
+    if(leadFinderRunRef.current.controller) leadFinderRunRef.current.controller.abort();
+    setLeadFinderStatus("idle");
+    setLeadFinderStats(createLeadFinderDefaultStats());
+    setLeadFinderLogs([createLeadFinderLog("Results cleared.", "info")]);
+    setLeadFinderResults([]);
+    setLeadFinderSelected(null);
+  };
+  const stopLeadFinder = () => {
+    leadFinderRunRef.current.cancelled = true;
+    if(leadFinderRunRef.current.controller) leadFinderRunRef.current.controller.abort();
+    setLeadFinderStatus("stopped");
+    setLeadFinderStats(current => ({...current, phase:"Stopped"}));
+    appendLeadFinderLog("Lead Finder stopped.", "warn");
+  };
+  const fetchLeadFinderJson = async (url, options={}) => {
+    const response = await fetch(url, options);
+    const text = await response.text();
+    let data = null;
+    try{
+      data = text ? JSON.parse(text) : null;
+    }catch(err){
+      if(!response.ok) throw new Error(text || `Request failed (${response.status})`);
+      throw new Error("Lead Finder returned invalid JSON.");
+    }
+    if(!response.ok) throw new Error(data?.error?.message || data?.message || text || `Request failed (${response.status})`);
+    if(data?.error?.message) throw new Error(data.error.message);
+    return data;
+  };
+  const requestLeadFinderBatch = useCallback(async ({ city, industries, existingCompanies, existingLeadCompanies, signal }) => {
+    const prompt = buildLeadFinderPrompt({
+      city,
+      industries,
+      limitPerCity: leadFinderConfig.limitPerCity,
+      existingCompanies,
+      existingLeadCompanies,
+    });
+    if(leadFinderConfig.mode==="endpoint"){
+      const endpointUrl = String(leadFinderConfig.endpointUrl || "").trim();
+      if(!endpointUrl) throw new Error("Add your Oracle / backend endpoint URL first.");
+      const payload = {
+        type: "lead_finder.search",
+        city,
+        industries,
+        limitPerCity: leadFinderConfig.limitPerCity,
+        readOnlyCrm: true,
+        prompt,
+        existingCompanies,
+        existingLeadCompanies,
+        responseSchema: LEAD_FINDER_BATCH_SCHEMA,
+        searchScope: {
+          region: "Southern Ontario",
+          city,
+          anchorCity: "Toronto",
+          radiusRule: "Within roughly 2 hours of the Greater Toronto Area",
+          timezone: "America/Toronto",
+          country: "CA",
+        },
+      };
+      return normalizeLeadFinderResponse(await fetchLeadFinderJson(endpointUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal,
+      }));
+    }
+    const apiKey = String(leadFinderApiKey || "").trim();
+    if(!apiKey) throw new Error("Paste an OpenAI API key for browser test mode.");
+    const payload = {
+      model: leadFinderConfig.model || "gpt-5.1",
+      input: prompt,
+      tool_choice: "required",
+      tools: [{
+        type: "web_search",
+        search_context_size: "high",
+        user_location: {
+          type: "approximate",
+          city,
+          region: "Ontario",
+          country: "CA",
+          timezone: "America/Toronto",
+        },
+      }],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "lead_finder_batch",
+          strict: true,
+          schema: LEAD_FINDER_BATCH_SCHEMA,
+        },
+      },
+    };
+    const data = await fetchLeadFinderJson(LEAD_FINDER_OPENAI_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    if(data?.refusal) throw new Error(data.refusal);
+    const outputText = extractLeadFinderOutputText(data);
+    if(!outputText) throw new Error("OpenAI returned no lead finder output.");
+    return normalizeLeadFinderResponse(JSON.parse(outputText));
+  },[leadFinderApiKey, leadFinderConfig]);
+  const startLeadFinder = useCallback(async () => {
+    const cities = normalizeLeadFinderCities(leadFinderCitiesText);
+    const industries = normalizeLeadFinderIndustries(leadFinderIndustries);
+    if(!cities.length) return toast2("Add at least one city for Lead Finder.");
+    if(!industries.length) return toast2("Pick at least one industry for Lead Finder.");
+    if(leadFinderConfig.mode==="endpoint" && !String(leadFinderConfig.endpointUrl || "").trim()) return toast2("Add your Oracle / backend endpoint URL first.");
+    if(leadFinderConfig.mode==="browser" && !String(leadFinderApiKey || "").trim()) return toast2("Paste an OpenAI API key for browser test mode.");
+    const runId = leadFinderRunRef.current.runId + 1;
+    leadFinderRunRef.current.cancelled = false;
+    leadFinderRunRef.current.controller = null;
+    leadFinderRunRef.current.runId = runId;
+    setLeadFinderStatus("running");
+    setLeadFinderStats(current => ({...createLeadFinderDefaultStats(), rows: leadFinderResults.length}));
+    appendLeadFinderLog(`Lead Finder started in ${leadFinderConfig.mode==="endpoint" ? "Oracle / backend" : "browser test"} mode for ${cities.length} cit${cities.length===1?"y":"ies"}.`, "info");
+    const crmCompanyNames = all.map(record => String(record.company || "").trim()).filter(Boolean);
+    let sessionResults = [...leadFinderResults];
+    let checked = 0;
+    let skipped = 0;
+    for(const city of cities){
+      if(leadFinderRunRef.current.cancelled || leadFinderRunRef.current.runId!==runId) break;
+      checked += 1;
+      setLeadFinderStats(current => ({...current, checked, skipped, rows: sessionResults.length, phase:"Researching", company:"-", city}));
+      appendLeadFinderLog(`Searching ${city} for verified manufacturing leads...`, "info");
+      const controller = new AbortController();
+      leadFinderRunRef.current.controller = controller;
+      try{
+        const batch = await requestLeadFinderBatch({
+          city,
+          industries,
+          existingCompanies: crmCompanyNames,
+          existingLeadCompanies: sessionResults.map(result => result.company).filter(Boolean),
+          signal: controller.signal,
+        });
+        if(batch.summary) appendLeadFinderLog(`${city}: ${batch.summary}`, "info");
+        if(batch.logs.length) batch.logs.forEach(entry => appendLeadFinderLog(`${city}: ${entry}`, "info"));
+        if(!batch.leads.length){
+          appendLeadFinderLog(`${city}: no verified leads returned.`, "warn");
+          continue;
+        }
+        let addedForCity = 0;
+        for(const rawLead of batch.leads){
+          const lead = normalizeLeadFinderLead(rawLead, {
+            city,
+            industry: Array.isArray(industries) && industries.length===1 ? industries[0] : OTHER_INDUSTRY_LABEL,
+            source: leadFinderConfig.mode==="endpoint" ? "Lead Finder endpoint" : "OpenAI browser test",
+            foundAt: new Date().toISOString(),
+          });
+          if(!lead.company){
+            skipped += 1;
+            appendLeadFinderLog(`${city}: skipped a blank company result.`, "warn");
+            continue;
+          }
+          const duplicate = findLeadFinderDuplicateMatch(lead.company, all, sessionResults);
+          if(duplicate){
+            skipped += 1;
+            appendLeadFinderLog(`${lead.company} skipped - duplicate ${duplicate.source==="crm" ? "in CRM" : "already in Lead Finder"} (${duplicate.label}).`, "warn");
+            setLeadFinderStats(current => ({...current, checked, skipped, rows: sessionResults.length, phase:"Skipping duplicate", company:lead.company, city}));
+            continue;
+          }
+          sessionResults = [lead, ...sessionResults];
+          addedForCity += 1;
+          setLeadFinderResults(sessionResults);
+          setLeadFinderStats(current => ({...current, checked, skipped, rows: sessionResults.length, phase:"Saved lead", company:lead.company, city}));
+          appendLeadFinderLog(`${lead.company} added as a new lead for ${city}.`, "success");
+        }
+        if(!addedForCity) appendLeadFinderLog(`${city}: everything returned was skipped as a duplicate or weak result.`, "warn");
+      }catch(err){
+        if(err?.name==="AbortError"){
+          appendLeadFinderLog(`${city}: request stopped.`, "warn");
+          break;
+        }
+        skipped += 1;
+        appendLeadFinderLog(`${city}: ${err.message || String(err)}`, "error");
+        setLeadFinderStats(current => ({...current, checked, skipped, rows: sessionResults.length, phase:"Error", company:"-", city}));
+      }finally{
+        leadFinderRunRef.current.controller = null;
+      }
+    }
+    const finishedStopped = leadFinderRunRef.current.cancelled || leadFinderRunRef.current.runId!==runId;
+    setLeadFinderStatus(finishedStopped ? "stopped" : "idle");
+    setLeadFinderStats(current => ({
+      ...current,
+      checked,
+      skipped,
+      rows: sessionResults.length,
+      phase: finishedStopped ? "Stopped" : "Complete",
+      company: current.company || "-",
+      city: current.city || "-",
+    }));
+    appendLeadFinderLog(finishedStopped ? "Lead Finder run stopped." : `Lead Finder run complete. ${sessionResults.length} lead${sessionResults.length===1?"":"s"} in this list.`, finishedStopped ? "warn" : "success");
+  },[all, appendLeadFinderLog, leadFinderApiKey, leadFinderCitiesText, leadFinderConfig, leadFinderIndustries, leadFinderResults, toast2]);
 
   const openRecord = rec => {
     const key = recordKey(rec);
@@ -2915,7 +3440,7 @@ const taskActivityFromTask = task => ({
       <header style={{height:58,padding:"0 28px",display:"flex",alignItems:"center",justifyContent:"space-between",background:"#fff",borderBottom:"3px solid #ef4444",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
         <div className="condensed" style={{fontSize:22,fontWeight:800,letterSpacing:".04em"}}><span style={{color:"#ef4444"}}>ED</span> <span style={{color:"#1e3a8a"}}>INDUSTRIAL</span><span style={{fontSize:14,color:"#94a3b8",marginLeft:8,letterSpacing:".12em"}}>CRM</span></div>
         <div style={{display:"flex",gap:6}}>
-          {["dashboard","contacts","finder"].map(v=><button key={v} onClick={()=>setView(v)} style={{padding:"7px 16px",border:"none",borderRadius:3,background:view===v?"#1e3a8a":"transparent",color:view===v?"#fff":"#64748b",cursor:"pointer"}}>{v==="dashboard"?"Dashboard":v==="contacts"?"Contacts":"Lead Finder"}</button>)}
+          {[["dashboard","Dashboard"],["contacts","Contacts"],["leadfinder","Lead Finder"]].map(([value,label])=><button key={value} onClick={()=>setView(value)} style={{padding:"7px 16px",border:"none",borderRadius:3,background:view===value?"#1e3a8a":"transparent",color:view===value?"#fff":"#64748b",cursor:"pointer"}}>{label}</button>)}
         </div>
         <button onClick={()=>openForm(tab)} style={{padding:"8px 18px",border:"none",borderRadius:3,background:"#ef4444",color:"#fff",fontWeight:700,cursor:"pointer"}}>+ Add Company</button>
       </header>
@@ -3167,6 +3692,173 @@ const taskActivityFromTask = task => ({
                         </tr>
                       );
                     })}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        )}
+
+        {view==="leadfinder" && (
+          <div className="fade" style={{display:"grid",gap:16}}>
+            <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+              <div style={{padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,borderBottom:"1px solid #e8eef6",background:"#f8fbff"}}>
+                <div>
+                  <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase"}}>Lead Finder</div>
+                  <div style={{fontSize:13,color:"#475569",marginTop:6}}>Reads the CRM only for duplicate checks. It does not add or change company data in your CRM.</div>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",justifyContent:"flex-end"}}>
+                  <span className="mono" style={{fontSize:11,letterSpacing:".08em",padding:"4px 10px",borderRadius:4,background:(LEAD_FINDER_STATUS_COLORS[leadFinderStatus] || "#64748b")+"18",color:LEAD_FINDER_STATUS_COLORS[leadFinderStatus] || "#64748b",border:"1px solid "+(LEAD_FINDER_STATUS_COLORS[leadFinderStatus] || "#64748b")+"33"}}>{leadFinderStatus.toUpperCase()}</span>
+                  <button onClick={startLeadFinder} disabled={leadFinderStatus==="running"} style={{padding:"8px 16px",border:"none",borderRadius:4,background:leadFinderStatus==="running"?"#cbd5e1":"#22c55e",color:"#fff",cursor:leadFinderStatus==="running"?"not-allowed":"pointer",fontWeight:700}}>Start</button>
+                  <button onClick={stopLeadFinder} disabled={leadFinderStatus!=="running"} style={{padding:"8px 16px",border:"none",borderRadius:4,background:leadFinderStatus==="running"?"#ef4444":"#cbd5e1",color:"#fff",cursor:leadFinderStatus==="running"?"pointer":"not-allowed",fontWeight:700}}>Stop</button>
+                  <button onClick={clearLeadFinderResults} style={{padding:"8px 16px",border:"1px solid #cbd5e1",borderRadius:4,background:"#fff",color:"#64748b",cursor:"pointer",fontWeight:700}}>Clear</button>
+                </div>
+              </div>
+              <div style={{padding:"14px 16px",display:"grid",gap:14}}>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(6,minmax(0,1fr))",gap:10}}>
+                  {[
+                    ["Rows", leadFinderDisplayStats.rows, "#1e3a8a"],
+                    ["Checked", leadFinderDisplayStats.checked, "#334155"],
+                    ["Skipped", leadFinderDisplayStats.skipped, "#ef4444"],
+                    ["Phase", leadFinderDisplayStats.phase || "-", "#f97316"],
+                    ["Company", leadFinderDisplayStats.company || "-", "#1e3a8a"],
+                    ["City", leadFinderDisplayStats.city || "-", "#64748b"],
+                  ].map(([label, value, color])=>(
+                    <div key={label} style={{border:"1px solid #d8e2ef",borderRadius:6,padding:"12px 14px",background:"#fbfdff"}}>
+                      <div className="mono" style={{fontSize:10,letterSpacing:".12em",color:"#8ea0bd",textTransform:"uppercase",marginBottom:8}}>{label}</div>
+                      <div className="condensed" style={{fontSize:28,fontWeight:800,color:color,lineHeight:1.1,wordBreak:"break-word"}}>{value}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{border:"1px solid #d8e2ef",borderRadius:6,background:"#fbfdff",padding:"12px 14px",display:"grid",gap:10}}>
+                  <div className="mono" style={{fontSize:10,letterSpacing:".12em",color:"#6f84a6",textTransform:"uppercase"}}>Lead Finder Setup</div>
+                  <div style={{display:"grid",gridTemplateColumns:"180px minmax(0,1fr) 120px",gap:10}}>
+                    <select className="field" value={leadFinderConfig.mode} onChange={e=>setLeadFinderConfig(current => ({...current, mode:e.target.value==="browser" ? "browser" : "endpoint"}))}>
+                      <option value="endpoint">Oracle / Backend</option>
+                      <option value="browser">Browser Test</option>
+                    </select>
+                    <input className="field" value={leadFinderConfig.endpointUrl} onChange={e=>setLeadFinderConfig(current => ({...current, endpointUrl:e.target.value}))} placeholder="https://your-oracle-server.example.com/lead-finder" />
+                    <input className="field" type="number" min="1" max="8" value={leadFinderConfig.limitPerCity} onChange={e=>setLeadFinderConfig(current => ({...current, limitPerCity:Math.max(1, Math.min(8, parseInt(e.target.value, 10) || 1))}))} />
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) minmax(0,1fr)",gap:10}}>
+                    <input className="field" value={leadFinderConfig.model} onChange={e=>setLeadFinderConfig(current => ({...current, model:e.target.value}))} placeholder="gpt-5.1" />
+                    <input className="field" type="password" value={leadFinderApiKey} onChange={e=>setLeadFinderApiKey(e.target.value)} placeholder="OpenAI API key - session only - not saved" />
+                  </div>
+                  <div style={{fontSize:12,color:"#64748b",lineHeight:1.6}}>
+                    Oracle / backend mode is the safe 24/7 path because the browser should not be the thing holding your API key. Browser test mode is only for quick testing and the key is kept in memory only for this session.
+                  </div>
+                  <div className="mono" style={{fontSize:10,color:"#8ea0bd"}}>
+                    LIMIT PER CITY controls how many verified leads the AI can keep for each city pass.
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+              <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+                <div style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #e8eef6",background:"#f8fbff",gap:12}}>
+                  <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase"}}>Industries ({leadFinderIndustries.length} selected)</div>
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={()=>setLeadFinderIndustries([...INDUSTRY_OPTIONS])} style={{padding:"5px 10px",border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",color:"#64748b",cursor:"pointer"}}>All</button>
+                    <button onClick={()=>setLeadFinderIndustries([])} style={{padding:"5px 10px",border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",color:"#64748b",cursor:"pointer"}}>None</button>
+                  </div>
+                </div>
+                <div style={{padding:"14px 18px",display:"grid",gap:8}}>
+                  {INDUSTRY_OPTIONS.map(industry => {
+                    const active = leadFinderIndustries.includes(industry);
+                    return (
+                      <button key={industry} onClick={()=>toggleLeadFinderIndustry(industry)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:6,border:"1px solid "+(active ? "#1e3a8a" : "#d8e2ef"),background:active ? "#eef4ff" : "#fff",color:active ? "#1e3a8a" : "#334155",cursor:"pointer",fontWeight:700,textAlign:"left"}}>
+                        <input type="checkbox" readOnly checked={active} />
+                        <span>{industry}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+                <div style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #e8eef6",background:"#f8fbff",gap:12}}>
+                  <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase"}}>Cities ({leadFinderCities.length} active)</div>
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={()=>setLeadFinderCities(LEAD_FINDER_CITY_CHIPS)} style={{padding:"5px 10px",border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",color:"#64748b",cursor:"pointer"}}>All nearby</button>
+                    <button onClick={()=>setLeadFinderCitiesText("")} style={{padding:"5px 10px",border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",color:"#64748b",cursor:"pointer"}}>Clear</button>
+                  </div>
+                </div>
+                <div style={{padding:"14px 18px",display:"grid",gap:12}}>
+                  <textarea className="fieldbox mono" style={{minHeight:178}} value={leadFinderCitiesText} onChange={e=>setLeadFinderCitiesText(e.target.value)} placeholder="One city per line" />
+                  <div>
+                    <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",textTransform:"uppercase",marginBottom:8}}>Quick Add Nearby Cities</div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                      {LEAD_FINDER_CITY_CHIPS.map(city => {
+                        const active = leadFinderCities.some(value => value.toLowerCase()===city.toLowerCase());
+                        return <button key={city} onClick={()=>toggleLeadFinderCityChip(city)} style={{padding:"6px 10px",borderRadius:4,border:"1px solid "+(active ? "#1e3a8a" : "#d7dfeb"),background:active ? "#eef4ff" : "#fff",color:active ? "#1e3a8a" : "#475569",cursor:"pointer",fontSize:12,fontWeight:700}}>{city}</button>;
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+              <div style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #e8eef6",background:"#f8fbff",gap:12}}>
+                <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase"}}>Live Logs ({leadFinderLogs.length})</div>
+                <input className="field" style={{maxWidth:220}} value={leadFinderLogSearch} onChange={e=>setLeadFinderLogSearch(e.target.value)} placeholder="Filter logs..." />
+              </div>
+              <div style={{background:"#172033",padding:"12px 16px",display:"grid",gap:8,maxHeight:220,overflow:"auto"}}>
+                {!filteredLeadFinderLogs.length && <div className="mono" style={{fontSize:12,color:"#94a3b8"}}>No logs yet.</div>}
+                {filteredLeadFinderLogs.map(log => {
+                  const color = log.tone==="error" ? "#fca5a5" : log.tone==="warn" ? "#fde68a" : log.tone==="success" ? "#86efac" : "#cbd5e1";
+                  return (
+                    <div key={log.id} className="mono" style={{fontSize:12,color,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>
+                      [{formatLeadFinderTime(log.time) || "--"}] {log.message}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+              <div style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #e8eef6",background:"#f8fbff",gap:12}}>
+                <div>
+                  <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase"}}>Today's Leads ({leadFinderResults.length})</div>
+                  <div style={{fontSize:12,color:"#64748b",marginTop:5}}>Saved separately from the CRM so you can review them without changing your manufacturer list.</div>
+                </div>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <input className="field" style={{width:220}} value={leadFinderSearch} onChange={e=>setLeadFinderSearch(e.target.value)} placeholder="Search leads..." />
+                  <button onClick={()=>downloadCsv(filteredLeadFinderResults.map(result => ({
+                    company: result.company,
+                    stage: result.stage,
+                    industry: result.industry,
+                    city: result.city,
+                    end_product: result.end_product,
+                    notes: result.notes,
+                    facilities: (result.facilities || []).map(item => [item.address, item.phone].filter(Boolean).join(" | ")).join(" ;; "),
+                    contacts: (result.contacts || []).map(item => [item.name, item.title, item.source].filter(Boolean).join(" | ")).join(" ;; "),
+                    evidence: (result.evidence || []).map(item => [item.label, item.url].filter(Boolean).join(" | ")).join(" ;; "),
+                    found_at: result.foundAt,
+                    source: result.source,
+                  })), "lead_finder_results.csv")} disabled={!filteredLeadFinderResults.length} style={{padding:"8px 12px",border:"1px solid #1e3a8a",borderRadius:4,background:filteredLeadFinderResults.length?"#eff6ff":"#f8fafc",color:filteredLeadFinderResults.length?"#1e3a8a":"#94a3b8",cursor:filteredLeadFinderResults.length?"pointer":"not-allowed",fontWeight:700}}>Export CSV</button>
+                </div>
+              </div>
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse"}}>
+                  <thead>
+                    <tr style={{background:"#fbfdff"}}>
+                      {["Company","Stage","Industry","Products","City","Time"].map(label => <th key={label} className="mono" style={{padding:"10px 14px",fontSize:10,color:"#8ea0bd",textAlign:"left",letterSpacing:".12em",borderBottom:"2px solid #d8e2ef",textTransform:"uppercase"}}>{label}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {!filteredLeadFinderResults.length && <tr><td colSpan="6" className="mono" style={{padding:24,color:"#8ea0bd"}}>No lead finder results yet.</td></tr>}
+                    {filteredLeadFinderResults.map(result => (
+                      <tr key={result.id} className="row" onClick={()=>setLeadFinderSelected(result)}>
+                        <td style={{padding:"12px 14px",borderBottom:"1px solid #eef3f9",fontWeight:700,color:"#172033"}}>{result.company}</td>
+                        <td style={{padding:"12px 14px",borderBottom:"1px solid #eef3f9"}}><Pill label={result.stage} color={STAGE_COLORS[result.stage] || "#64748b"} /></td>
+                        <td style={{padding:"12px 14px",borderBottom:"1px solid #eef3f9",fontSize:12,color:IND_COLORS[getIndustryBucket(result.industry)] || "#64748b",fontWeight:700}}>{result.industry || OTHER_INDUSTRY_LABEL}</td>
+                        <td style={{padding:"12px 14px",borderBottom:"1px solid #eef3f9",fontSize:12,color:"#475569",maxWidth:320,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{result.end_product || "-"}</td>
+                        <td style={{padding:"12px 14px",borderBottom:"1px solid #eef3f9",fontSize:12,color:"#475569"}}>{result.city || "-"}</td>
+                        <td className="mono" style={{padding:"12px 14px",borderBottom:"1px solid #eef3f9",fontSize:11,color:"#8ea0bd"}}>{formatLeadFinderTime(result.foundAt) || "-"}</td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
@@ -3587,6 +4279,81 @@ const taskActivityFromTask = task => ({
                             <LinkifiedText text={a.note} style={{fontSize:13,color:"#475569",lineHeight:1.6}} />
                           </div>}
                     </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {leadFinderSelected && (
+        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.5)",display:"grid",placeItems:"center",padding:20,zIndex:103}} onClick={e=>e.target===e.currentTarget&&setLeadFinderSelected(null)}>
+          <div className="slide" style={{width:"min(1100px,100%)",maxHeight:"92vh",overflow:"auto",background:"#fff",borderRadius:8,border:"1px solid #d7dfeb",boxShadow:"0 24px 60px rgba(0,0,0,.18)"}}>
+            <div style={{borderTop:"3px solid #1e3a8a"}} />
+            <div style={{padding:"18px 24px",display:"flex",justifyContent:"space-between",gap:16,borderBottom:"1px solid #e8eef6",alignItems:"flex-start"}}>
+              <div style={{display:"grid",gap:8}}>
+                <div className="condensed" style={{fontSize:24,fontWeight:800,color:"#172033"}}>{leadFinderSelected.company}</div>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                  <Pill label={leadFinderSelected.stage} color={STAGE_COLORS[leadFinderSelected.stage] || "#64748b"} />
+                  <Tag label={leadFinderSelected.industry || OTHER_INDUSTRY_LABEL} color={IND_COLORS[getIndustryBucket(leadFinderSelected.industry)] || "#64748b"} />
+                  {leadFinderSelected.city && <Tag label={leadFinderSelected.city} color="#475569" />}
+                  <Tag label={leadFinderSelected.source || "Lead Finder"} color="#1e3a8a" />
+                </div>
+              </div>
+              <button onClick={()=>setLeadFinderSelected(null)} style={{width:30,height:30,border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",cursor:"pointer",color:"#94a3b8"}}>x</button>
+            </div>
+            <div style={{padding:"20px 24px",display:"grid",gap:18}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:12}}>
+                {[
+                  ["Products", leadFinderSelected.end_product || "-"],
+                  ["City", leadFinderSelected.city || "-"],
+                  ["Found", formatLeadFinderTime(leadFinderSelected.foundAt) || "-"],
+                  ["Evidence", String((leadFinderSelected.evidence || []).length)],
+                ].map(([label,value])=>(
+                  <div key={label} style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:"12px 14px"}}>
+                    <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>{label}</div>
+                    <div style={{fontSize:13,color:"#334155",lineHeight:1.6,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{value}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1.3fr .9fr",gap:18,alignItems:"start"}}>
+                <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
+                  <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>NOTES</div>
+                  <LinkifiedText text={leadFinderSelected.notes || "-"} style={{fontSize:13,color:"#475569",lineHeight:1.7,whiteSpace:"pre-wrap",wordBreak:"break-word"}} />
+                </div>
+                <div style={{display:"grid",gap:18}}>
+                  <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
+                    <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>FACILITIES</div>
+                    {!(leadFinderSelected.facilities || []).length && <div className="mono" style={{fontSize:11,color:"#8ea0bd"}}>No facilities captured.</div>}
+                    {(leadFinderSelected.facilities || []).map((facility, index)=>(
+                      <div key={`${facility.address}-${index}`} style={{padding:"10px 0",borderBottom:index===(leadFinderSelected.facilities || []).length-1?"none":"1px solid #eef3f9"}}>
+                        <div style={{fontSize:13,color:"#172033",fontWeight:700,wordBreak:"break-word"}}>{facility.address || "-"}</div>
+                        {!!facility.phone && <div className="mono" style={{fontSize:11,color:"#64748b",marginTop:4}}>{facility.phone}</div>}
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
+                    <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>CONTACTS</div>
+                    {!(leadFinderSelected.contacts || []).length && <div className="mono" style={{fontSize:11,color:"#8ea0bd"}}>No production contacts captured.</div>}
+                    {(leadFinderSelected.contacts || []).map((contact, index)=>(
+                      <div key={`${contact.name}-${index}`} style={{padding:"10px 0",borderBottom:index===(leadFinderSelected.contacts || []).length-1?"none":"1px solid #eef3f9"}}>
+                        <div style={{fontSize:13,color:"#172033",fontWeight:700,wordBreak:"break-word"}}>{contact.name || "-"}</div>
+                        <div style={{fontSize:12,color:"#475569",marginTop:4,wordBreak:"break-word"}}>{contact.title || "-"}</div>
+                        {!!contact.source && <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:4}}>{contact.source}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
+                <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>PUBLIC EVIDENCE</div>
+                {!(leadFinderSelected.evidence || []).length && <div className="mono" style={{fontSize:11,color:"#8ea0bd"}}>No evidence links captured.</div>}
+                <div style={{display:"grid",gap:8}}>
+                  {(leadFinderSelected.evidence || []).map((item, index)=>(
+                    <a key={`${item.url}-${index}`} href={item.url || "#"} target="_blank" rel="noreferrer" style={{fontSize:13,color:"#1e3a8a",textDecoration:"underline",wordBreak:"break-all"}}>
+                      {item.label || item.url || `Source ${index + 1}`}
+                    </a>
                   ))}
                 </div>
               </div>
