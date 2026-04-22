@@ -288,7 +288,7 @@ const LEAD_FINDER_ADDRESS_REGEX = /\b(street|st|road|rd|avenue|ave|boulevard|blv
 const LEAD_FINDER_PHONE_REGEX = /(?:\+?1[-.\s]*)?(?:\(?\d{3}\)?[-.\s]*)\d{3}[-.\s]*\d{4}/;
 
 const today = () => new Date().toISOString().slice(0,10);
-const leadFinderDefaultConfig = () => ({ mode:"browser", endpointUrl:"", model:"gpt-5-mini", limitPerCity:3 });
+const leadFinderDefaultConfig = () => ({ mode:"endpoint", endpointUrl:"", model:"gpt-5-mini", limitPerCity:3 });
 const createLeadFinderDefaultStats = () => ({ rows:0, checked:0, skipped:0, phase:"-", company:"-", city:"-" });
 const normalizeLeadFinderIndustries = values => {
   const list = Array.isArray(values) ? values : INDUSTRY_OPTIONS;
@@ -317,8 +317,8 @@ const cleanupLeadFinderLegacyState = saved => {
 const cleanupLeadFinderLegacyConfig = saved => {
   if(!saved || typeof saved!=="object" || Array.isArray(saved)) return false;
   let changed = false;
-  if(saved.mode==="manual"){
-    saved.mode = "browser";
+  if(saved.mode==="manual" || saved.mode==="browser"){
+    saved.mode = "endpoint";
     changed = true;
   }
   if(!String(saved.model || "").trim() || String(saved.model).trim()==="gpt-5.1"){
@@ -350,7 +350,7 @@ const loadLeadFinderConfig = () => {
   const limitPerCity = Math.max(1, Math.min(8, parseInt(saved.limitPerCity, 10) || 3));
   return {
     ...leadFinderDefaultConfig(),
-    mode: saved.mode==="endpoint" ? "endpoint" : "browser",
+    mode: saved.mode==="browser" ? "browser" : "endpoint",
     endpointUrl: String(saved.endpointUrl || "").trim(),
     model: String(saved.model || "gpt-5-mini").trim() || "gpt-5-mini",
     limitPerCity,
