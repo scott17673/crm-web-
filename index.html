@@ -2086,6 +2086,7 @@ function App(){
 
   const [finderState,setFinderState] = useState(null);
   const [finderError,setFinderError] = useState("");
+  const [finderLogHistory,setFinderLogHistory] = useState([]);
   const [finderLogFilter,setFinderLogFilter] = useState("");
   const [finderRowSearch,setFinderRowSearch] = useState("");
   const [finderTodayLeads,setFinderTodayLeads] = useState([]);
@@ -2096,7 +2097,54 @@ function App(){
   const finderLogRef = useRef(null);
   const finderFollowLogs = useRef(true);
   const finderSyncedFromDashboard = useRef(false);
+  const finderLastServerLogsRef = useRef([]);
+  const finderRunStartedRef = useRef("");
   const FINDER_URL = CRM_CONFIG.finderDashboardUrl || "http://localhost:8780";
+
+  const mergeFinderLogHistory = useCallback((state) => {
+    const incoming = Array.isArray(state?.logs) ? state.logs.map(line => String(line || "")) : [];
+    const startedAt = String(state?.status?.startedAt || "");
+    const previousLogs = finderLastServerLogsRef.current;
+    const previousStartedAt = finderRunStartedRef.current;
+    setFinderLogHistory(current => {
+      if(!incoming.length){
+        return startedAt && previousStartedAt && startedAt!==previousStartedAt ? [] : current;
+      }
+      if(startedAt && previousStartedAt && startedAt!==previousStartedAt){
+        return [...incoming];
+      }
+      if(!previousLogs.length){
+        return [...incoming];
+      }
+      const identical = previousLogs.length===incoming.length && previousLogs.every((line, index) => line===incoming[index]);
+      if(identical) return current;
+      let overlap = 0;
+      const maxOverlap = Math.min(previousLogs.length, incoming.length);
+      for(let size=maxOverlap; size>0; size-=1){
+        let matches = true;
+        for(let index=0; index<size; index+=1){
+          if(previousLogs[previousLogs.length-size+index]!==incoming[index]){
+            matches = false;
+            break;
+          }
+        }
+        if(matches){
+          overlap = size;
+          break;
+        }
+      }
+      if(overlap>0){
+        const additions = incoming.slice(overlap);
+        return additions.length ? [...current, ...additions] : current;
+      }
+      if(incoming.length < previousLogs.length){
+        return [...incoming];
+      }
+      return [...current, ...incoming];
+    });
+    finderLastServerLogsRef.current = incoming;
+    finderRunStartedRef.current = startedAt;
+  },[]);
 
   useEffect(()=>{
     if(view!=="finder") return;
@@ -2107,6 +2155,7 @@ function App(){
         if(!r.ok) throw new Error("Dashboard unreachable");
         const data=await r.json();
         if(!cancelled){
+          mergeFinderLogHistory(data);
           setFinderState(data);
           setFinderError("");
           if(!finderSyncedFromDashboard.current){
@@ -2131,13 +2180,13 @@ function App(){
     const id=setInterval(poll,3000);
     const id2=setInterval(pollLeads,15000);
     return()=>{cancelled=true;clearInterval(id);clearInterval(id2);finderSyncedFromDashboard.current=false;};
-  },[view]);
+  },[mergeFinderLogHistory, view]);
 
   useEffect(()=>{
     if(finderLogRef.current && finderFollowLogs.current){
       finderLogRef.current.scrollTop=finderLogRef.current.scrollHeight;
     }
-  },[finderState?.logs]);
+  },[finderLogHistory]);
 
   const finderAction=async(endpoint)=>{
     // Try local dashboard first; fall back to Supabase command queue
@@ -2145,6 +2194,12 @@ function App(){
       const r=await fetch(FINDER_URL+endpoint,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
       const data=await r.json();
       if(!r.ok) throw new Error(data.error||"Request failed");
+      if(endpoint.includes("/clear")){
+        finderLastServerLogsRef.current = [];
+        finderRunStartedRef.current = "";
+        setFinderLogHistory([]);
+      }
+      mergeFinderLogHistory(data);
       setFinderState(data);
       toast2(endpoint.includes("start")?"Run started":endpoint.includes("stop")?"Run stopped":"Results cleared");
       return;
@@ -4200,7 +4255,7 @@ const taskActivityFromTask = task => ({
           const fs=finderState;
           const st=fs?.status||{};
           const res=fs?.results||{};
-          const logs=fs?.logs||[];
+          const logs=finderLogHistory.length ? finderLogHistory : (fs?.logs||[]);
           const headers=res.headers||[];
           const prog=res.progress||{};
           const sc=res.stageCounts||{};
