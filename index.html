@@ -95,6 +95,57 @@ const LEAD_FINDER_STAGE = "Prospect";
 const LEAD_FINDER_DEFAULT_CITIES = ["Brampton","Burlington","Cambridge","Guelph","Hamilton","Kitchener","Markham","Milton","Mississauga","Oakville","Toronto","Vaughan","Waterloo"];
 const LEAD_FINDER_CITY_CHIPS = ["Milton","Mississauga","Brampton","Oakville","Burlington","Hamilton","Ancaster","Toronto","Etobicoke","North York","Scarborough","Vaughan","Woodbridge","Concord","Markham","Richmond Hill","Whitchurch-Stouffville","Georgetown","Halton Hills","Acton","Guelph","Cambridge","Kitchener","Waterloo"];
 const LEAD_FINDER_STATUS_COLORS = {idle:"#64748b",running:"#16a34a",stopped:"#ef4444"};
+const LEAD_FINDER_LEAD_ITEM_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    company: { type: "string" },
+    industry: { type: "string" },
+    city: { type: "string" },
+    verification: { type: "string" },
+    end_product: { type: "string" },
+    notes: { type: "string" },
+    duplicate_hint: { type: "string" },
+    facilities: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          address: { type: "string" },
+          phone: { type: "string" },
+        },
+        required: ["address","phone"],
+      },
+    },
+    contacts: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          name: { type: "string" },
+          title: { type: "string" },
+          source: { type: "string" },
+        },
+        required: ["name","title","source"],
+      },
+    },
+    evidence: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          label: { type: "string" },
+          url: { type: "string" },
+        },
+        required: ["label","url"],
+      },
+    },
+  },
+  required: ["company","industry","city","verification","end_product","notes","duplicate_hint","facilities","contacts","evidence"],
+};
 const LEAD_FINDER_BATCH_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -102,64 +153,142 @@ const LEAD_FINDER_BATCH_SCHEMA = {
     summary: { type: "string" },
     leads: {
       type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          company: { type: "string" },
-          industry: { type: "string" },
-          city: { type: "string" },
-          verification: { type: "string" },
-          end_product: { type: "string" },
-          notes: { type: "string" },
-          duplicate_hint: { type: "string" },
-          facilities: {
-            type: "array",
-            items: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                address: { type: "string" },
-                phone: { type: "string" },
-              },
-              required: ["address","phone"],
-            },
-          },
-          contacts: {
-            type: "array",
-            items: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                name: { type: "string" },
-                title: { type: "string" },
-                source: { type: "string" },
-              },
-              required: ["name","title","source"],
-            },
-          },
-          evidence: {
-            type: "array",
-            items: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                label: { type: "string" },
-                url: { type: "string" },
-              },
-              required: ["label","url"],
-            },
-          },
-        },
-        required: ["company","industry","city","verification","end_product","notes","duplicate_hint","facilities","contacts","evidence"],
-      },
+      items: LEAD_FINDER_LEAD_ITEM_SCHEMA,
     },
   },
   required: ["summary","leads"],
 };
+const LEAD_FINDER_PREVIOUSLY_SURFACED_COMPANIES = [
+  "ACE Bakery",
+  "AllCrete",
+  "Alliance Concrete & Interlock",
+  "Castle Precast Ltd.",
+  "CeMix Concrete Limited",
+  "Cemcorp Ltd.",
+  "Concrete Base Interlocking Corporation",
+  "Euro Impressed Concrete",
+  "Horizon Concrete & Landscaping",
+  "Kii Naturals",
+  "KK Concrete",
+  "Kruger Packaging",
+  "Mad Mexican",
+  "MCL Concrete",
+  "Milton Concrete",
+  "Molisana Bakery",
+  "Naan & Kabob",
+  "New School Foods",
+  "Paramount Concrete",
+  "Polaris Food Company",
+  "Pyung Hwa Food Company",
+  "Q.H. Food Products",
+  "Quality Custom Blending Ltd.",
+  "Roselle Desserts",
+  "Santa Maria Foods",
+  "Sapori Foods",
+  "ShaSha Bread Co.",
+  "Siena Foods",
+  "Solmaz Foods",
+  "Solocrete General Contracting Ltd",
+  "Unico",
+  "Village Juicery",
+];
+const LEAD_FINDER_PREVIOUSLY_SURFACED_RECORDS = LEAD_FINDER_PREVIOUSLY_SURFACED_COMPANIES.map(company => ({ company, type:"history" }));
+const LEAD_FINDER_PRODUCTION_ROLE_HINTS = [
+  "plant manager",
+  "production manager",
+  "operations manager",
+  "manufacturing manager",
+  "maintenance manager",
+  "plant supervisor",
+  "production supervisor",
+  "operations supervisor",
+  "maintenance supervisor",
+  "plant director",
+  "production director",
+  "operations director",
+  "site manager",
+  "facility manager",
+  "general manager",
+];
+const LEAD_FINDER_WEAK_CONTACT_HINTS = [
+  "not publicly listed",
+  "unknown",
+  "n/a",
+  "contact us",
+  "front desk",
+  "main line",
+  "sales team",
+  "operations team",
+  "linkedin search",
+];
+const LEAD_FINDER_WEAK_SOURCE_HINTS = [
+  "not publicly listed",
+  "unknown",
+  "n/a",
+];
+const LEAD_FINDER_FOOD_PROCESS_HINTS = [
+  "manufactur",
+  "process",
+  "production",
+  "plant",
+  "facility",
+  "co-pack",
+  "bottl",
+  "blend",
+  "bak",
+  "roast",
+  "brew",
+  "cook",
+  "freez",
+  "mix",
+  "package",
+  "snack",
+  "beverage",
+  "food",
+];
+const LEAD_FINDER_FOOD_REJECT_HINTS = [
+  "restaurant",
+  "cafe",
+  "café",
+  "juice bar",
+  "smoothie bar",
+  "eatery",
+  "grill",
+  "pizzeria",
+  "kitchen",
+  "catering",
+  "caterer",
+  "retail",
+  "shop",
+  "storefront",
+  "market",
+  "grocery",
+  "supermarket",
+  "meal prep",
+  "meal kit",
+  "distributor",
+  "distribution",
+  "wholesaler",
+  "wholesale",
+  "broker",
+  "importer",
+  "engineering",
+  "consulting",
+  "supplier",
+  "reseller",
+  "equipment",
+  "concrete",
+  "cement",
+  "asphalt",
+  "quarry",
+  "packaging supplier",
+  "packaging solutions",
+];
+const LEAD_FINDER_ADDRESS_REGEX = /\b(street|st|road|rd|avenue|ave|boulevard|blvd|court|crt|drive|dr|lane|ln|way|parkway|pkwy|crescent|cres|place|pl|trail|trl)\b/i;
+const LEAD_FINDER_PHONE_REGEX = /(?:\+?1[-.\s]*)?(?:\(?\d{3}\)?[-.\s]*)\d{3}[-.\s]*\d{4}/;
 
 const today = () => new Date().toISOString().slice(0,10);
-const leadFinderDefaultConfig = () => ({ mode:"manual", endpointUrl:"", model:"gpt-5.1", limitPerCity:3 });
+const leadFinderDefaultConfig = () => ({ mode:"browser", endpointUrl:"", model:"gpt-5-mini", limitPerCity:3 });
 const createLeadFinderDefaultStats = () => ({ rows:0, checked:0, skipped:0, phase:"-", company:"-", city:"-" });
 const normalizeLeadFinderIndustries = values => {
   const list = Array.isArray(values) ? values : INDUSTRY_OPTIONS;
@@ -176,14 +305,38 @@ const normalizeLeadFinderCities = raw => {
     .filter(value => value && !seen.has(value.toLowerCase()) && seen.add(value.toLowerCase()));
 };
 const normalizeLeadFinderCityText = raw => normalizeLeadFinderCities(raw).join("\n");
+const cleanupLeadFinderLegacyState = saved => {
+  if(!saved || typeof saved!=="object" || Array.isArray(saved)) return false;
+  let changed = false;
+  if("manualLinks" in saved){
+    delete saved.manualLinks;
+    changed = true;
+  }
+  return changed;
+};
+const cleanupLeadFinderLegacyConfig = saved => {
+  if(!saved || typeof saved!=="object" || Array.isArray(saved)) return false;
+  let changed = false;
+  if(saved.mode==="manual"){
+    saved.mode = "browser";
+    changed = true;
+  }
+  if(!String(saved.model || "").trim() || String(saved.model).trim()==="gpt-5.1"){
+    saved.model = "gpt-5-mini";
+    changed = true;
+  }
+  return changed;
+};
 const loadLeadFinderState = () => {
   const saved = safeJson(localStorage.getItem(LEAD_FINDER_STATE_KEY), {});
+  if(cleanupLeadFinderLegacyState(saved)){
+    localStorage.setItem(LEAD_FINDER_STATE_KEY, JSON.stringify(saved));
+  }
   return {
     industries: normalizeLeadFinderIndustries(saved.industries || INDUSTRY_OPTIONS),
     citiesText: normalizeLeadFinderCityText(saved.citiesText || LEAD_FINDER_DEFAULT_CITIES.join("\n")),
     logs: Array.isArray(saved.logs) ? saved.logs : [],
     results: Array.isArray(saved.results) ? saved.results : [],
-    manualLinks: Array.isArray(saved.manualLinks) ? saved.manualLinks : [],
     stats: {...createLeadFinderDefaultStats(), ...(saved.stats || {})},
     search: String(saved.search || ""),
     logSearch: String(saved.logSearch || ""),
@@ -191,12 +344,15 @@ const loadLeadFinderState = () => {
 };
 const loadLeadFinderConfig = () => {
   const saved = safeJson(localStorage.getItem(LEAD_FINDER_CONFIG_KEY), {});
+  if(cleanupLeadFinderLegacyConfig(saved)){
+    localStorage.setItem(LEAD_FINDER_CONFIG_KEY, JSON.stringify(saved));
+  }
   const limitPerCity = Math.max(1, Math.min(8, parseInt(saved.limitPerCity, 10) || 3));
   return {
     ...leadFinderDefaultConfig(),
-    mode: saved.mode==="browser" ? "browser" : saved.mode==="endpoint" ? "endpoint" : "manual",
+    mode: saved.mode==="endpoint" ? "endpoint" : "browser",
     endpointUrl: String(saved.endpointUrl || "").trim(),
-    model: String(saved.model || "gpt-5.1").trim() || "gpt-5.1",
+    model: String(saved.model || "gpt-5-mini").trim() || "gpt-5-mini",
     limitPerCity,
   };
 };
@@ -229,6 +385,77 @@ const normalizeLeadFinderEvidence = evidence => ({
   label: String(evidence?.label || "").trim(),
   url: normalizeExternalUrl(String(evidence?.url || "").trim()),
 });
+const containsLeadFinderHint = (values, hints=[]) => {
+  const haystack = (Array.isArray(values) ? values : [values]).filter(Boolean).join(" ").toLowerCase();
+  return hints.some(hint => haystack.includes(String(hint || "").toLowerCase()));
+};
+const isLeadFinderStreetAddress = value => {
+  const text = String(value || "").trim();
+  return !!text && /\d/.test(text) && LEAD_FINDER_ADDRESS_REGEX.test(text);
+};
+const isLeadFinderPhone = value => LEAD_FINDER_PHONE_REGEX.test(String(value || "").trim());
+const isLeadFinderPersonName = value => {
+  const text = String(value || "").trim();
+  if(!text) return false;
+  if(containsLeadFinderHint(text, LEAD_FINDER_WEAK_CONTACT_HINTS)) return false;
+  const tokens = text.replace(/[^a-zA-Z' -]/g," ").split(/\s+/).filter(Boolean);
+  if(tokens.length < 2) return false;
+  const genericTokens = new Set(["team","department","office","staff","operations","production","plant","maintenance","contact","manager","line","desk"]);
+  return tokens.some(token => !genericTokens.has(token.toLowerCase()));
+};
+const isLeadFinderProductionTitle = value => {
+  const text = String(value || "").trim().toLowerCase();
+  return !!text && LEAD_FINDER_PRODUCTION_ROLE_HINTS.some(hint => text.includes(hint));
+};
+const isLeadFinderContactSourceUsable = value => {
+  const text = String(value || "").trim();
+  return !!text && !containsLeadFinderHint(text, LEAD_FINDER_WEAK_SOURCE_HINTS);
+};
+const isFoodAndBeverageOnlySearch = industries => {
+  const active = normalizeLeadFinderIndustries(industries).filter(industry => industry!==OTHER_INDUSTRY_LABEL);
+  return active.length===1 && active[0]==="Food and Beverage";
+};
+const collectLeadFinderValidationIssues = (lead, industries=[], options={}) => {
+  const requireProductionContact = options.requireProductionContact===true;
+  const issues = [];
+  if(!lead?.company) issues.push("missing company name");
+  if(LEAD_FINDER_PREVIOUSLY_SURFACED_COMPANIES.some(company => normalizeCompanyKey(company)===normalizeCompanyKey(lead?.company || ""))){
+    issues.push("already surfaced in earlier research");
+  }
+  const facilities = Array.isArray(lead?.facilities) ? lead.facilities : [];
+  const contacts = Array.isArray(lead?.contacts) ? lead.contacts : [];
+  const evidence = Array.isArray(lead?.evidence) ? lead.evidence : [];
+  const validFacility = facilities.find(facility => isLeadFinderStreetAddress(facility?.address) && isLeadFinderPhone(facility?.phone));
+  if(!validFacility) issues.push("missing public facility address and phone");
+  const validContact = contacts.find(contact => isLeadFinderPersonName(contact?.name) && isLeadFinderProductionTitle(contact?.title) && isLeadFinderContactSourceUsable(contact?.source));
+  if(requireProductionContact && !validContact) issues.push("missing named production or operations contact");
+  const evidenceCount = evidence.filter(item => /^https?:\/\//i.test(String(item?.url || "").trim())).length;
+  if(evidenceCount < 2) issues.push("missing multiple public source links");
+  if(!String(lead?.verification || "").trim()) issues.push("missing facility verification");
+  if(!String(lead?.end_product || "").trim()) issues.push("missing product summary");
+  if(isFoodAndBeverageOnlySearch(industries)){
+    if(normalizeIndustry(lead?.industry)!=="Food and Beverage"){
+      issues.push("industry is not Food and Beverage");
+    }
+    if(containsLeadFinderHint([lead?.company, lead?.verification, lead?.end_product, lead?.notes], LEAD_FINDER_FOOD_REJECT_HINTS)){
+      issues.push("looks like retail, restaurant, distribution, packaging-only, or another non-manufacturing fit");
+    }
+    if(!containsLeadFinderHint([lead?.verification, lead?.end_product, lead?.notes], LEAD_FINDER_FOOD_PROCESS_HINTS)){
+      issues.push("does not clearly describe food or beverage production");
+    }
+  }
+  return issues;
+};
+const hasLeadFinderProductionContact = lead => {
+  const contacts = Array.isArray(lead?.contacts) ? lead.contacts : [];
+  return contacts.some(contact => isLeadFinderPersonName(contact?.name) && isLeadFinderProductionTitle(contact?.title) && isLeadFinderContactSourceUsable(contact?.source));
+};
+const formatLeadFinderDuplicateSource = duplicate => {
+  if(!duplicate) return "duplicate";
+  if(duplicate.source==="history") return "already reviewed previously";
+  if(duplicate.source==="crm") return "in CRM";
+  return "already in Lead Finder";
+};
 const buildLeadFinderNotes = lead => {
   const facilityLines = (lead.facilities || [])
     .map(facility => [facility.address, facility.phone ? `Phone: ${facility.phone}` : ""].filter(Boolean).join(" | "))
@@ -299,8 +526,11 @@ const leadFinderIndustryPrompt = industries => {
   const includesOthers = active.includes(OTHER_INDUSTRY_LABEL);
   const named = active.filter(industry => industry!==OTHER_INDUSTRY_LABEL);
   const base = named.length ? `Focus on these industry buckets: ${named.join(", ")}.` : "";
-  if(!includesOthers) return base || "Use any manufacturing industry that fits the geography.";
-  return [base, "You may also include manufacturers outside those named buckets under the label Others."].filter(Boolean).join(" ");
+  const foodRules = active.includes("Food and Beverage")
+    ? "For Food and Beverage, keep only companies with a real GTA-area production facility that manufactures, processes, bakes, blends, bottles, brews, roasts, freezes, or co-packs edible products. Reject restaurants, cafes, storefront bakeries, juice bars, caterers, distributors, importers, packaging suppliers, and brands without a public production facility."
+    : "";
+  if(!includesOthers) return [base || "Use any manufacturing industry that fits the geography.", foodRules].filter(Boolean).join(" ");
+  return [base, foodRules, "You may also include manufacturers outside those named buckets under the label Others."].filter(Boolean).join(" ");
 };
 const buildLeadFinderPrompt = ({ city, industries, limitPerCity, existingCompanies, existingLeadCompanies }) => `
 You are the Lead Finder for Ed Industrial CRM.
@@ -309,21 +539,24 @@ Search only for NEW manufacturing leads in ${city}, Ontario, Canada that are in 
 
 ${leadFinderIndustryPrompt(industries)}
 
-A company counts as a lead only after you confirm a real manufacturing or processing facility in range with plant equipment such as machinery, conveyors, processing equipment, packaging equipment, batching equipment, refining equipment, crushers, screens, asphalt equipment, recycling equipment, or similar production assets.
+A company counts as a lead only after you confirm a real manufacturing or processing facility in range.
 
 Required workflow:
 1. Confirm the company operates a manufacturing or processing facility in range.
 2. Only after confirmation, keep it as a lead.
 3. Capture what the company produces, processes, or manufactures.
-4. Capture every in-range location and the phone number for each location when public.
-5. Find at least one production-related contact or decision-maker, such as CEO, general manager, plant manager, maintenance manager, plant supervisor, maintenance supervisor, production manager, production supervisor, team lead, or maintenance mechanic.
-6. Skip duplicates already in the CRM or already found in this lead finder session.
+4. Capture a public street address and phone number for the facility or company.
+5. Find at least one named production or operations contact, such as plant manager, production manager, operations manager, manufacturing manager, maintenance manager, plant supervisor, production supervisor, site manager, facility manager, or general manager.
+6. Include at least two public evidence links, including one facility or company source. Add a people or contact source whenever you can find one.
+7. Skip duplicates already in the CRM, already found in this lead finder session, or already surfaced in earlier lead-finder research.
 
 Hard exclusions:
 - Distributors, warehouses, offices without production, retailers, staffing firms, installers, service-only businesses, labs without plant production, farms without processing plants, and companies outside the geography.
-- If the facility is not clearly confirmed, skip it.
+- Restaurants, cafes, storefront bakeries, dessert shops, juice bars, meal-prep stores, caterers, grocery stores, packaging suppliers, engineering firms, construction firms, and companies whose public footprint looks like retail, service, or distribution only.
+- If the facility is not clearly confirmed, or the lead does not have a public address, phone number, and evidence links, skip it.
+- Never invent a contact. Do not use placeholders such as "Not publicly listed", "Unknown", "Contact us", or generic department names.
 
-Existing CRM company names to avoid:
+Existing CRM or previously surfaced company names to avoid:
 ${existingCompanies.length ? existingCompanies.join("\n") : "- none -"}
 
 Already found in this Lead Finder session:
@@ -333,7 +566,7 @@ Return JSON only. Find up to ${limitPerCity} verified companies for ${city}. If 
 `;
 const leadFinderIndustrySearchTerm = industry => {
   if(industry===OTHER_INDUSTRY_LABEL) return "manufacturer";
-  if(industry==="Food and Beverage") return "\"food manufacturer\" OR \"food processing\" OR bakery OR beverage";
+  if(industry==="Food and Beverage") return "\"food manufacturer\" OR \"food processing plant\" OR \"beverage manufacturer\" OR \"commercial bakery\" OR \"co-packer\" OR \"snack manufacturer\" OR \"sauce manufacturer\"";
   if(industry==="Concrete") return "\"concrete plant\" OR precast OR cement";
   if(industry==="Metal Refineries") return "\"metal fabrication\" OR foundry OR refinery OR smelter";
   if(industry==="Recycling") return "\"recycling plant\" OR \"materials recovery facility\"";
@@ -342,44 +575,9 @@ const leadFinderIndustrySearchTerm = industry => {
   if(industry==="Building Products") return "\"building products\" manufacturer OR insulation OR gypsum OR glass";
   return "manufacturer";
 };
-const buildLeadFinderManualLinks = ({ cities, industries, limitPerCity }) => {
-  const links = [];
-  const perCityLimit = Math.max(1, Math.min(8, limitPerCity || 3));
-  cities.forEach(city => {
-    industries.slice(0, Math.max(perCityLimit, industries.length)).forEach(industry => {
-      const searchTerm = leadFinderIndustrySearchTerm(industry);
-      const companyQuery = `${searchTerm} "${city}" Ontario (plant OR facility OR manufacturing OR processing)`;
-      const contactQuery = `site:linkedin.com/in ("${city}" Ontario) (${searchTerm}) ("plant manager" OR "production manager" OR "maintenance manager" OR "operations manager")`;
-      links.push({
-        id: `${city}-${industry}-company`,
-        city,
-        industry,
-        label: `${industry} in ${city}`,
-        kind: "Company search",
-        query: companyQuery,
-        url: `https://www.google.com/search?q=${encodeURIComponent(companyQuery)}`,
-      });
-      links.push({
-        id: `${city}-${industry}-maps`,
-        city,
-        industry,
-        label: `${industry} maps in ${city}`,
-        kind: "Maps search",
-        query: `${industry} manufacturer ${city} Ontario`,
-        url: `https://www.google.com/maps/search/${encodeURIComponent(`${industry} manufacturer ${city} Ontario`)}`,
-      });
-      links.push({
-        id: `${city}-${industry}-contact`,
-        city,
-        industry,
-        label: `${industry} contacts in ${city}`,
-        kind: "Contact search",
-        query: contactQuery,
-        url: `https://www.google.com/search?q=${encodeURIComponent(contactQuery)}`,
-      });
-    });
-  });
-  return links.slice(0, Math.max(12, cities.length * perCityLimit * 3));
+const leadFinderIndustryNegativeSearchTerm = industry => {
+  if(industry==="Food and Beverage") return "-restaurant -cafe -shop -retail -market -grocery -distributor -importer -supplier -engineering -packaging";
+  return "";
 };
 const findLeadFinderDuplicateMatch = (company, crmRecords=[], resultLeads=[]) => {
   const name = String(company || "").trim();
@@ -387,11 +585,11 @@ const findLeadFinderDuplicateMatch = (company, crmRecords=[], resultLeads=[]) =>
   const normalized = normalizeCompanyKey(name);
   if(!normalized) return null;
   const exactCrm = (crmRecords || []).find(record => normalizeCompanyKey(record?.company || "")===normalized);
-  if(exactCrm) return { source:"crm", label: exactCrm.company, score:1, record: exactCrm };
+  if(exactCrm) return { source: exactCrm.type==="history" ? "history" : "crm", label: exactCrm.company, score:1, record: exactCrm };
   const exactLead = (resultLeads || []).find(lead => normalizeCompanyKey(lead?.company || "")===normalized);
   if(exactLead) return { source:"leadfinder", label: exactLead.company, score:1, lead: exactLead };
   const similarMatches = [
-    ...(crmRecords || []).map(record => ({ source:"crm", label: record.company, score: companySimilarityScore(name, record.company), record })),
+    ...(crmRecords || []).map(record => ({ source: record?.type==="history" ? "history" : "crm", label: record.company, score: companySimilarityScore(name, record.company), record })),
     ...(resultLeads || []).map(lead => ({ source:"leadfinder", label: lead.company, score: companySimilarityScore(name, lead.company), lead })),
   ]
     .filter(match => match.score >= 0.92)
@@ -1878,7 +2076,6 @@ function App(){
   const [leadFinderCitiesText,setLeadFinderCitiesText] = useState(()=>loadLeadFinderState().citiesText);
   const [leadFinderLogs,setLeadFinderLogs] = useState(()=>loadLeadFinderState().logs);
   const [leadFinderResults,setLeadFinderResults] = useState(()=>loadLeadFinderState().results.map(result => normalizeLeadFinderLead(result)));
-  const [leadFinderManualLinks,setLeadFinderManualLinks] = useState(()=>loadLeadFinderState().manualLinks || []);
   const [leadFinderStats,setLeadFinderStats] = useState(()=>({...createLeadFinderDefaultStats(), ...loadLeadFinderState().stats}));
   const [leadFinderSearch,setLeadFinderSearch] = useState(()=>loadLeadFinderState().search);
   const [leadFinderLogSearch,setLeadFinderLogSearch] = useState(()=>loadLeadFinderState().logSearch);
@@ -2247,22 +2444,14 @@ const taskActivityFromTask = task => ({
       citiesText: leadFinderCitiesText,
       logs: leadFinderLogs.slice(-250),
       results: leadFinderResults,
-      manualLinks: leadFinderManualLinks,
-      stats: {...leadFinderStats, rows: leadFinderConfig.mode==="manual" ? leadFinderManualLinks.length : leadFinderResults.length},
+      stats: {...leadFinderStats, rows: leadFinderResults.length},
       search: leadFinderSearch,
       logSearch: leadFinderLogSearch,
     }));
-  },[leadFinderIndustries, leadFinderCitiesText, leadFinderLogs, leadFinderResults, leadFinderManualLinks, leadFinderStats, leadFinderSearch, leadFinderLogSearch, leadFinderConfig.mode]);
+  },[leadFinderIndustries, leadFinderCitiesText, leadFinderLogs, leadFinderResults, leadFinderStats, leadFinderSearch, leadFinderLogSearch]);
   useEffect(()=>{
     localStorage.setItem(LEAD_FINDER_CONFIG_KEY, JSON.stringify(leadFinderConfig));
   },[leadFinderConfig]);
-  useEffect(()=>{
-    setLeadFinderConfig(current => {
-      if(current.mode==="endpoint" && !String(current.endpointUrl || "").trim()) return {...current, mode:"manual"};
-      if(current.mode==="browser" && !String(leadFinderApiKey || "").trim()) return {...current, mode:"manual"};
-      return current;
-    });
-  },[]);
   useEffect(()=>()=> {
     leadFinderRunRef.current.cancelled = true;
     if(leadFinderRunRef.current.controller) leadFinderRunRef.current.controller.abort();
@@ -2488,12 +2677,7 @@ const taskActivityFromTask = task => ({
       ...(result.facilities || []).flatMap(facility => [facility.address, facility.phone]),
     ].filter(Boolean).join(" ").toLowerCase().includes(query));
   },[leadFinderResults, leadFinderSearch]);
-  const filteredLeadFinderManualLinks = useMemo(() => {
-    const query = leadFinderSearch.trim().toLowerCase();
-    if(!query) return leadFinderManualLinks;
-    return leadFinderManualLinks.filter(link => [link.label, link.city, link.industry, link.kind, link.query].filter(Boolean).join(" ").toLowerCase().includes(query));
-  },[leadFinderManualLinks, leadFinderSearch]);
-  const leadFinderDisplayStats = {...leadFinderStats, rows: leadFinderConfig.mode==="manual" ? leadFinderManualLinks.length : leadFinderResults.length};
+  const leadFinderDisplayStats = {...leadFinderStats, rows: leadFinderResults.length};
   const appendLeadFinderLog = useCallback((message, tone="info") => {
     setLeadFinderLogs(list => [...list, createLeadFinderLog(message, tone)].slice(-250));
   },[]);
@@ -2519,7 +2703,6 @@ const taskActivityFromTask = task => ({
     setLeadFinderStats(createLeadFinderDefaultStats());
     setLeadFinderLogs([createLeadFinderLog("Results cleared.", "info")]);
     setLeadFinderResults([]);
-    setLeadFinderManualLinks([]);
     setLeadFinderSelected(null);
   };
   const stopLeadFinder = () => {
@@ -2583,7 +2766,7 @@ const taskActivityFromTask = task => ({
     const apiKey = String(leadFinderApiKey || "").trim();
     if(!apiKey) throw new Error("Paste an OpenAI API key for browser test mode.");
     const payload = {
-      model: leadFinderConfig.model || "gpt-5.1",
+      model: leadFinderConfig.model || "gpt-5-mini",
       input: prompt,
       tool_choice: "required",
       tools: [{
@@ -2625,29 +2808,6 @@ const taskActivityFromTask = task => ({
     const industries = normalizeLeadFinderIndustries(leadFinderIndustries);
     if(!cities.length) return toast2("Add at least one city for Lead Finder.");
     if(!industries.length) return toast2("Pick at least one industry for Lead Finder.");
-    if(leadFinderConfig.mode==="manual"){
-      const manualLinks = buildLeadFinderManualLinks({
-        cities,
-        industries,
-        limitPerCity: leadFinderConfig.limitPerCity,
-      });
-      setLeadFinderManualLinks(manualLinks);
-      setLeadFinderStatus("idle");
-      setLeadFinderStats({
-        rows: leadFinderResults.length,
-        checked: cities.length,
-        skipped: 0,
-        phase: "Manual research pack ready",
-        company: "-",
-        city: cities[0] || "-",
-      });
-      setLeadFinderLogs([
-        createLeadFinderLog(`Manual scout pack built for ${cities.length} cit${cities.length===1?"y":"ies"} and ${industries.length} industr${industries.length===1?"y":"ies"}.`, "success"),
-        createLeadFinderLog("No API mode does not verify companies automatically. Use the search links below, confirm the facility manually, then add real leads only.", "warn"),
-      ]);
-      toast2(`Manual scout pack ready with ${manualLinks.length} search link${manualLinks.length===1?"":"s"}.`);
-      return;
-    }
     if(leadFinderConfig.mode==="endpoint" && !String(leadFinderConfig.endpointUrl || "").trim()) return toast2("Add your Oracle / backend endpoint URL first.");
     if(leadFinderConfig.mode==="browser" && !String(leadFinderApiKey || "").trim()) return toast2("Paste an OpenAI API key for browser test mode.");
     const runId = leadFinderRunRef.current.runId + 1;
@@ -2657,11 +2817,11 @@ const taskActivityFromTask = task => ({
     setLeadFinderStatus("running");
     setLeadFinderStats(current => ({...createLeadFinderDefaultStats(), rows: leadFinderResults.length}));
     appendLeadFinderLog(`Lead Finder started in ${leadFinderConfig.mode==="endpoint" ? "Oracle / backend" : "browser test"} mode for ${cities.length} cit${cities.length===1?"y":"ies"}.`, "info");
-    const crmCompanyNames = all.map(record => String(record.company || "").trim()).filter(Boolean);
+    const blockedCompanyRecords = [...all, ...LEAD_FINDER_PREVIOUSLY_SURFACED_RECORDS];
+    const crmCompanyNames = blockedCompanyRecords.map(record => String(record.company || "").trim()).filter(Boolean);
     let sessionResults = [...leadFinderResults];
     let checked = 0;
     let skipped = 0;
-    setLeadFinderManualLinks([]);
     for(const city of cities){
       if(leadFinderRunRef.current.cancelled || leadFinderRunRef.current.runId!==runId) break;
       checked += 1;
@@ -2696,11 +2856,19 @@ const taskActivityFromTask = task => ({
             appendLeadFinderLog(`${city}: skipped a blank company result.`, "warn");
             continue;
           }
-          const duplicate = findLeadFinderDuplicateMatch(lead.company, all, sessionResults);
+          const duplicate = findLeadFinderDuplicateMatch(lead.company, blockedCompanyRecords, sessionResults);
           if(duplicate){
             skipped += 1;
-            appendLeadFinderLog(`${lead.company} skipped - duplicate ${duplicate.source==="crm" ? "in CRM" : "already in Lead Finder"} (${duplicate.label}).`, "warn");
+            appendLeadFinderLog(`${lead.company} skipped - duplicate ${formatLeadFinderDuplicateSource(duplicate)} (${duplicate.label}).`, "warn");
             setLeadFinderStats(current => ({...current, checked, skipped, rows: sessionResults.length, phase:"Skipping duplicate", company:lead.company, city}));
+            continue;
+          }
+          setLeadFinderStats(current => ({...current, checked, skipped, rows: sessionResults.length, phase:"Screening lead", company:lead.company, city}));
+          const validationIssues = collectLeadFinderValidationIssues(lead, industries, { requireProductionContact:false });
+          if(validationIssues.length){
+            skipped += 1;
+            appendLeadFinderLog(`${lead.company} skipped - ${validationIssues[0]}.`, "warn");
+            setLeadFinderStats(current => ({...current, checked, skipped, rows: sessionResults.length, phase:"Skipping weak result", company:lead.company, city}));
             continue;
           }
           sessionResults = [lead, ...sessionResults];
@@ -2708,6 +2876,9 @@ const taskActivityFromTask = task => ({
           setLeadFinderResults(sessionResults);
           setLeadFinderStats(current => ({...current, checked, skipped, rows: sessionResults.length, phase:"Saved lead", company:lead.company, city}));
           appendLeadFinderLog(`${lead.company} added as a new lead for ${city}.`, "success");
+          if(!hasLeadFinderProductionContact(lead)){
+            appendLeadFinderLog(`${lead.company} kept because the facility looks real, but no named production contact was found yet.`, "warn");
+          }
         }
         if(!addedForCity) appendLeadFinderLog(`${city}: everything returned was skipped as a duplicate or weak result.`, "warn");
       }catch(err){
@@ -3823,29 +3994,26 @@ const taskActivityFromTask = task => ({
                 <div style={{border:"1px solid #d8e2ef",borderRadius:6,background:"#fbfdff",padding:"12px 14px",display:"grid",gap:10}}>
                   <div className="mono" style={{fontSize:10,letterSpacing:".12em",color:"#6f84a6",textTransform:"uppercase"}}>Lead Finder Setup</div>
                   <div style={{display:"grid",gridTemplateColumns:"180px minmax(0,1fr) 120px",gap:10}}>
-                    <select className="field" value={leadFinderConfig.mode} onChange={e=>setLeadFinderConfig(current => ({...current, mode:e.target.value==="browser" ? "browser" : e.target.value==="endpoint" ? "endpoint" : "manual"}))}>
-                      <option value="manual">No API / Manual Scout</option>
+                    <select className="field" value={leadFinderConfig.mode} onChange={e=>setLeadFinderConfig(current => ({...current, mode:e.target.value==="endpoint" ? "endpoint" : "browser"}))}>
                       <option value="endpoint">Oracle / Backend</option>
                       <option value="browser">Browser Test</option>
                     </select>
-                    <input className="field" value={leadFinderConfig.endpointUrl} onChange={e=>setLeadFinderConfig(current => ({...current, endpointUrl:e.target.value}))} placeholder={leadFinderConfig.mode==="manual" ? "No API mode does not need an endpoint" : "https://your-oracle-server.example.com/lead-finder"} disabled={leadFinderConfig.mode==="manual"} />
+                    <input className="field" value={leadFinderConfig.endpointUrl} onChange={e=>setLeadFinderConfig(current => ({...current, endpointUrl:e.target.value}))} placeholder="https://your-oracle-server.example.com/lead-finder" disabled={leadFinderConfig.mode!=="endpoint"} />
                     <input className="field" type="number" min="1" max="8" value={leadFinderConfig.limitPerCity} onChange={e=>setLeadFinderConfig(current => ({...current, limitPerCity:Math.max(1, Math.min(8, parseInt(e.target.value, 10) || 1))}))} />
                   </div>
-                  {leadFinderConfig.mode!=="manual" && (
+                  {leadFinderConfig.mode==="browser" && (
                     <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) minmax(0,1fr)",gap:10}}>
-                      <input className="field" value={leadFinderConfig.model} onChange={e=>setLeadFinderConfig(current => ({...current, model:e.target.value}))} placeholder="gpt-5.1" />
+                      <input className="field" value={leadFinderConfig.model} onChange={e=>setLeadFinderConfig(current => ({...current, model:e.target.value}))} placeholder="gpt-5-mini" />
                       <input className="field" type="password" value={leadFinderApiKey} onChange={e=>setLeadFinderApiKey(e.target.value)} placeholder="OpenAI API key - session only - not saved" />
                     </div>
                   )}
                   <div style={{fontSize:12,color:"#64748b",lineHeight:1.6}}>
-                    {leadFinderConfig.mode==="manual"
-                      ? "No API mode builds a manual research pack only. It creates search links and a checklist from your selected cities and industries, but it does not verify companies automatically."
-                      : "Oracle / backend mode is the safe 24/7 path because the browser should not be the thing holding your API key. Browser test mode is only for quick testing and the key is kept in memory only for this session."}
+                    {leadFinderConfig.mode==="endpoint"
+                      ? "Oracle / backend mode is the safe 24/7 path because the browser should not be the thing holding your API key."
+                      : "Browser test mode is only for quick testing and the key is kept in memory only for this session. Browser mode now does a single web-search pass and then screens results locally to keep costs down."}
                   </div>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd"}}>
-                    {leadFinderConfig.mode==="manual"
-                      ? "LIMIT PER CITY controls how many search packs to build for each city."
-                      : "LIMIT PER CITY controls how many verified leads the AI can keep for each city pass."}
+                    LIMIT PER CITY controls how many verified leads the AI can keep for each city pass.
                   </div>
                 </div>
               </div>
@@ -3896,33 +4064,6 @@ const taskActivityFromTask = task => ({
               </section>
             </div>
 
-            {leadFinderConfig.mode==="manual" && (
-              <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
-                <div style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #e8eef6",background:"#f8fbff",gap:12}}>
-                  <div>
-                    <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase"}}>Manual Scout Pack ({filteredLeadFinderManualLinks.length})</div>
-                    <div style={{fontSize:12,color:"#64748b",marginTop:5}}>Open a search, confirm the facility manually, then only keep real manufacturing leads.</div>
-                  </div>
-                  <div className="mono" style={{fontSize:10,color:"#8ea0bd"}}>No API mode</div>
-                </div>
-                <div style={{padding:"14px 18px",display:"grid",gap:10}}>
-                  {!filteredLeadFinderManualLinks.length && <div className="mono" style={{fontSize:12,color:"#8ea0bd"}}>Press Start to build search links for the selected cities and industries.</div>}
-                  {filteredLeadFinderManualLinks.map(link => (
-                    <div key={link.id} style={{border:"1px solid #e8eef6",borderRadius:6,padding:"12px 14px",background:"#fbfdff",display:"grid",gap:8}}>
-                      <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start",flexWrap:"wrap"}}>
-                        <div>
-                          <div style={{fontSize:13,fontWeight:700,color:"#172033"}}>{link.label}</div>
-                          <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:4}}>{link.kind} · {link.city} · {link.industry}</div>
-                        </div>
-                        <a href={link.url} target="_blank" rel="noreferrer" style={{padding:"7px 12px",border:"1px solid #1e3a8a",borderRadius:4,background:"#eff6ff",color:"#1e3a8a",textDecoration:"none",fontWeight:700,fontSize:12}}>Open Search</a>
-                      </div>
-                      <div style={{fontSize:12,color:"#475569",wordBreak:"break-word"}}>{link.query}</div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-
             <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
               <div style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #e8eef6",background:"#f8fbff",gap:12}}>
                 <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase"}}>Live Logs ({leadFinderLogs.length})</div>
@@ -3944,8 +4085,8 @@ const taskActivityFromTask = task => ({
             <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
               <div style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #e8eef6",background:"#f8fbff",gap:12}}>
                 <div>
-                  <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase"}}>{leadFinderConfig.mode==="manual" ? `Verified Leads You Saved (${leadFinderResults.length})` : `Today's Leads (${leadFinderResults.length})`}</div>
-                  <div style={{fontSize:12,color:"#64748b",marginTop:5}}>{leadFinderConfig.mode==="manual" ? "This stays separate from the CRM while you manually research companies." : "Saved separately from the CRM so you can review them without changing your manufacturer list."}</div>
+                  <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase"}}>{`Today's Leads (${leadFinderResults.length})`}</div>
+                  <div style={{fontSize:12,color:"#64748b",marginTop:5}}>Saved separately from the CRM so you can review them without changing your manufacturer list.</div>
                 </div>
                 <div style={{display:"flex",gap:8,alignItems:"center"}}>
                   <input className="field" style={{width:220}} value={leadFinderSearch} onChange={e=>setLeadFinderSearch(e.target.value)} placeholder="Search leads..." />
@@ -3972,7 +4113,7 @@ const taskActivityFromTask = task => ({
                     </tr>
                   </thead>
                   <tbody>
-                    {!filteredLeadFinderResults.length && <tr><td colSpan="6" className="mono" style={{padding:24,color:"#8ea0bd"}}>{leadFinderConfig.mode==="manual" ? "No verified leads saved yet. Use the manual scout pack above." : "No lead finder results yet."}</td></tr>}
+                    {!filteredLeadFinderResults.length && <tr><td colSpan="6" className="mono" style={{padding:24,color:"#8ea0bd"}}>No lead finder results yet.</td></tr>}
                     {filteredLeadFinderResults.map(result => (
                       <tr key={result.id} className="row" onClick={()=>setLeadFinderSelected(result)}>
                         <td style={{padding:"12px 14px",borderBottom:"1px solid #eef3f9",fontWeight:700,color:"#172033"}}>{result.company}</td>
