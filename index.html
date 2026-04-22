@@ -3701,7 +3701,7 @@ const taskActivityFromTask = task => ({
       <header style={{height:58,padding:"0 28px",display:"flex",alignItems:"center",justifyContent:"space-between",background:"#fff",borderBottom:"3px solid #ef4444",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
         <div className="condensed" style={{fontSize:22,fontWeight:800,letterSpacing:".04em"}}><span style={{color:"#ef4444"}}>ED</span> <span style={{color:"#1e3a8a"}}>INDUSTRIAL</span><span style={{fontSize:14,color:"#94a3b8",marginLeft:8,letterSpacing:".12em"}}>CRM</span></div>
         <div style={{display:"flex",gap:6}}>
-          {[["dashboard","Dashboard"],["contacts","Contacts"],["leadfinder","Lead Finder"]].map(([value,label])=><button key={value} onClick={()=>setView(value)} style={{padding:"7px 16px",border:"none",borderRadius:3,background:view===value?"#1e3a8a":"transparent",color:view===value?"#fff":"#64748b",cursor:"pointer"}}>{label}</button>)}
+          {[["dashboard","Dashboard"],["contacts","Contacts"],["finder","Lead Finder"]].map(([value,label])=><button key={value} onClick={()=>setView(value)} style={{padding:"7px 16px",border:"none",borderRadius:3,background:view===value?"#1e3a8a":"transparent",color:view===value?"#fff":"#64748b",cursor:"pointer"}}>{label}</button>)}
         </div>
         <button onClick={()=>openForm(tab)} style={{padding:"8px 18px",border:"none",borderRadius:3,background:"#ef4444",color:"#fff",fontWeight:700,cursor:"pointer"}}>+ Add Company</button>
       </header>
