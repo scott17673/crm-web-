@@ -13,7 +13,7 @@ window.CRM_CONFIG = {
   "appLabel": "Ed Industrial CRM Copy",
   "supabaseUrl": "https://dqqitnvyuebqfvgplcba.supabase.co",
   "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxcWl0bnZ5dWVicWZ2Z3BsY2JhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxNDcwNDUsImV4cCI6MjA4ODcyMzA0NX0.15H-Ry876rY-Hl4vPzY5DZ95th_qqjDAqqVKlTSMeXY",
-  "finderDashboardUrl": "https://edifinder.duckdns.org"
+  "finderDashboardUrl": "http://127.0.0.1:8780"
 };
 </script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Barlow+Condensed:wght@400;500;600;700;800&family=Barlow:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -2374,7 +2374,7 @@ function App(){
       toast2(`Search complete: ${data.contactsFound || 0} contact${(data.contactsFound || 0)===1?"":"s"}, ${data.recentSignalsFound || 0} signal${(data.recentSignalsFound || 0)===1?"":"s"}.`);
       await hydrate();
     }catch(e){
-      toast2("Search error: "+(e.message||String(e)));
+      toast2(`Search error via ${FINDER_URL}: `+(e.message||String(e)));
     }finally{
       setCompanyEnrichmentBusy(current => {
         const next={...current};
@@ -4446,6 +4446,7 @@ const taskActivityFromTask = task => ({
                 <div>
                   <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase"}}>Lead Finder</div>
                   <div style={{fontSize:13,color:"#64748b",marginTop:2}}>{st.summary||"Connecting to dashboard..."}</div>
+                  <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:4,wordBreak:"break-all"}}>Endpoint: {FINDER_URL}</div>
                 </div>
                 <div style={{display:"flex",gap:8,alignItems:"center"}}>
                   <span className="mono" style={{fontSize:11,padding:"4px 10px",borderRadius:3,fontWeight:700,letterSpacing:".06em",background:st.cycleRunning?"#dcfce7":st.running?"#fef9c3":"#f1f5f9",color:st.cycleRunning?"#166534":st.running?"#854d0e":"#64748b"}}>{st.cycleRunning?"RUNNING":st.running?"WAITING":"IDLE"}</span>
