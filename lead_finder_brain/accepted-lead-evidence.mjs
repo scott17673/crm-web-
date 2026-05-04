@@ -1,0 +1,112 @@
+export const acceptedLeadEvidence = [
+  {
+    company: "The Crupi Group / D. Crupi & Sons Limited",
+    source_urls: [
+      "https://crupigroup.com/contact/",
+      "https://crupigroup.com/project/asphalt-plants/",
+      "https://ca.linkedin.com/jobs/view/asphalt-plant-manager-at-d-crupi-sons-limited-4233450899",
+      "https://ca.linkedin.com/jobs/view/quality-control-manager-at-d-crupi-sons-limited-4388878440",
+      "https://canada.constructconnect.com/dcn/news/projects/2019/01/asphalt-excellence-celebrated-2018-trillium-awards",
+      "https://tarba.org/2025/03/18/using-rca-march-webinar/",
+      "https://ero.ontario.ca/public/2024-11/Crupi_TS_Registration_Draft_Instrument-signed_AODA.pdf",
+      "https://ero.ontario.ca/public/2025-03/ECA_D.%20Crupi%20%26%20Sons%20Limited.pdf",
+      "https://orba.org/getmedia/3ed1b164-16a9-43ff-bef3-0915b2bd4e48/2025-ORBA-Academy-Brochure-v11.pdf",
+      "https://ca.linkedin.com/company/d-crupi-sons-limited",
+      "https://ca.linkedin.com/in/domenic-passalacqua-a5091721",
+      "https://ca.linkedin.com/in/walter-henrique-6b2a6528",
+      "https://ca.linkedin.com/in/robert-santos-19a018ab",
+      "https://wiza.co/d/d-crupi-sons-limited/2c94/walter-henrique",
+      "https://wiza.co/d/d-crupi-sons-limited/2c94/dan-pieters",
+      "https://ca.linkedin.com/company/the-crupi-group",
+      "https://ca.linkedin.com/in/sal-spagnolo-b241b715"
+    ],
+    evidence: [
+      "Official contact page lists head office: 85 Passmore Avenue, Toronto, Ontario M1V 4S9; phone 416-291-1986; fax 416-291-3252; email info@crupigroup.com.",
+      "Official contact page lists asphalt plants: Bethridge Plant, 176 Bethridge Road, phone 416-244-5691; Passmore Plant, 83 Passmore Avenue, phone 416-291-0231; Brimley Plant, 477 Brimley Road, phone 416-261-3361; Oshawa Plant, 1089 Nelson Street, phone 905-434-3880.",
+      "Official contact page lists aggregate/quarry/depot sites: 14th Ave Depot, 2777 14th Avenue, phone 905-470-1112; Kirkfield Quarry, 1563 County Road #48 RR #1, phone 1-866-236-6609; Erin Pit, 5338 Tenth Line, phone 416-798-7004; Stouffville Pit, 14245 Ninth Line, phone 905-640-1155.",
+      "Official asphalt plants page says The Crupi Group operates four hot mix asphalt production facilities in the GTA.",
+      "LinkedIn job posting for D. Crupi & Sons Limited says Asphalt Plant Manager reports to the General Manager and manages production, maintenance, personnel, plant site locations, crushing operations, repairs and maintenance, and capital projects.",
+      "LinkedIn job posting for D. Crupi & Sons Limited says the QC Manager reports to the General Manager, ensures product quality of asphalt materials produced from asphalt plants and road construction projects, manages Asphalt Lab Technicians, and may work in a plant environment.",
+      "ConstructConnect/Daily Commercial News article says Domenic Passalacqua is the facility/asphalt plant manager for D. Crupi & Sons Limited and an active OAPC Environmental and Plant and Paving Committees member.",
+      "TARBA March 2025 recycled crushed aggregate webinar lists Domenic Passalacqua as General Manager, D. Crupi & Sons.",
+      "Ontario ERO technical standards registration for the 83 Passmore Avenue asphalt mix facility lists Domenic Passalacqua, General Manager, as contact person.",
+      "Ontario ERO Environmental Compliance Approval for D. Crupi & Sons portable crushing plant says the application and operations summary letter were signed by Domenic Passalacqua, C.Tech, D. Crupi & Sons Limited.",
+      "ORBA 2025 Academy brochure lists Domenic Passalacqua, C.Tech, General Manager, D. Crupi & Sons, says he has 37 years in asphalt paving, is an expert in asphalt plant operations, an industrial millwright mechanic, a certified engineering technician, and started as a plant foreman.",
+      "LinkedIn company page for D. Crupi & Sons Limited exposes public employee profile links for Domenic Passalacqua, Walter Henrique, Gary Mealing, and Mike Manieri.",
+      "Wiza profile identifies Walter Henrique as Estimating Manager/Project Manager at D. Crupi & Sons Limited; SignalHire says he previously worked as Acting Operations Manager and Supervisor.",
+      "Wiza profile identifies Dan Pieters as Logistics Supervisor at D. Crupi & Sons Limited.",
+      "Public LinkedIn profile URL https://ca.linkedin.com/in/robert-santos-19a018ab identifies Robert Santos with D. Crupi and Sons Ltd. and describes him as an experienced Site Supervisor.",
+      "LinkedIn company page lists employees at The Crupi Group: Sal Spagnolo, Cari Kruzel, Andy McTavish, Dino Cardoso. Sal Spagnolo has public LinkedIn profile URL https://ca.linkedin.com/in/sal-spagnolo-b241b715, but the visible search evidence does not show a target operations/maintenance/production/purchasing title."
+    ]
+  },
+  {
+    company: "Protectolite Composites Inc.",
+    source_urls: [
+      "https://protectolite.com/",
+      "https://ca.linkedin.com/company/protectolite-composites.-inc",
+      "https://www.linkedin.com/in/charles-xiao-b2a00373",
+      "https://www.sourcefromontario.com/en/page/delegate/136675/protectolite-composites-inc",
+      "https://craft.co/protectolite",
+      "https://www.linkedin.com/in/karl-szasz-47b48224/",
+      "https://www.linkedin.com/in/s-yong-lee-p-eng-mba-ab943516/",
+      "https://www.signalhire.com/profiles/stan-zibrat%27s-email/98366582",
+      "https://contactout.com/company/protectolite-inc-4706869",
+      "https://www.masstransitmag.com/rail/rail-vehicle-builders-components-accessories/company/10065646/protectolite-inc"
+    ],
+    evidence: [
+      "Official website lists phone 416-444-4484, fax 416-444-4485, and address 84 Railside Rd, North York, ON M3A 1A3.",
+      "Official website says Protectolite is a leading manufacturer of engineered composite parts and equipment, combines fiberglass/carbon/aramid with resins to manufacture composites, and has in-house manufacturing, machining, molding, R&D/testing capabilities.",
+      "Official website lists products/markets including FRP launder covers, density current baffles, weirs, scum baffles, FRP troughs, tank covers, baffle walls, electrical insulating parts, and compression composite molding.",
+      "LinkedIn company page says Protectolite Composites is in Plastics Manufacturing, North York, Ontario, company size 11-50, location 84 Railside Rd, and says it improves plant facilities.",
+      "LinkedIn company page lists employees at Protectolite Composites, Inc: S. Yong Lee, P.Eng., MBA; Karl Szasz; Stan Zibrat; Charles Xiao.",
+      "Public LinkedIn profile URL https://www.linkedin.com/in/charles-xiao-b2a00373 identifies Charles Xiao with Protectolite Composites; user-provided LinkedIn screenshot shows Engineering Manager at Protectolite Composites, Inc.",
+      "Source from Ontario profile says Protectolite designs and manufactures all in house/not sub-contracted FRP launder covers, density baffles, weirs, scum baffles, launder troughs, baffle walls and many other custom water/wastewater products. It lists Karl Szasz, President, +1 416-444-4484 ext. 228, +1 416-505-6820 mobile, kszasz@protectolite.com.",
+      "Craft profile lists key people: Karl Szasz, President, with LinkedIn URL https://www.linkedin.com/in/karl-szasz-47b48224/; S. Yong Lee, Vice President and General Manager, with LinkedIn URL https://www.linkedin.com/in/s-yong-lee-p-eng-mba-ab943516/.",
+      "SignalHire profile says Stan Zibrat is Production Engineer at Protectolite, Inc. The search result did not provide a full public LinkedIn URL for Stan.",
+      "ContactOut staff directory lists Mike Selkirk, Production Lead Hand; Bruce Macdonald, Exec. V.P.; and Stan Zibrat, Production Engineer at Protectolite, Inc. It does not provide full public LinkedIn profile URLs in the accessible evidence.",
+      "Mass Transit magazine profile lists Karl Szasz as President contact for Protectolite Inc."
+    ]
+  },
+  {
+    company: "Durose Manufacturing Limited",
+    source_urls: [
+      "https://durose.com/about-us/history/",
+      "https://durose.com/contact/",
+      "https://durose.com/equipment/equipment-profiles/",
+      "https://durose.com/services-capabilities/fabrication/",
+      "https://ca.linkedin.com/company/durose-manufacturing",
+      "https://ca.linkedin.com/in/scott-french-bb52162b",
+      "https://ca.linkedin.com/in/brad-cabeldu-02642737",
+      "https://ca.linkedin.com/in/stefan-ontelus-6aa50786",
+      "https://www.signalhire.com/profiles/brad-cabeldu%27s-email/101218940",
+      "https://www.signalhire.com/profiles/stefan-ontelus%27s-email/101522156",
+      "https://www.signalhire.com/companies/durose-manufacturing",
+      "https://wiza.co/d/durose-manufacturing/383f/himil-patel",
+      "https://www.clodura.ai/directory/company/durose-manufacturing-limited",
+      "https://www.dignitymemorial.com/obituaries/kitchener-on/amaro-rodrigues-11646397",
+      "https://guelph.ca/wp-content/uploads/council_consolidated-agenda_112519.pdf",
+      "https://www.allbiz.ca/durose-manufacturing-ltd-519-822-5251"
+    ],
+    evidence: [
+      "Official company history says Durose is located at 460 Elizabeth Street, Guelph, and has grown to over 100 employees and 139,000 sq. ft.",
+      "Official company history says the workforce can transform metal into just about anything the mind can engineer and that Durose invested in CNC equipment, CAD, and ISO-certified processes.",
+      "Official website says Durose has one-stop expertise in custom steel fabrication, rolling and forming, partnering with OEMs for more than 75 years.",
+      "Official equipment page lists industrial equipment including 6KW laser cutting machine, CNC pipe cutting, plate shears, press brakes, structural rolling, CNC boring mills, vertical machining centers, robotic welding cells, paint booth 24 ft wide x 240 ft long, blasting machine, high-pressure water system, and 32 overhead cranes up to 50 tons.",
+      "Official fabrication page says Durose is vertically integrated and keeps fabrication processes in-house from raw steel to finished paint, with welding, fabrication, robotic welding cells, manufacturing engineering services, and quality control.",
+      "Macrae's Blue Book lists Durose Manufacturing address 460 Elizabeth Street, Guelph, ON N1E 6C1; phone 519-822-5251; fax 519-822-3967; business activity Manufacturer / Service / Exporter; products manufactured in fabricated metal.",
+      "LinkedIn company page says Durose Manufacturing Limited is a full service metals fabrication and machining facility, company size 51-200, headquarters Guelph, Ontario, location 460 Elizabeth St, Guelph, Ontario N1E.",
+      "LinkedIn company page lists employees at Durose Manufacturing Limited: Scott French, Brad Cabeldu, Glen Banni, Stefan Ontelus, and exposes public profile links for Scott French, Brad Cabeldu, Glen Banni, and Stefan Ontelus.",
+      "LinkedIn company page update says Durose is hiring a Fabrication Supervisor and tells applicants to forward CVs to hr@durose.com.",
+      "Brad Cabeldu has public LinkedIn profile URL https://ca.linkedin.com/in/brad-cabeldu-02642737 showing Durose Manufacturing in experience, but the visible search evidence does not show his title.",
+      "SignalHire profile for Brad Cabeldu identifies him as Project Manager/Estimator at Durose Manufacturing Limited and says he previously worked as Welder/Fitter Leadhand at Durose.",
+      "SignalHire profile for Stefan Ontelus identifies him as Engineering Manager at Durose Manufacturing LTD.",
+      "SignalHire company profile for Durose Manufacturing Limited lists Scott French as Purchaser.",
+      "Wiza profile for Himil Patel identifies him as Manufacturing Engineer at Durose Manufacturing and lists coworkers including Hardik Vasoya, Brad Cabeldu, Sean Archer, Julio Sumoza, and Dorota Mieczynski.",
+      "SignalHire and Clodura profiles identify MITKUMAR PATEL as maintenance millwright at Durose Manufacturing Limited; user-provided LinkedIn screenshot confirms Durose association and title 433A - Millwright Maintenance / Quality Inspector / Electrical Engineering, but does not expose a browser URL.",
+      "Dignity Memorial obituary says Amaro Rodrigues passed away January 29, 2024 and was a dedicated employee for over 17 years at Durose Manufacturing, so he must not be treated as a current outreach contact.",
+      "Official company history says Angelo's son Martino runs the company's day-to-day operations. No full LinkedIn URL was found in the evidence packet.",
+      "City of Guelph PDF letter identifies Angelo Maggiolo as President, 519-822-5251 ext 222, at 460 Elizabeth Street, Guelph.",
+      "AllBiz profile lists Angelo Maggiolo as Owner with email angelom@durose.com and lists sales@durose.com, 519-822-5251, 519-836-8777, 800-265-7784, fax 519-822-3967."
+    ]
+  }
+];

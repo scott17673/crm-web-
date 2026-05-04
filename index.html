@@ -126,9 +126,10 @@ const LEAD_FINDER_LEAD_ITEM_SCHEMA = {
         properties: {
           name: { type: "string" },
           title: { type: "string" },
+          linkedin: { type: "string" },
           source: { type: "string" },
         },
-        required: ["name","title","source"],
+        required: ["name","title","linkedin","source"],
       },
     },
     evidence: {
@@ -286,6 +287,32 @@ const LEAD_FINDER_FOOD_REJECT_HINTS = [
 ];
 const LEAD_FINDER_ADDRESS_REGEX = /\b(street|st|road|rd|avenue|ave|boulevard|blvd|court|crt|drive|dr|lane|ln|way|parkway|pkwy|crescent|cres|place|pl|trail|trl)\b/i;
 const LEAD_FINDER_PHONE_REGEX = /(?:\+?1[-.\s]*)?(?:\(?\d{3}\)?[-.\s]*)\d{3}[-.\s]*\d{4}/;
+const LEAD_FINDER_HARD_REJECT_HINTS = [
+  "no confirmed southern ontario manufacturing plant found",
+  "no verified southern ontario manufacturing site",
+  "no confirmed manufacturing plant",
+  "no confirmed production facility",
+  "not a manufacturer",
+  "not a manufacturing",
+  "service / vendor page",
+  "vendor / integrator",
+  "retail or restaurant",
+  "shop bakery specials",
+  "request custom cake quote",
+  "order our most popular custom cake",
+];
+const LEAD_FINDER_OUT_OF_RANGE_HINTS = [
+  "new jersey",
+  " nj ",
+  " united states",
+  " usa",
+  "massachusetts",
+];
+const LEAD_FINDER_MISSING_PRODUCT_HINTS = [
+  "not confidently confirmed from public pages yet",
+  "products:missing",
+  "needs products",
+];
 
 const today = () => new Date().toISOString().slice(0,10);
 const leadFinderDefaultConfig = () => ({ mode:"endpoint", endpointUrl:"", model:"gpt-5-mini", limitPerCity:3 });
@@ -379,6 +406,7 @@ const normalizeLeadFinderFacility = facility => ({
 const normalizeLeadFinderContact = contact => ({
   name: String(contact?.name || "").trim(),
   title: String(contact?.title || "").trim(),
+  linkedin: normalizeExternalUrl(String(contact?.linkedin || contact?.linkedin_url || "").trim()),
   source: String(contact?.source || "").trim(),
 });
 const normalizeLeadFinderEvidence = evidence => ({
@@ -411,6 +439,34 @@ const isLeadFinderContactSourceUsable = value => {
   const text = String(value || "").trim();
   return !!text && !containsLeadFinderHint(text, LEAD_FINDER_WEAK_SOURCE_HINTS);
 };
+const leadFinderGuardText = lead => [
+  lead?.company,
+  lead?.stage,
+  lead?.industry,
+  lead?.verification,
+  lead?.end_product,
+  lead?.notes,
+  lead?.signals,
+  lead?.tags,
+  ...(Array.isArray(lead?.facilities) ? lead.facilities.flatMap(facility => [facility.address, facility.phone]) : []),
+  ...(Array.isArray(lead?.evidence) ? lead.evidence.flatMap(item => [item.label, item.url]) : []),
+].filter(Boolean).join(" ");
+const passesLeadFinderPlantVerifierGuard = lead => {
+  const text = leadFinderGuardText(lead);
+  const lower = ` ${text.toLowerCase()} `;
+  if(!String(lead?.company || "").trim()) return false;
+  if(containsLeadFinderHint(lower, LEAD_FINDER_HARD_REJECT_HINTS)) return false;
+  if(containsLeadFinderHint(lower, LEAD_FINDER_OUT_OF_RANGE_HINTS)) return false;
+  if(containsLeadFinderHint(lower, LEAD_FINDER_MISSING_PRODUCT_HINTS)) return false;
+  if(/\bneeds products\b/i.test(String(lead?.stage || ""))) return false;
+  const hasAddress = isLeadFinderStreetAddress(text);
+  const hasPhone = isLeadFinderPhone(text);
+  const hasPlantLanguage = /\b(manufactur|processing|production|plant|facility|brewery|roastery|asphalt plant|ready[- ]mix|precast|quarry|recycling facility|molding|extrusion|fabricat|machin|packag)\b/i.test(text);
+  const hasProduct = String(lead?.end_product || "").trim() &&
+    !containsLeadFinderHint(lead?.end_product, LEAD_FINDER_MISSING_PRODUCT_HINTS) &&
+    !/^(&copy;|copyright|home\b|bakery specials\b|request custom cake quote\b)/i.test(String(lead?.end_product || "").trim());
+  return hasAddress && hasPhone && hasPlantLanguage && hasProduct;
+};
 const isFoodAndBeverageOnlySearch = industries => {
   const active = normalizeLeadFinderIndustries(industries).filter(industry => industry!==OTHER_INDUSTRY_LABEL);
   return active.length===1 && active[0]==="Food and Beverage";
@@ -427,12 +483,13 @@ const collectLeadFinderValidationIssues = (lead, industries=[], options={}) => {
   const evidence = Array.isArray(lead?.evidence) ? lead.evidence : [];
   const validFacility = facilities.find(facility => isLeadFinderStreetAddress(facility?.address) && isLeadFinderPhone(facility?.phone));
   if(!validFacility) issues.push("missing public facility address and phone");
-  const validContact = contacts.find(contact => isLeadFinderPersonName(contact?.name) && isLeadFinderProductionTitle(contact?.title) && isLeadFinderContactSourceUsable(contact?.source));
+  const validContact = contacts.find(contact => isLeadFinderPersonName(contact?.name) && isLeadFinderProductionTitle(contact?.title) && isLeadFinderContactSourceUsable(contact?.source || contact?.linkedin));
   if(requireProductionContact && !validContact) issues.push("missing named production or operations contact");
   const evidenceCount = evidence.filter(item => /^https?:\/\//i.test(String(item?.url || "").trim())).length;
   if(evidenceCount < 2) issues.push("missing multiple public source links");
   if(!String(lead?.verification || "").trim()) issues.push("missing facility verification");
   if(!String(lead?.end_product || "").trim()) issues.push("missing product summary");
+  if(!passesLeadFinderPlantVerifierGuard(lead)) issues.push("failed strict plant verifier guard");
   if(isFoodAndBeverageOnlySearch(industries)){
     if(normalizeIndustry(lead?.industry)!=="Food and Beverage"){
       issues.push("industry is not Food and Beverage");
@@ -448,7 +505,7 @@ const collectLeadFinderValidationIssues = (lead, industries=[], options={}) => {
 };
 const hasLeadFinderProductionContact = lead => {
   const contacts = Array.isArray(lead?.contacts) ? lead.contacts : [];
-  return contacts.some(contact => isLeadFinderPersonName(contact?.name) && isLeadFinderProductionTitle(contact?.title) && isLeadFinderContactSourceUsable(contact?.source));
+  return contacts.some(contact => isLeadFinderPersonName(contact?.name) && isLeadFinderProductionTitle(contact?.title) && isLeadFinderContactSourceUsable(contact?.source || contact?.linkedin));
 };
 const formatLeadFinderDuplicateSource = duplicate => {
   if(!duplicate) return "duplicate";
@@ -461,7 +518,7 @@ const buildLeadFinderNotes = lead => {
     .map(facility => [facility.address, facility.phone ? `Phone: ${facility.phone}` : ""].filter(Boolean).join(" | "))
     .filter(Boolean);
   const contactLines = (lead.contacts || [])
-    .map(contact => [contact.name, contact.title, contact.source].filter(Boolean).join(" | "))
+    .map(contact => [contact.name, contact.title, contact.linkedin, contact.source].filter(Boolean).join(" | "))
     .filter(Boolean);
   return [
     lead.end_product ? `End product\n${lead.end_product}` : "",
@@ -477,7 +534,7 @@ const normalizeLeadFinderLead = (lead, fallback={}) => {
     .filter(facility => facility.address || facility.phone);
   const contacts = (Array.isArray(lead?.contacts) ? lead.contacts : [])
     .map(normalizeLeadFinderContact)
-    .filter(contact => contact.name || contact.title || contact.source);
+    .filter(contact => contact.name || contact.title || contact.linkedin || contact.source);
   const evidence = (Array.isArray(lead?.evidence) ? lead.evidence : [])
     .map(normalizeLeadFinderEvidence)
     .filter(item => item.label || item.url);
@@ -532,6 +589,40 @@ const leadFinderIndustryPrompt = industries => {
   if(!includesOthers) return [base || "Use any manufacturing industry that fits the geography.", foodRules].filter(Boolean).join(" ");
   return [base, foodRules, "You may also include manufacturers outside those named buckets under the label Others."].filter(Boolean).join(" ");
 };
+const LEAD_FINDER_PLANT_VERIFIER_SPEC = `
+PLANT VERIFIER BRAIN
+Save a company only when all of these are proven from public evidence:
+1. It is an actual company, not a page title, article, directory, category, association, or generic phrase.
+2. It is the operator/owner of the production or processing site, not a vendor, contractor, consultant, distributor, wholesaler, retailer, pest control company, engineering-only firm, equipment supplier, service provider, association, or company merely serving manufacturers.
+3. It has at least one real facility address in the GTA or roughly a 2-hour driving radius from the GTA.
+4. It manufactures, processes, produces, packages, recycles, casts, molds, mixes, mills, stamps, coats, roasts, brews, bakes, crushes, extrudes, or otherwise physically transforms products/materials at that facility.
+5. The operation is industrial enough to plausibly use plant equipment such as pumps, conveyors, mixers, packaging lines, compressors, crushers, kilns, ovens, tanks, boilers, hydraulics, motors, gearboxes, dust collection, chillers, dryers, screens, presses, molding machines, extruders, furnaces, finishing lines, or similar machinery.
+6. The proof can be cited.
+
+Default to reject when proof is missing or ambiguous. No grading, no maybe-save.
+Accepted examples include food processors, meat/poultry plants, commercial bakery production plants, breweries/cideries with canning/bottling, coffee roasters with commercial roasting, ready-mix/precast concrete plants, asphalt plants, aggregate/quarry operations, recycling/material recovery plants, metal processors/stampers/coaters/foundries, plastics molding/extrusion/thermoforming plants, packaging manufacturers, and building product manufacturers.
+`;
+const LEAD_FINDER_PLANT_ENRICHMENT_SPEC = `
+PLANT ENRICHMENT BRAIN
+Run only after the verifier says yes. Do not drop the lead just because contacts are incomplete.
+For each accepted plant lead, enrich it with:
+1. All relevant in-range facility addresses and facility/main phone numbers.
+2. End products or product categories.
+3. Likely plant equipment/process clues in notes.
+4. Production, maintenance, operations, general management, purchasing, quality, engineering, and plant-adjacent contacts.
+5. Full personal LinkedIn profile URLs when found. Personal LinkedIn URLs must contain /in/. Do not invent URLs. Do not use company pages or LinkedIn search URLs as a person's LinkedIn.
+6. A source for each useful contact. If a contact is proven but LinkedIn is not found, keep the contact with linkedin as an empty string and cite the source.
+7. A recent hiring / expansion signals section, but only when it is tied to hiring, plant/production/maintenance roles, facility expansion, planned expansion, new sites, new production lines, permits, ECA, construction, capacity, or similar operational growth. Ignore awards, charity posts, generic marketing, customer reviews, and social fluff.
+
+Required enrichment passes before giving up on contacts:
+1. Official company site: contact, locations, products, capabilities, facilities.
+2. Regulatory/public records: ECA, permits, CFIA, food safety, ISO, SQF, HACCP, municipal/provincial PDFs.
+3. LinkedIn company page: extract visible employee /in/ profile links.
+4. Targeted people searches: plant manager, production manager, production supervisor, maintenance manager, maintenance supervisor, millwright, maintenance mechanic, operations manager, general manager, purchaser, buyer, procurement, quality manager, engineering manager.
+5. Directory cross-check: SignalHire, Wiza, Clodura, Adapt, ContactOut, Source From Ontario, industry association pages.
+6. Stale-contact check when needed: obituary, retired, left, new company. Do not output deceased/retired/clearly former contacts as current outreach contacts.
+7. Recent signal search: careers pages, job posts, news, permits, ECA records, construction/capacity pages. If no hiring or expansion signal is found, say that plainly; do not fill the section with unrelated announcements.
+`;
 const buildLeadFinderPrompt = ({ city, industries, limitPerCity, existingCompanies, existingLeadCompanies }) => `
 You are the Lead Finder for Ed Industrial CRM.
 
@@ -539,22 +630,35 @@ Search only for NEW manufacturing leads in ${city}, Ontario, Canada that are in 
 
 ${leadFinderIndustryPrompt(industries)}
 
-A company counts as a lead only after you confirm a real manufacturing or processing facility in range.
+Use this exact two-brain workflow:
+
+${LEAD_FINDER_PLANT_VERIFIER_SPEC}
+
+${LEAD_FINDER_PLANT_ENRICHMENT_SPEC}
 
 Required workflow:
-1. Confirm the company operates a manufacturing or processing facility in range.
-2. Only after confirmation, keep it as a lead.
-3. Capture what the company produces, processes, or manufactures.
-4. Capture a public street address and phone number for the facility or company.
-5. Find at least one named production or operations contact, such as plant manager, production manager, operations manager, manufacturing manager, maintenance manager, plant supervisor, production supervisor, site manager, facility manager, or general manager.
-6. Include at least two public evidence links, including one facility or company source. Add a people or contact source whenever you can find one.
-7. Skip duplicates already in the CRM, already found in this lead finder session, or already surfaced in earlier lead-finder research.
+1. Search for candidate companies in ${city}.
+2. Apply the plant verifier brain. If any required verifier proof is missing, skip the candidate.
+3. Only after verifier yes, apply the plant enrichment brain.
+4. Capture what the company produces, processes, or manufactures.
+5. Capture a public street address and phone number for the facility or company.
+6. Include production/maintenance/operations/purchasing contacts when supported by evidence. Missing contacts should not reject a verified plant.
+7. Include at least two public evidence links, including one facility or company source. Add a people/contact source whenever found.
+8. Skip duplicates already in the CRM, already found in this lead finder session, or already surfaced in earlier lead-finder research.
 
 Hard exclusions:
 - Distributors, warehouses, offices without production, retailers, staffing firms, installers, service-only businesses, labs without plant production, farms without processing plants, and companies outside the geography.
 - Restaurants, cafes, storefront bakeries, dessert shops, juice bars, meal-prep stores, caterers, grocery stores, packaging suppliers, engineering firms, construction firms, and companies whose public footprint looks like retail, service, or distribution only.
 - If the facility is not clearly confirmed, or the lead does not have a public address, phone number, and evidence links, skip it.
 - Never invent a contact. Do not use placeholders such as "Not publicly listed", "Unknown", "Contact us", or generic department names.
+
+Output rules:
+- Return JSON only.
+- For contacts, use { "name": string, "title": string, "linkedin": string, "source": string }.
+- Use linkedin only for a full personal LinkedIn /in/ profile URL. Otherwise use an empty string.
+- The source can be a public LinkedIn profile, company page, official source, regulatory source, or people-directory source proving the contact/title.
+- In notes, include enrichment clues such as plant type, equipment clues, contact search status, and any relevant caution.
+- In notes, include a heading called **recent hiring / expansion signals**. Only include hiring/expansion/planned-expansion/capacity/permit signals under that heading.
 
 Existing CRM or previously surfaced company names to avoid:
 ${existingCompanies.length ? existingCompanies.join("\n") : "- none -"}
@@ -2094,6 +2198,7 @@ function App(){
   const [finderIndustries,setFinderIndustries] = useState(FINDER_DEFAULT_INDUSTRIES);
   const [finderCitiesText,setFinderCitiesText] = useState(null);
   const [finderSettingsSaving,setFinderSettingsSaving] = useState(false);
+  const [companyEnrichmentBusy,setCompanyEnrichmentBusy] = useState({});
   const finderLogRef = useRef(null);
   const finderFollowLogs = useRef(true);
   const finderSyncedFromDashboard = useRef(false);
@@ -2171,8 +2276,8 @@ function App(){
     const pollLeads=async()=>{
       try{
         const today=new Date().toISOString().slice(0,10);
-        const {data}=await sb.from("manufacturers").select("id,company,stage,industry,end_product,signals,last_contact,created_at").gte("created_at",today+"T00:00:00Z").order("created_at",{ascending:false}).limit(200);
-        if(!cancelled && data) setFinderTodayLeads(data);
+        const {data}=await sb.from("manufacturers").select("id,company,stage,industry,end_product,signals,last_contact,created_at,tags").gte("created_at",today+"T00:00:00Z").order("created_at",{ascending:false});
+        if(!cancelled && data) setFinderTodayLeads(data.filter(passesLeadFinderPlantVerifierGuard));
       }catch{}
     };
     poll();
@@ -2222,6 +2327,42 @@ function App(){
         ? "Start command sent — finder will begin on your local machine."
         : "Stop command sent — finder will stop on your local machine.");
     }catch(e){ toast2("Command error: "+e.message); }
+  };
+
+  const runCompanyEnrichment = async record => {
+    if(!record || record.type!=="manufacturer") return;
+    setCompanyEnrichmentBusy(current => ({...current, [record.id]: true}));
+    try{
+      const r=await fetch(FINDER_URL+"/api/enrich-company",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({id:record.id,company:record.company})
+      });
+      const data=await r.json();
+      if(!r.ok) throw new Error(data.error||"Search failed");
+      const nextContacts=dedupeContacts([...(record.contacts || []), ...(data.contacts || []).map(contact => ({
+        name: contact.name || "",
+        title: contact.title || "",
+        linkedin: contact.linkedin || ""
+      }))]);
+      const patch={contacts:nextContacts,notes:data.signalsText || record.notes || "",signals:data.signalsText || record.signals || "",tags:data.tags || record.tags || []};
+      setMfrs(list => list.map(item => item.id===record.id ? {...item,...patch} : item));
+      setSelected(current => current && current.id===record.id && current.type==="manufacturer" ? {...current,...patch} : current);
+      if(selected?.id===record.id && selected?.type==="manufacturer"){
+        setContactsDraft(contactsTextFromRecord({...record,contacts:nextContacts}));
+        if(data.signalsText) setNotesDraft(data.signalsText);
+      }
+      toast2(`Search complete: ${data.contactsFound || 0} contact${(data.contactsFound || 0)===1?"":"s"}, ${data.recentSignalsFound || 0} signal${(data.recentSignalsFound || 0)===1?"":"s"}.`);
+      await hydrate();
+    }catch(e){
+      toast2("Search error: "+(e.message||String(e)));
+    }finally{
+      setCompanyEnrichmentBusy(current => {
+        const next={...current};
+        delete next[record.id];
+        return next;
+      });
+    }
   };
 
   const saveFinderSettings=async()=>{
@@ -2497,7 +2638,7 @@ const taskActivityFromTask = task => ({
     localStorage.setItem(LEAD_FINDER_STATE_KEY, JSON.stringify({
       industries: leadFinderIndustries,
       citiesText: leadFinderCitiesText,
-      logs: leadFinderLogs.slice(-250),
+      logs: leadFinderLogs,
       results: leadFinderResults,
       stats: {...leadFinderStats, rows: leadFinderResults.length},
       search: leadFinderSearch,
@@ -2728,13 +2869,13 @@ const taskActivityFromTask = task => ({
       result.industry,
       result.end_product,
       result.notes,
-      ...(result.contacts || []).flatMap(contact => [contact.name, contact.title, contact.source]),
+      ...(result.contacts || []).flatMap(contact => [contact.name, contact.title, contact.linkedin, contact.source]),
       ...(result.facilities || []).flatMap(facility => [facility.address, facility.phone]),
     ].filter(Boolean).join(" ").toLowerCase().includes(query));
   },[leadFinderResults, leadFinderSearch]);
   const leadFinderDisplayStats = {...leadFinderStats, rows: leadFinderResults.length};
   const appendLeadFinderLog = useCallback((message, tone="info") => {
-    setLeadFinderLogs(list => [...list, createLeadFinderLog(message, tone)].slice(-250));
+    setLeadFinderLogs(list => [...list, createLeadFinderLog(message, tone)]);
   },[]);
   const setLeadFinderCities = nextCities => {
     setLeadFinderCitiesText(normalizeLeadFinderCityText((nextCities || []).join("\n")));
@@ -4153,7 +4294,7 @@ const taskActivityFromTask = task => ({
                     end_product: result.end_product,
                     notes: result.notes,
                     facilities: (result.facilities || []).map(item => [item.address, item.phone].filter(Boolean).join(" | ")).join(" ;; "),
-                    contacts: (result.contacts || []).map(item => [item.name, item.title, item.source].filter(Boolean).join(" | ")).join(" ;; "),
+                    contacts: (result.contacts || []).map(item => [item.name, item.title, item.linkedin, item.source].filter(Boolean).join(" | ")).join(" ;; "),
                     evidence: (result.evidence || []).map(item => [item.label, item.url].filter(Boolean).join(" | ")).join(" ;; "),
                     found_at: result.foundAt,
                     source: result.source,
@@ -4479,6 +4620,13 @@ const taskActivityFromTask = task => ({
                 </div>
               </div>
               <div style={{display:"flex",gap:8}}>
+                {selected.type==="manufacturer" && <button
+                  onClick={()=>runCompanyEnrichment(selected)}
+                  disabled={!!companyEnrichmentBusy[selected.id]}
+                  style={{padding:"10px 14px",border:"1px solid #1e3a8a",borderRadius:4,background:companyEnrichmentBusy[selected.id]?"#e2e8f0":"#eff6ff",color:companyEnrichmentBusy[selected.id]?"#94a3b8":"#1e3a8a",fontWeight:800,cursor:companyEnrichmentBusy[selected.id]?"default":"pointer",fontSize:12,letterSpacing:".04em"}}
+                >
+                  {companyEnrichmentBusy[selected.id] ? "SEARCHING..." : "FIND CONTACTS + SIGNALS"}
+                </button>}
                 <button onClick={()=>deleteRecord(selected)} style={{padding:"10px 18px",border:"none",borderRadius:4,background:"#ef4444",color:"#fff",fontWeight:800,cursor:"pointer",fontSize:12,letterSpacing:".05em"}}>DELETE</button>
                 <button onClick={()=>setSelected(null)} style={{width:30,height:30,border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",cursor:"pointer",color:"#94a3b8"}}>×</button>
               </div>
@@ -4660,6 +4808,7 @@ const taskActivityFromTask = task => ({
                       <div key={`${contact.name}-${index}`} style={{padding:"10px 0",borderBottom:index===(leadFinderSelected.contacts || []).length-1?"none":"1px solid #eef3f9"}}>
                         <div style={{fontSize:13,color:"#172033",fontWeight:700,wordBreak:"break-word"}}>{contact.name || "-"}</div>
                         <div style={{fontSize:12,color:"#475569",marginTop:4,wordBreak:"break-word"}}>{contact.title || "-"}</div>
+                        {!!contact.linkedin && <a href={contact.linkedin} target="_blank" rel="noreferrer" className="mono" style={{display:"block",fontSize:10,color:"#1e3a8a",marginTop:4,wordBreak:"break-all"}}>{contact.linkedin}</a>}
                         {!!contact.source && <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:4}}>{contact.source}</div>}
                       </div>
                     ))}

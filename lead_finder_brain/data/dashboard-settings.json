@@ -1,0 +1,25 @@
+{
+  "enabled": true,
+  "autoRun": false,
+  "existingCsvPath": "",
+  "crmConfigPath": "",
+  "province": "Ontario",
+  "cityLimit": 6,
+  "resultsPerQuery": 3,
+  "websitePageLimit": 2,
+  "searchDelayMs": 250,
+  "minEmployees": 10,
+  "citiesText": "",
+  "industries": [
+    "food_beverage",
+    "concrete",
+    "metal_refineries",
+    "recycling",
+    "mining_aggregate",
+    "asphalt_plants",
+    "building_products",
+    "others"
+  ],
+  "outputName": "milton-manufacturers-dashboard.csv",
+  "progressName": "milton-manufacturers-live.csv"
+}

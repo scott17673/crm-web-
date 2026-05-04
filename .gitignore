@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+
+*.log
+logs_*.txt
+logs_*.json
+*_summary.json
+
+ed_industrial_food_manufacturers_master_*.csv
+model_split_since_*/
+lead_finder_brain/test-output/
