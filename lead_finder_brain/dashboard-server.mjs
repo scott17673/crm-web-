@@ -947,13 +947,29 @@ async function assertRunReady() {
 
 async function serveStatic(res, pathname) {
   const relative = pathname === "/" ? "/index.html" : pathname;
-  const resolved = path.resolve(webRoot, `.${relative}`);
+  const allowedRepoStatics = new Set(["/index.html", "/crm-config.js"]);
+  const candidates = [
+    path.resolve(webRoot, `.${relative}`),
+    allowedRepoStatics.has(relative) ? path.resolve(repoRoot, `.${relative}`) : ""
+  ].filter(Boolean);
+  const allowedRoots = [path.resolve(webRoot), path.resolve(repoRoot)];
 
-  if (!resolved.startsWith(path.resolve(webRoot))) {
-    return sendPlain(res, 403, "Forbidden");
+  for (const resolved of candidates) {
+    if (!allowedRoots.some((root) => resolved === root || resolved.startsWith(`${root}${path.sep}`))) {
+      continue;
+    }
+    try {
+      await access(resolved);
+      return serveFile(res, resolved);
+    } catch {
+      continue;
+    }
   }
 
-  return serveFile(res, resolved);
+  if (!candidates.length) {
+    return sendPlain(res, 403, "Forbidden");
+  }
+  return sendPlain(res, 404, "Not found");
 }
 
 async function serveFile(res, filePath) {
