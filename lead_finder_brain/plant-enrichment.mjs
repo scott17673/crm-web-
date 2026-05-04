@@ -4,6 +4,7 @@ const RECENT_SIGNAL_INCLUDE_PATTERN = /\b(hiring|hire|job opening|job posting|ca
 const RECENT_SIGNAL_STRONG_PATTERN = /\b(hiring|job opening|job posting|careers?|recruiting|millwright|maintenance|production|plant|operations|expansion|expanded|expanding|new facility|new plant|new site|new production line|capacity|permit|approval|eca|construction|investment|planned expansion)\b/i;
 const RECENT_SIGNAL_NOISE_PATTERN = /\b(address|phone|official site|about|located|product list|products?|capabilities|independent craft|proudly located|built in|refurbished|facility address|contact page|store hours|taproom|tour|brewery tours?)\b/i;
 const RECENT_SIGNAL_NOISE_OVERRIDE_PATTERN = /\b(hiring|hire|job opening|job posting|careers?|recruiting|expansion|expanded|expanding|planned expansion|new facility|new plant|new site|new production line|capacity|permit|approval|eca|construction|investment)\b/i;
+const NON_PERSON_CONTACT_NAME_PATTERN = /\b(manager|supervisor|operator|technician|mechanic|millwright|team|department|contact|careers?|production|maintenance|operations|purchasing|procurement|job|posting|role|opening)\b/i;
 
 export function buildPlantEnrichmentMessages(lead) {
   return [
@@ -55,6 +56,8 @@ Rules:
 - Do not include generic company LinkedIn pages as a person's linkedin_url.
 - Do not include placeholder contacts. Every contact object must have a non-empty person name.
 - Do not include a person whose title/role is unknown unless the notes clearly explain why they are still useful.
+- Do not output a job title, open role, department, or job posting as a contact name. Job openings without a named person belong in recent_signals only.
+- If evidence says the company is hiring a production, maintenance, plant, operations, warehouse, or supervisor role, output that as a recent_signals entry even when no named person appears.
 - Missing contacts does not remove the lead.
 - Keep facility rows separate when multiple plants/sites are listed.
 - Prefer official company sources for facilities and phones.
@@ -194,6 +197,7 @@ export function normalizeEnrichmentResult(raw, lead) {
     cleanArray(result.contacts)
       .map((contact) => cleanContact(contact, allowedLinkedInUrls))
       .filter((contact) => contact.name)
+      .filter((contact) => isLikelyPersonName(contact.name))
       .filter((contact) => contact.title || contact.email || contact.phone || contact.linkedin_url)
       .filter((contact) => !isNegativePlaceholder(contact))
   );
@@ -291,6 +295,18 @@ function normalizeLinkedInUrl(value) {
 function isNegativePlaceholder(contact) {
   const text = `${contact?.name || ""} ${contact?.title || ""} ${contact?.notes || ""}`.toLowerCase();
   return /\b(unknown|not publicly listed|contact us|none found|n\/a|null)\b/.test(text);
+}
+
+function isLikelyPersonName(value) {
+  const text = stringValue(value);
+  if (!text || /@|https?:\/\//i.test(text) || NON_PERSON_CONTACT_NAME_PATTERN.test(text)) {
+    return false;
+  }
+  const tokens = text.replace(/[^A-Za-z'. -]/g, " ").split(/\s+/).filter(Boolean);
+  if (tokens.length < 2 || tokens.length > 5) {
+    return false;
+  }
+  return tokens.every((token) => /[A-Za-z]/.test(token));
 }
 
 function dedupeContacts(contacts) {
