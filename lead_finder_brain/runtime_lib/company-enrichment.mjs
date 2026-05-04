@@ -11,6 +11,7 @@ import { searchWeb, toCanonicalWebsiteUrl } from "./web-search.mjs";
 const TARGET_TITLE_PATTERN = /\b(site director of manufacturing|director of manufacturing|manufacturing manager|manufacturing leader|manufacturing and operations leader|plant manager|plant superintendent|maintenance manager|maintenance supervisor|maintenance mechanic|millwright|maintenance technician|industrial mechanic|production manager|production supervisor|team lead|operations manager|operations leader|general manager|engineering manager|quality manager|materials and processing supervisor|site supervisor|logistics supervisor|logistics manager|dispatch manager|dispatch\s*&\s*logistics manager|purchas(?:er|ing)|buyer|procurement|supply chain|facilities manager|facility manager)\b/i;
 const NON_PERSON_NAME_PATTERN = /\b(facility|facilities|plant|products?|services?|operations|manufacturing|company|team|careers?|contact|locations?|site|shop|home|office|virtual|tour|website|auto parts|food|water|healthcare|technology|aggregates?|construction|solutions|equipment)\b/i;
 const DIRECTORY_DOMAIN_PATTERN = /(?:yellowpages|pagesjaunes|canada411|facebook|instagram|x\.com|twitter|yelp|zoominfo|dnb|opencorporates|glassdoor)\./i;
+const PEOPLE_DIRECTORY_DOMAINS = ["wiza.co", "signalhire.com", "clodura.ai", "adapt.io", "contactout.com", "rocketreach.co"];
 const SIGNAL_INCLUDE_PATTERN = /\b(hiring|hire|job opening|job posting|careers?|recruiting|recruitment|seeking|millwright|maintenance mechanic|maintenance technician|production operator|production supervisor|plant manager|operations manager|expansion|expand|expanding|expanded|new facility|new plant|new site|new production line|production line|capacity|permit|approval|environmental compliance approval|eca|construction|investment|investing|planned expansion)\b/i;
 const SIGNAL_STRONG_PATTERN = /\b(hiring|job opening|job posting|careers?|millwright|maintenance|production|plant|operations|expansion|expanded|expanding|new facility|new plant|new site|new production line|capacity|permit|approval|eca|construction|investment|planned expansion)\b/i;
 const SIGNAL_NOISE_PATTERN = /\b(address|phone|official site|about|located|product list|products?|capabilities|independent craft|proudly located|built in|refurbished|facility address|contact page|store hours|taproom|tour|brewery tours?|charity|award|ambassador|walk a mile|sponsor|sponsorship|fundraiser|customer review|excellent service|newsletter|recipe|holiday hours|giveaway|webinar|conference|podcast|blog)\b/i;
@@ -196,7 +197,8 @@ function filterPeopleResultsByCompany(results, companyHints) {
 async function findOperationsContacts(evidence, { model }) {
   const heuristicContacts = dedupeContacts([
     ...extractWebsiteContacts(evidence.profile, evidence.websiteUrl),
-    ...extractLinkedInContacts(evidence.peopleResults, evidence.companyHints)
+    ...extractLinkedInContacts(evidence.peopleResults, evidence.companyHints),
+    ...extractDirectoryContacts(evidence.peopleResults, evidence.companyHints)
   ]);
 
   let modelContacts = [];
@@ -347,6 +349,15 @@ async function collectPeopleResults({ companyHints = [], city }) {
   const locationHints = uniqueOrdered([city, "Ontario", "Canada", ""]);
 
   for (const hint of toArray(companyHints).slice(0, 3)) {
+    queries.push(`site:wiza.co "${hint}"`);
+    queries.push(`site:wiza.co "${hint}" "Production Manager"`);
+    queries.push(`site:wiza.co "${hint}" "Quality Assurance"`);
+    queries.push(`site:wiza.co "${hint}" "Technical Services"`);
+    queries.push(`site:wiza.co "${hint}" "Supervisor"`);
+    queries.push(`site:signalhire.com "${hint}" "Production Manager"`);
+    queries.push(`site:rocketreach.co "${hint}" "Production Manager"`);
+    queries.push(`"${hint}" "Production Manager" "Wiza"`);
+    queries.push(`"${hint}" "Quality Assurance" "LinkedIn"`);
     for (const locationHint of locationHints) {
       queries.push(`site:linkedin.com/in "${hint}" ${locationHint ? `"${locationHint}"` : ""}`.trim());
       for (const title of titles) {
@@ -356,11 +367,13 @@ async function collectPeopleResults({ companyHints = [], city }) {
   }
 
   const collected = [];
-  for (const query of uniqueOrdered(queries).slice(0, 22)) {
+  for (const query of uniqueOrdered(queries).slice(0, 64)) {
     try {
+      const isDirectoryQuery = /wiza|signalhire|clodura|adapt|contactout|rocketreach/i.test(query);
       const results = await searchWeb(query, {
         limit: 3,
-        allowedDomains: ["linkedin.com"],
+        allowedDomains: isDirectoryQuery ? ["linkedin.com", ...PEOPLE_DIRECTORY_DOMAINS] : ["linkedin.com"],
+        allowBlockedDomains: isDirectoryQuery,
         keepUrlPath: true,
         skipPatterns: ["jobs", "/company/", "job opening"],
         timeoutMs: 12000
@@ -409,6 +422,64 @@ function extractLinkedInContacts(results, companyHints) {
       };
     }).filter(Boolean)
   );
+}
+
+function extractDirectoryContacts(results, companyHints) {
+  const phrases = buildCompanyPhrases(companyHints);
+  const tokens = buildCompanyTokenSets(companyHints);
+  return dedupeContacts(
+    toArray(results).map((result) => {
+      const domain = normalizeHostname(result?.url);
+      if (!PEOPLE_DIRECTORY_DOMAINS.some((allowed) => domain === allowed || domain.endsWith(`.${allowed}`))) {
+        return null;
+      }
+      const titleText = cleanText(result?.title);
+      const snippet = cleanText(result?.snippet);
+      if (!matchesCompanyContext({ titleText, snippet, companyPhrases: phrases, companyTokenSets: tokens })) {
+        return null;
+      }
+      const parsed = parseDirectoryContact(titleText, snippet);
+      if (!parsed.name || !parsed.title) {
+        return null;
+      }
+      return {
+        ...parsed,
+        linkedin: extractLinkedInUrl(`${titleText} ${snippet}`),
+        source_url: cleanText(result?.url),
+        notes: `People-directory public search result from ${domain}`
+      };
+    }).filter(Boolean)
+  );
+}
+
+function parseDirectoryContact(title, snippet) {
+  const titleText = cleanText(title);
+  const snippetText = cleanText(snippet);
+  const wizaTitleMatch = titleText.match(/^(.+?)\s+-\s+(.+?)\s+at\s+.+?\s+-\s+Wiza$/i);
+  if (wizaTitleMatch) {
+    return {
+      name: cleanPersonName(wizaTitleMatch[1]),
+      title: cleanRoleText(wizaTitleMatch[2])
+    };
+  }
+
+  const worksAsMatch = snippetText.match(/\b([A-Z][A-Za-z'`.-]+(?:\s+[A-Z][A-Za-z'`.-]+){1,4})\s+works\s+at\s+.+?\s+as\s+(.+?)(?:\.|,|\s+and\s+|$)/i);
+  if (worksAsMatch) {
+    return {
+      name: cleanPersonName(worksAsMatch[1]),
+      title: cleanRoleText(worksAsMatch[2])
+    };
+  }
+
+  const roleAtMatch = titleText.match(/^([A-Z][A-Za-z'`.-]+(?:\s+[A-Z][A-Za-z'`.-]+){1,4})\s+-\s+(.+?)\s+(?:at|@)\s+/i);
+  if (roleAtMatch) {
+    return {
+      name: cleanPersonName(roleAtMatch[1]),
+      title: cleanRoleText(roleAtMatch[2])
+    };
+  }
+
+  return { name: "", title: "" };
 }
 
 async function resolveOfficialWebsite(company, city, urls) {
@@ -513,6 +584,15 @@ function cleanRoleText(value) {
     .replace(/\s+at\s+.*$/i, "")
     .replace(/^[-,|]+|[-,|]+$/g, "")
     .trim();
+}
+
+function cleanPersonName(value) {
+  const name = cleanText(value).replace(/\s+-\s+.*$/, "").trim();
+  return looksLikePersonName(name) ? name : "";
+}
+
+function extractLinkedInUrl(value) {
+  return normalizeLinkedInUrl((cleanText(value).match(/https?:\/\/[^\s"'<>|,)]+linkedin\.com\/in\/[^\s"'<>|,)]+/i) || [])[0] || "");
 }
 
 function updateContactTags(existingTags, contacts) {

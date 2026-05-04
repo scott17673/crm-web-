@@ -869,6 +869,12 @@ function isTrustedWorkforceSource(result) {
   const domain = normalizeDomain(result?.url || "");
   return [
     "linkedin.com",
+    "wiza.co",
+    "signalhire.com",
+    "clodura.ai",
+    "adapt.io",
+    "contactout.com",
+    "rocketreach.co",
     "glassdoor.com",
     "glassdoor.ca",
     "greatplacetowork.ca",
