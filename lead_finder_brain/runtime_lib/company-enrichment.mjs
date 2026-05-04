@@ -805,12 +805,24 @@ function createPostgrestClient(config) {
 async function requestJson(url, options) {
   const response = await fetch(url, options);
   const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
+  const data = parseJsonResponseBody(text, response);
   if (!response.ok) {
     const message = cleanText(data?.message || data?.error_description || text) || `${response.status} ${response.statusText}`;
     throw new Error(message);
   }
   return data;
+}
+
+function parseJsonResponseBody(text, response) {
+  if (!text) {
+    return null;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    const preview = cleanText(text).slice(0, 240);
+    throw new Error(`Supabase returned non-JSON (${response.status} ${response.statusText}): ${preview || "empty response"}`);
+  }
 }
 
 function decodeHtmlEntities(value) {

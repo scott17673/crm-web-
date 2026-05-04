@@ -198,6 +198,7 @@ createServer(async (req, res) => {
 
     return serveStatic(res, requestUrl.pathname);
   } catch (error) {
+    pushLog(`Dashboard request failed: ${error instanceof Error ? error.message : String(error)}`);
     return sendJson(res, 500, {
       error: error instanceof Error ? error.message : "Unexpected server error."
     });
@@ -1002,7 +1003,12 @@ async function readJsonBody(req) {
     return {};
   }
 
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  const text = Buffer.concat(chunks).toString("utf8");
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`Invalid JSON request body: ${text.slice(0, 120) || "empty body"}`);
+  }
 }
 
 function sendJson(res, statusCode, payload) {
