@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
+import { normalizeEnrichmentResult } from "./plant-enrichment.mjs";
+
 const DEFAULT_MODEL = process.env.PLANT_VERIFIER_MODEL || "gpt-5-mini";
 const OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
 
@@ -141,6 +143,216 @@ export async function verifyPlantCandidate(candidate, {
   } finally {
     clearTimeout(timer);
   }
+}
+
+export function buildPlantVerifierEnrichmentMessages(candidate) {
+  return [
+    {
+      role: "system",
+      content: `You are the strict industrial plant qualification and enrichment brain for Ontario sales prospecting.
+
+Return only valid JSON. Do not use markdown.
+
+You must do this in order:
+1. First decide whether the company qualifies as a real in-range industrial plant lead.
+2. If qualified is false, stop there: return the reject fields and leave all enrichment arrays empty.
+3. Only if qualified is true, fill the lead enrichment fields and operations-tied contacts from the same evidence packet.
+
+QUALIFY ONLY IF ALL ARE PROVEN FROM THE EVIDENCE PACKET:
+1. The result is an actual company, not a page title, article, directory, recipe, search result category, association, or generic phrase.
+2. The company is the operator/owner of the production or processing site. Reject vendors, contractors, consultants, distributors, wholesalers, retailers, pest control, software, engineering-only, equipment suppliers, service providers, associations, and pages merely serving manufacturers.
+3. There is at least one real facility address in the GTA or roughly 2 hours driving radius from the GTA.
+4. The company manufactures, processes, produces, packages, recycles, casts, molds, mixes, mills, stamps, coats, roasts, brews, bakes, crushes, extrudes, or otherwise physically transforms products/materials at the facility.
+5. The operation is industrial enough to plausibly use plant equipment such as pumps, conveyors, mixers, packaging lines, compressors, crushers, kilns, ovens, tanks, boilers, hydraulics, motors, gearboxes, dust collection, chillers, dryers, screens, presses, molding machines, extruders, furnaces, finishing lines, or similar machinery.
+6. The proof can be cited from the provided evidence.
+
+DEFAULT TO REJECT when proof is missing or ambiguous.
+
+When qualified is true, enrich the CRM row with:
+- confirmed facilities/site addresses
+- end products or product categories
+- likely plant equipment/process clues
+- production, maintenance, operations, quality, general management, purchasing, supply chain, warehouse/logistics, owner/operator, or plant-adjacent contacts
+- full personal LinkedIn profile URLs when the evidence provides them
+- recent hiring, expansion, planned expansion, new facility, new production line, capacity, permit, ECA, construction, or operational-growth signals
+- cited proof
+
+Contact rules:
+- Do not invent names, titles, emails, phone numbers, or LinkedIn links.
+- Include a LinkedIn URL only when evidence gives a full /in/ profile URL.
+- Never use company LinkedIn pages as a person's linkedin_url.
+- Do not output job titles, departments, or job postings as contact names.
+- Missing contacts must not reject the lead.
+- Similar-name companies are not enough. Contacts must tie to the exact verified company identity, location, website, or facility.
+
+Recent signal rules:
+- Only include hiring or expansion-type signals.
+- Ignore awards, charity, generic marketing, ordinary about-page facts, addresses, product lists, and unrelated expansion news.
+
+Return this exact JSON shape:
+{
+  "qualified": boolean,
+  "is_real_company": boolean,
+  "is_plant_operator": boolean,
+  "facility_in_range": boolean,
+  "manufactures_or_processes": boolean,
+  "industrial_scale": boolean,
+  "reject_reason": string,
+  "confidence": "high" | "medium" | "low",
+  "company": string,
+  "proof": [{"claim": string, "source_type": string, "source_url": string, "evidence": string}],
+  "confirmed_facilities": [{"name": string, "address": string, "city": string, "phone": string, "source_url": string, "facility_type": string}],
+  "facilities": [
+    {
+      "name": string,
+      "facility_type": string,
+      "address": string,
+      "city": string,
+      "province": string,
+      "postal_code": string,
+      "phone": string,
+      "fax": string,
+      "email": string,
+      "source_url": string,
+      "notes": string
+    }
+  ],
+  "end_products": string[],
+  "production_related_names": string[],
+  "likely_equipment": string[],
+  "contacts": [
+    {
+      "name": string,
+      "title": string,
+      "role_match": string,
+      "phone": string,
+      "email": string,
+      "linkedin_url": string,
+      "source_url": string,
+      "confidence": "high" | "medium" | "low",
+      "notes": string
+    }
+  ],
+  "recent_signals": [
+    {
+      "type": "hiring" | "expansion" | "planned_expansion" | "permit" | "capacity",
+      "title": string,
+      "date": string,
+      "source_url": string,
+      "evidence": string,
+      "why_it_matters": string
+    }
+  ],
+  "people": [],
+  "people_search_status": "not_searched",
+  "contact_search_status": "contacts_found" | "partial_contacts" | "no_target_contacts_found" | "not_searched"
+}
+
+If qualified is false, confirmed_facilities, facilities, end_products, production_related_names, likely_equipment, contacts, recent_signals, and proof must be empty unless the proof directly explains rejection.`
+    },
+    {
+      role: "user",
+      content: `Candidate and enrichment evidence packet:
+${JSON.stringify(candidate, null, 2)}`
+    }
+  ];
+}
+
+export async function verifyAndEnrichPlantLead(candidate, {
+  apiKey = process.env.OPENAI_API_KEY,
+  model = DEFAULT_MODEL,
+  timeoutMs = 60000
+} = {}) {
+  if (!apiKey) {
+    throw new Error("Missing OPENAI_API_KEY. Put it in .env.local or the environment.");
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const requestBody = {
+      model,
+      messages: buildPlantVerifierEnrichmentMessages(candidate),
+      response_format: { type: "json_object" }
+    };
+    if (/^gpt-5/i.test(model)) {
+      requestBody.max_completion_tokens = 7000;
+      requestBody.reasoning_effort = "minimal";
+    } else {
+      requestBody.max_tokens = 3500;
+      requestBody.temperature = 0.05;
+    }
+
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal
+    });
+
+    const body = await response.text();
+    if (!response.ok) {
+      throw new Error(`OpenAI request failed ${response.status}: ${body.slice(0, 1000)}`);
+    }
+
+    const data = JSON.parse(body);
+    const content = data?.choices?.[0]?.message?.content;
+    if (!content) throw new Error("OpenAI response had no message content.");
+
+    return normalizeVerifierEnrichmentResult(JSON.parse(content), candidate);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export function normalizeVerifierEnrichmentResult(raw, candidate) {
+  const result = raw && typeof raw === "object" ? { ...raw } : {};
+  if (!Array.isArray(result.confirmed_facilities) || !result.confirmed_facilities.length) {
+    result.confirmed_facilities = arrayValue(result.facilities).map((facility) => ({
+      name: stringValue(facility?.name),
+      address: stringValue(facility?.address),
+      city: stringValue(facility?.city),
+      phone: stringValue(facility?.phone),
+      source_url: stringValue(facility?.source_url),
+      facility_type: stringValue(facility?.facility_type)
+    }));
+  }
+
+  const verifierResult = normalizeVerifierResult(result);
+  if (!verifierResult.qualified) {
+    return {
+      verifierResult,
+      enrichmentResult: null
+    };
+  }
+
+  const enrichmentRaw = {
+    ...result,
+    company: stringValue(result.company) || stringValue(candidate?.company) || stringValue(candidate?.company_hint),
+    facilities: arrayValue(result.facilities).length
+      ? result.facilities
+      : verifierResult.confirmed_facilities.map((facility) => ({
+        name: facility.name,
+        facility_type: facility.facility_type,
+        address: facility.address,
+        city: facility.city,
+        province: "ON",
+        postal_code: "",
+        phone: facility.phone,
+        fax: "",
+        email: "",
+        source_url: facility.source_url,
+        notes: "Confirmed by verifier/enrichment pass."
+      }))
+  };
+
+  return {
+    verifierResult,
+    enrichmentResult: normalizeEnrichmentResult(enrichmentRaw, candidate)
+  };
 }
 
 export function verifyPlantCandidateHeuristic(candidate) {

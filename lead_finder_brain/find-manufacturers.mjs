@@ -4,7 +4,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { enrichPlantLead } from "./plant-enrichment.mjs";
-import { loadLocalEnv, verifyPlantCandidate, verifyPlantCandidateHeuristic } from "./plant-verifier.mjs";
+import { loadLocalEnv, verifyAndEnrichPlantLead, verifyPlantCandidateHeuristic } from "./plant-verifier.mjs";
 import { createCrmSync, syncQualifiedLeadToCrm } from "./runtime_lib/crm-sync.mjs";
 import { parseCsv, stringifyCsv } from "./runtime_lib/csv.mjs";
 import { buildExistingIndex, createEmptyIndex, isDuplicate, normalizeName, rememberCandidate } from "./runtime_lib/dedupe.mjs";
@@ -38,7 +38,7 @@ export const DEFAULTS = {
   crmConfigPath: "",
   cities: [],
   verifierModel: process.env.PLANT_VERIFIER_MODEL || "gpt-5-mini",
-  enrichmentModel: process.env.PLANT_ENRICHMENT_MODEL || "gpt-5-nano",
+  enrichmentModel: process.env.PLANT_ENRICHMENT_MODEL || process.env.PLANT_VERIFIER_MODEL || "gpt-5-mini",
   heuristicVerifier: false
 };
 
@@ -229,7 +229,7 @@ async function processHit({ hit, city, query, options, log }) {
       })
     : null;
 
-  const verifierPacket = await buildVerifierPacket({
+  const verifierPacket = await buildVerifierEnrichmentPacket({
     hit,
     city,
     query,
@@ -237,9 +237,17 @@ async function processHit({ hit, city, query, options, log }) {
     profile
   });
 
-  const verifierResult = options.heuristicVerifier
-    ? verifyPlantCandidateHeuristic(verifierPacket)
-    : await verifyPlantCandidate(verifierPacket, { model: options.verifierModel });
+  let verifierResult;
+  let enrichmentResult = null;
+  if (options.heuristicVerifier) {
+    verifierResult = verifyPlantCandidateHeuristic(verifierPacket);
+  } else {
+    const combinedResult = await verifyAndEnrichPlantLead(verifierPacket, {
+      model: options.verifierModel
+    });
+    verifierResult = combinedResult.verifierResult;
+    enrichmentResult = combinedResult.enrichmentResult;
+  }
 
   const companyName = cleanText(
     verifierResult?.confirmed_facilities?.[0]?.name ||
@@ -253,23 +261,27 @@ async function processHit({ hit, city, query, options, log }) {
     return null;
   }
 
-  const evidencePacket = await buildEnrichmentEvidencePacket({
-    verifierResult,
-    hit,
-    city,
-    query,
-    websiteUrl,
-    profile
-  });
-
-  let enrichmentResult;
-  try {
-    enrichmentResult = await enrichPlantLead(evidencePacket, {
-      model: options.enrichmentModel
+  let evidencePacket = verifierPacket;
+  if (!enrichmentResult || options.heuristicVerifier) {
+    evidencePacket = await buildEnrichmentEvidencePacket({
+      verifierResult,
+      hit,
+      city,
+      query,
+      websiteUrl,
+      profile
     });
-  } catch (error) {
-    log(`  Enrichment fallback: ${companyName} | ${error instanceof Error ? error.message : String(error)}`);
-    enrichmentResult = fallbackEnrichment(verifierResult, evidencePacket);
+  }
+
+  if (!enrichmentResult) {
+    try {
+      enrichmentResult = options.heuristicVerifier
+        ? await enrichPlantLead(evidencePacket, { model: options.enrichmentModel })
+        : fallbackEnrichment(verifierResult, evidencePacket);
+    } catch (error) {
+      log(`  Enrichment fallback: ${companyName} | ${error instanceof Error ? error.message : String(error)}`);
+      enrichmentResult = fallbackEnrichment(verifierResult, evidencePacket);
+    }
   }
 
   const intelligence = buildLeadIntelligence({
@@ -289,7 +301,8 @@ async function processHit({ hit, city, query, options, log }) {
   return { intelligence, record };
 }
 
-async function buildVerifierPacket({ hit, city, query, websiteUrl, profile }) {
+async function buildVerifierEnrichmentPacket({ hit, city, query, websiteUrl, profile }) {
+  const company = cleanText(profile?.companyName || hit.companyName || hit.title);
   const snippets = uniqueOrdered([
     cleanText(hit.snippet),
     cleanText(hit.title),
@@ -303,12 +316,55 @@ async function buildVerifierPacket({ hit, city, query, websiteUrl, profile }) {
     }))
   ]).slice(0, 24);
 
+  const source_urls = new Set([
+    cleanText(hit.sourceUrl),
+    cleanText(hit.url),
+    cleanText(websiteUrl)
+  ].filter(Boolean));
+  const evidence = [...snippets];
+
+  const companyQueries = await collectCompanySearchEvidence({
+    company,
+    city,
+    query,
+    websiteUrl
+  });
+  for (const result of companyQueries) {
+    if (result.url) source_urls.add(result.url);
+    evidence.push(buildSearchEvidenceLine(result));
+  }
+
+  const peopleQueries = await collectPeopleSearchEvidence({
+    company,
+    city
+  });
+  for (const result of peopleQueries) {
+    if (result.url) source_urls.add(result.url);
+    evidence.push(`People contact candidate | ${buildSearchEvidenceLine(result)}`);
+  }
+
+  const recentSignalQueries = await collectRecentSignalEvidence({
+    company,
+    city,
+    websiteUrl
+  });
+  for (const result of recentSignalQueries) {
+    if (result.url) source_urls.add(result.url);
+    evidence.push(`Recent hiring/expansion signal candidate | ${buildSearchEvidenceLine(result)}`);
+  }
+
   return {
-    company_hint: cleanText(profile?.companyName || hit.companyName || hit.title),
+    company,
+    company_hint: company,
     search_query: cleanText(query),
     source_title: cleanText(hit.title),
     source_url: cleanText(hit.sourceUrl || hit.url || websiteUrl),
-    snippets
+    snippets,
+    source_urls: Array.from(source_urls),
+    evidence: uniqueOrdered(evidence.filter(Boolean)).slice(0, 90),
+    source_query: cleanText(query),
+    city,
+    website: cleanText(websiteUrl)
   };
 }
 

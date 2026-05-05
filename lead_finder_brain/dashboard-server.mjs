@@ -175,7 +175,7 @@ createServer(async (req, res) => {
         company: body.company || body.companyName,
         crmConfigPath: settings.crmConfigPath || path.join(repoRoot, "crm-config.js"),
         repoRoot,
-        model: body.model || process.env.PLANT_ENRICHMENT_MODEL || "gpt-5-nano",
+        model: body.model || process.env.OPENAI_CONTACT_SEARCH_MODEL || process.env.PLANT_ENRICHMENT_MODEL || "gpt-5-mini",
         websitePageLimit: Number(body.websitePageLimit || settings.websitePageLimit || 3),
         dryRun: Boolean(body.dryRun)
       });

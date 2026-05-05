@@ -9,7 +9,7 @@ import { enrichFromWebsite } from "./enrich.mjs";
 import { searchWeb, toCanonicalWebsiteUrl } from "./web-search.mjs";
 
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
-const DEFAULT_CONTACT_SEARCH_MODEL = process.env.OPENAI_CONTACT_SEARCH_MODEL || process.env.PLANT_ENRICHMENT_MODEL || "gpt-5-nano";
+const DEFAULT_CONTACT_SEARCH_MODEL = process.env.OPENAI_CONTACT_SEARCH_MODEL || process.env.PLANT_ENRICHMENT_MODEL || "gpt-5-mini";
 const TARGET_TITLE_TERMS = [
   "site director of manufacturing",
   "director of manufacturing",
@@ -141,7 +141,7 @@ export async function runCompanyEnrichment({
   company,
   crmConfigPath,
   repoRoot,
-  model = process.env.PLANT_ENRICHMENT_MODEL || "gpt-5-nano",
+  model = process.env.OPENAI_CONTACT_SEARCH_MODEL || process.env.PLANT_ENRICHMENT_MODEL || "gpt-5-mini",
   websitePageLimit = 3,
   dryRun = false
 } = {}) {
