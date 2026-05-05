@@ -1818,7 +1818,8 @@ const buildAskCrmAnswer = (question, records, tasks, acts, feedbackEntries=[], p
     rememberedFeedback,
   };
 };
-const contactsTextFromRecord = record => (record?.contacts || []).map(contact => [contact.name, contact.title, contact.linkedin].filter(Boolean).join(", ")).join("\n");
+const contactLinkFromRecord = contact => contact?.linkedin || contact?.source_url || contact?.source || "";
+const contactsTextFromRecord = record => (record?.contacts || []).map(contact => [contact.name, contact.title, contactLinkFromRecord(contact)].filter(Boolean).join(", ")).join("\n");
 const parseManufacturerContactsText = raw => dedupeContacts(
   String(raw || "")
     .split(/\r?\n/)
@@ -2405,7 +2406,7 @@ function App(){
       const nextContacts=dedupeContacts([...(record.contacts || []), ...(data.contacts || []).map(contact => ({
         name: contact.name || "",
         title: contact.title || "",
-        linkedin: contact.linkedin || ""
+        linkedin: contact.linkedin || contact.source_url || contact.source || ""
       }))]);
       const patch={contacts:nextContacts,notes:data.signalsText || record.notes || "",signals:data.signalsText || record.signals || "",tags:data.tags || record.tags || []};
       setMfrs(list => list.map(item => item.id===record.id ? {...item,...patch} : item));
@@ -4723,14 +4724,14 @@ const taskActivityFromTask = task => ({
                     <EditableLinkField
                       ref={contactsBoxRef}
                       height={detailPanelHeight}
-                      placeholder={selected.type==="manufacturer" ? "Name, Title, LinkedIn URL" : "Name, Title\nEmail: person@company.com\nPhone: 555-555-5555\nIndustry: Others\nRegion: Ontario"}
+                      placeholder={selected.type==="manufacturer" ? "Name, Title, LinkedIn/source URL" : "Name, Title\nEmail: person@company.com\nPhone: 555-555-5555\nIndustry: Others\nRegion: Ontario"}
                       value={contactsDraft}
                       onChange={setContactsDraft}
                       onAutoSave={nextValue=>selected.type==="manufacturer" ? saveContacts(nextValue, {quiet:true, record:selected}) : saveVendorContacts(nextValue, {quiet:true, record:selected})}
                       onMeasure={syncDetailPanelHeight}
                       onBlurSave={nextValue=>selected.type==="manufacturer" ? saveContacts(nextValue, {quiet:true, record:selected}) : saveVendorContacts(nextValue, {quiet:true, record:selected})}
                     />
-                    <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:6}}>{selected.type==="manufacturer" ? "One per line: Name, Title, LinkedIn" : "First line: Name, Title. Then Email:, Phone:, Industry:, Region:"}</div>
+                    <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:6}}>{selected.type==="manufacturer" ? "One per line: Name, Title, LinkedIn/source link" : "First line: Name, Title. Then Email:, Phone:, Industry:, Region:"}</div>
                   </div>
                 </div>
               </> : (
