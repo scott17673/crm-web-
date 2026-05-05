@@ -76,6 +76,11 @@ const RECENT_SIGNAL_INCLUDE_PATTERN = /\b(hiring|hire|job opening|job posting|ca
 const RECENT_SIGNAL_STRONG_PATTERN = /\b(hiring|job opening|job posting|careers?|recruiting|millwright|maintenance|production|plant|operations|expansion|expanded|expanding|new facility|new plant|new site|new production line|capacity|permit|approval|eca|construction|investment|planned expansion)\b/i;
 const RECENT_SIGNAL_NOISE_PATTERN = /\b(address|phone|official site|about|located|product list|products?|capabilities|independent craft|proudly located|built in|refurbished|facility address|contact page|store hours|taproom|tour|brewery tours?)\b/i;
 const RECENT_SIGNAL_NOISE_OVERRIDE_PATTERN = /\b(hiring|hire|job opening|job posting|careers?|recruiting|expansion|expanded|expanding|planned expansion|new facility|new plant|new site|new production line|capacity|permit|approval|eca|construction|investment)\b/i;
+const RECENT_SIGNAL_HIRING_ACTION_PATTERN = /\b(hiring|hire|job opening|job posting|job ad|jobs?|careers?|employment|recruiting|recruitment|seeking|apply|now hiring)\b/i;
+const RECENT_SIGNAL_HIRING_ROLE_PATTERN = /\b(millwright|maintenance mechanic|maintenance technician|industrial mechanic|production operator|production worker|production associate|production supervisor|production manager|plant manager|plant supervisor|operations manager|operations supervisor|warehouse|logistics|quality assurance|quality control|qa\b|food safety|sanitation|packaging|machine operator)\b/i;
+const RECENT_SIGNAL_EXPANSION_EVIDENCE_PATTERN = /\b(expansion|expand|expanding|expanded|planned expansion|new facility|new plant|new site|new location|opening|opened|relocat(?:e|ing|ed)|larger facility|production line|capacity|capacity increase|permit|approval|environmental compliance approval|eca|construction|building permit|investment|investing|invested|capital project|equipment upgrade|plant upgrade)\b/i;
+const RECENT_SIGNAL_GENERIC_BREADCRUMB_PATTERN = /\b(careers and employment|careers in|career opportunities|company profile|company overview|employee reviews?|salaries|interview questions|overview, news|similar companies)\b/i;
+const RECENT_SIGNAL_JOB_BOARD_PATTERN = /(?:indeed|glassdoor|workopolis|jobbank|monster|ziprecruiter|simplyhired|eluta)\./i;
 const CONTACT_TITLE_QUERIES = [
   "plant manager",
   "maintenance manager",
@@ -750,21 +755,45 @@ async function collectRecentSignalEvidence({ company, city, websiteUrl }) {
         allowBlockedDomains: true,
         skipPatterns: ["charity", "award", "review", "salary estimate"]
       });
-      collected.push(...results.filter(looksLikeRecentOperationalSignal));
+      collected.push(...results);
     } catch {
       continue;
     }
   }
 
-  return dedupeByUrl(collected).slice(0, 10);
+  let filtered = collected.filter(looksLikeRecentOperationalSignal);
+  if (filtered.length < 2) {
+    const breadcrumbSearches = buildRecentSignalBreadcrumbSearches({
+      company,
+      city: city || "Ontario",
+      websiteUrl,
+      results: collected
+    });
+    for (const searchQuery of breadcrumbSearches.slice(0, 8)) {
+      try {
+        const results = await searchWeb(searchQuery, {
+          limit: 2,
+          keepUrlPath: true,
+          allowBlockedDomains: true,
+          skipPatterns: ["charity", "award", "review", "salary estimate"]
+        });
+        collected.push(...results);
+      } catch {
+        continue;
+      }
+    }
+    filtered = collected.filter(looksLikeRecentOperationalSignal);
+  }
+
+  return dedupeByUrl(filtered).slice(0, 10);
 }
 
 function looksLikeRecentOperationalSignal(result) {
   const text = `${cleanText(result?.title)} ${cleanText(result?.snippet)}`;
-  if (!RECENT_SIGNAL_INCLUDE_PATTERN.test(text) || !RECENT_SIGNAL_STRONG_PATTERN.test(text)) {
+  if (!looksLikeFirmRecentSignal({ title: result?.title, snippet: result?.snippet, url: result?.url })) {
     return false;
   }
-  if (RECENT_SIGNAL_NOISE_PATTERN.test(text) && !RECENT_SIGNAL_NOISE_OVERRIDE_PATTERN.test(text)) {
+  if (RECENT_SIGNAL_NOISE_PATTERN.test(text) && !RECENT_SIGNAL_NOISE_OVERRIDE_PATTERN.test(text) && !RECENT_SIGNAL_EXPANSION_EVIDENCE_PATTERN.test(text)) {
     return false;
   }
   return true;
@@ -778,13 +807,68 @@ function looksLikeRecentSignalEntry(signal) {
     signal?.source_url
   ].map((value) => cleanText(value)).join(" ");
 
-  if (!RECENT_SIGNAL_INCLUDE_PATTERN.test(text) || !RECENT_SIGNAL_STRONG_PATTERN.test(text)) {
+  if (!looksLikeFirmRecentSignal({ title: signal?.title, snippet: signal?.evidence, url: signal?.source_url })) {
     return false;
   }
-  if (RECENT_SIGNAL_NOISE_PATTERN.test(text) && !RECENT_SIGNAL_NOISE_OVERRIDE_PATTERN.test(text)) {
+  if (RECENT_SIGNAL_NOISE_PATTERN.test(text) && !RECENT_SIGNAL_NOISE_OVERRIDE_PATTERN.test(text) && !RECENT_SIGNAL_EXPANSION_EVIDENCE_PATTERN.test(text)) {
     return false;
   }
   return true;
+}
+
+function buildRecentSignalBreadcrumbSearches({ company, city, websiteUrl, results }) {
+  const breadcrumbs = results.filter(looksLikeRecentSignalBreadcrumb).slice(0, 4);
+  if (!breadcrumbs.length) {
+    return [];
+  }
+
+  const hostname = normalizeHostname(websiteUrl);
+  const breadcrumbHosts = uniqueOrdered(
+    breadcrumbs
+      .map((result) => normalizeHostname(result?.url))
+      .filter((host) => host && RECENT_SIGNAL_JOB_BOARD_PATTERN.test(host))
+  ).slice(0, 2);
+
+  return uniqueOrdered([
+    `"${company}" "maintenance mechanic" job "${city || "Ontario"}"`,
+    `"${company}" millwright job "${city || "Ontario"}"`,
+    `"${company}" "production operator" job "${city || "Ontario"}"`,
+    `"${company}" "production supervisor" job "${city || "Ontario"}"`,
+    `"${company}" "plant manager" job "${city || "Ontario"}"`,
+    `"${company}" "new facility" OR expansion "${city || "Ontario"}"`,
+    `"${company}" permit construction expansion "${city || "Ontario"}"`,
+    `"${company}" investment capacity production "${city || "Ontario"}"`,
+    hostname ? `site:${hostname} careers "maintenance" OR "production"` : "",
+    hostname ? `site:${hostname} "new facility" OR expansion OR investment` : "",
+    ...breadcrumbHosts.flatMap((host) => [
+      `site:${host} "${company}" "maintenance mechanic"`,
+      `site:${host} "${company}" "production operator"`,
+      `site:${host} "${company}" "production supervisor"`
+    ])
+  ].filter(Boolean));
+}
+
+function looksLikeFirmRecentSignal({ title, snippet, url }) {
+  const text = `${cleanText(title)} ${cleanText(snippet)}`;
+  if (!RECENT_SIGNAL_INCLUDE_PATTERN.test(text) && !RECENT_SIGNAL_HIRING_ACTION_PATTERN.test(text) && !RECENT_SIGNAL_EXPANSION_EVIDENCE_PATTERN.test(text)) {
+    return false;
+  }
+  if (looksLikeRecentSignalBreadcrumb({ title, snippet, url })) {
+    return false;
+  }
+  return (RECENT_SIGNAL_HIRING_ACTION_PATTERN.test(text) && RECENT_SIGNAL_HIRING_ROLE_PATTERN.test(text))
+    || RECENT_SIGNAL_EXPANSION_EVIDENCE_PATTERN.test(text);
+}
+
+function looksLikeRecentSignalBreadcrumb(result) {
+  const title = cleanText(result?.title);
+  const snippet = cleanText(result?.snippet);
+  const url = cleanText(result?.url);
+  const text = `${title} ${snippet}`;
+  const isJobBoardProfile = RECENT_SIGNAL_JOB_BOARD_PATTERN.test(url) && /\/(?:cmp|company|locations)\//i.test(url);
+  return (RECENT_SIGNAL_GENERIC_BREADCRUMB_PATTERN.test(text) || isJobBoardProfile || /\bcareers?\b/i.test(text))
+    && !RECENT_SIGNAL_HIRING_ROLE_PATTERN.test(text)
+    && !RECENT_SIGNAL_EXPANSION_EVIDENCE_PATTERN.test(text);
 }
 
 function buildSearchEvidenceLine(result) {

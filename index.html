@@ -612,7 +612,7 @@ For each accepted plant lead, enrich it with:
 4. Production, maintenance, operations, general management, purchasing, quality, engineering, and plant-adjacent contacts.
 5. Full personal LinkedIn profile URLs when found. Personal LinkedIn URLs must contain /in/. Do not invent URLs. Do not use company pages or LinkedIn search URLs as a person's LinkedIn.
 6. A source for each useful contact. If a contact is proven but LinkedIn is not found, keep the contact with linkedin as an empty string and cite the source.
-7. A recent hiring / expansion signals section, but only when it is tied to hiring, plant/production/maintenance roles, facility expansion, planned expansion, new sites, new production lines, permits, ECA, construction, capacity, or similar operational growth. Ignore awards, charity posts, generic marketing, customer reviews, and social fluff.
+7. A recent hiring / expansion signals section, but only when it is tied to a specific plant/production/maintenance/warehouse/QA role or real facility expansion, planned expansion, new sites, new production lines, permits, ECA, construction, capacity, investment, or similar operational growth. Generic careers pages, Indeed company profiles, LinkedIn company pages, and job-board location pages are breadcrumbs, not final signals. Ignore awards, charity posts, generic marketing, customer reviews, and social fluff.
 
 Required enrichment passes before giving up on contacts:
 1. Official company site: contact, locations, products, capabilities, facilities.
@@ -621,7 +621,7 @@ Required enrichment passes before giving up on contacts:
 4. Targeted people searches: plant manager, production manager, production supervisor, maintenance manager, maintenance supervisor, millwright, maintenance mechanic, operations manager, general manager, purchaser, buyer, procurement, quality manager, engineering manager.
 5. Directory cross-check: SignalHire, Wiza, Clodura, Adapt, ContactOut, Source From Ontario, industry association pages.
 6. Stale-contact check when needed: obituary, retired, left, new company. Do not output deceased/retired/clearly former contacts as current outreach contacts.
-7. Recent signal search: careers pages, job posts, news, permits, ECA records, construction/capacity pages. If no hiring or expansion signal is found, say that plainly; do not fill the section with unrelated announcements.
+7. Recent signal search: careers pages, job posts, news, permits, ECA records, construction/capacity pages. Use generic career/job-board pages to search deeper, but only save the signal if the evidence names a specific relevant role or actual expansion/capacity/permit/construction/investment detail. If no hiring or expansion signal is found, say that plainly; do not fill the section with unrelated announcements.
 `;
 const buildLeadFinderPrompt = ({ city, industries, limitPerCity, existingCompanies, existingLeadCompanies }) => `
 You are the Lead Finder for Ed Industrial CRM.
@@ -658,7 +658,7 @@ Output rules:
 - Use linkedin only for a full personal LinkedIn /in/ profile URL. Otherwise use an empty string.
 - The source can be a public LinkedIn profile, company page, official source, regulatory source, or people-directory source proving the contact/title.
 - In notes, include enrichment clues such as plant type, equipment clues, contact search status, and any relevant caution.
-- In notes, include a heading called **recent hiring / expansion signals**. Only include hiring/expansion/planned-expansion/capacity/permit signals under that heading.
+- In notes, include a heading called **recent hiring / expansion signals**. Only include hiring/expansion/planned-expansion/capacity/permit signals under that heading when the evidence is specific. Do not use generic company/careers/job-board profile pages as final signals.
 
 Existing CRM or previously surfaced company names to avoid:
 ${existingCompanies.length ? existingCompanies.join("\n") : "- none -"}

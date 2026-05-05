@@ -4,6 +4,11 @@ const RECENT_SIGNAL_INCLUDE_PATTERN = /\b(hiring|hire|job opening|job posting|ca
 const RECENT_SIGNAL_STRONG_PATTERN = /\b(hiring|job opening|job posting|careers?|recruiting|millwright|maintenance|production|plant|operations|expansion|expanded|expanding|new facility|new plant|new site|new production line|capacity|permit|approval|eca|construction|investment|planned expansion)\b/i;
 const RECENT_SIGNAL_NOISE_PATTERN = /\b(address|phone|official site|about|located|product list|products?|capabilities|independent craft|proudly located|built in|refurbished|facility address|contact page|store hours|taproom|tour|brewery tours?)\b/i;
 const RECENT_SIGNAL_NOISE_OVERRIDE_PATTERN = /\b(hiring|hire|job opening|job posting|careers?|recruiting|expansion|expanded|expanding|planned expansion|new facility|new plant|new site|new production line|capacity|permit|approval|eca|construction|investment)\b/i;
+const RECENT_SIGNAL_HIRING_ACTION_PATTERN = /\b(hiring|hire|job opening|job posting|job ad|jobs?|careers?|employment|recruiting|recruitment|seeking|apply|now hiring)\b/i;
+const RECENT_SIGNAL_HIRING_ROLE_PATTERN = /\b(millwright|maintenance mechanic|maintenance technician|industrial mechanic|production operator|production worker|production associate|production supervisor|production manager|plant manager|plant supervisor|operations manager|operations supervisor|warehouse|logistics|quality assurance|quality control|qa\b|food safety|sanitation|packaging|machine operator)\b/i;
+const RECENT_SIGNAL_EXPANSION_EVIDENCE_PATTERN = /\b(expansion|expand|expanding|expanded|planned expansion|new facility|new plant|new site|new location|opening|opened|relocat(?:e|ing|ed)|larger facility|production line|capacity|capacity increase|permit|approval|environmental compliance approval|eca|construction|building permit|investment|investing|invested|capital project|equipment upgrade|plant upgrade)\b/i;
+const RECENT_SIGNAL_GENERIC_BREADCRUMB_PATTERN = /\b(careers and employment|careers in|career opportunities|company profile|company overview|employee reviews?|salaries|interview questions|overview, news|similar companies)\b/i;
+const RECENT_SIGNAL_JOB_BOARD_PATTERN = /(?:indeed|glassdoor|workopolis|jobbank|monster|ziprecruiter|simplyhired|eluta)\./i;
 const NON_PERSON_CONTACT_NAME_PATTERN = /\b(manager|supervisor|operator|technician|mechanic|millwright|team|department|contact|careers?|production|maintenance|operations|purchasing|procurement|job|posting|role|opening)\b/i;
 
 export function buildPlantEnrichmentMessages(lead) {
@@ -32,7 +37,7 @@ Think in these enrichment passes:
 3. LinkedIn company pass: use LinkedIn company-page employee links to capture public personal /in/ profile URLs.
 4. Target people pass: use names/titles from LinkedIn, job postings, SignalHire, Wiza, Clodura, Adapt, ContactOut, Source From Ontario, association pages, and public search snippets when specific.
 5. Stale-contact pass: do not output people who are proven deceased, retired, or clearly no longer at the company.
-6. Recent-signal pass: only capture hiring or expansion-type signals. Ignore awards, charity posts, generic marketing, customer reviews, and unrelated social announcements.
+6. Recent-signal pass: only capture hiring or expansion-type signals with real evidence. Treat generic careers/company profile pages as breadcrumbs, not final signals. Ignore awards, charity posts, generic marketing, customer reviews, and unrelated social announcements.
 
 Target people roles:
 - plant manager
@@ -58,6 +63,8 @@ Rules:
 - Do not include a person whose title/role is unknown unless the notes clearly explain why they are still useful.
 - Do not output a job title, open role, department, or job posting as a contact name. Job openings without a named person belong in recent_signals only.
 - If evidence says the company is hiring a production, maintenance, plant, operations, warehouse, or supervisor role, output that as a recent_signals entry even when no named person appears.
+- Generic careers pages, Indeed company profiles, LinkedIn company pages, and job-board location pages are not signals by themselves. Only output them when the evidence names a specific plant/production/maintenance/warehouse/QA role or gives actual expansion/capacity/permit/construction/investment detail.
+- Make why_it_matters specific to the evidence. Do not use generic filler like "Expansion/capacity signal tied to facilities" unless the evidence actually says what changed.
 - Missing contacts does not remove the lead.
 - Keep facility rows separate when multiple plants/sites are listed.
 - Prefer official company sources for facilities and phones.
@@ -360,13 +367,38 @@ function isRecentOperationalSignal(signal) {
     signal?.source_url
   ].map((value) => stringValue(value)).join(" ");
 
-  if (!RECENT_SIGNAL_INCLUDE_PATTERN.test(text) || !RECENT_SIGNAL_STRONG_PATTERN.test(text)) {
+  if (!looksLikeFirmRecentSignal({
+    title: signal?.title,
+    snippet: signal?.evidence,
+    url: signal?.source_url
+  })) {
     return false;
   }
-  if (RECENT_SIGNAL_NOISE_PATTERN.test(text) && !RECENT_SIGNAL_NOISE_OVERRIDE_PATTERN.test(text)) {
+  if (RECENT_SIGNAL_NOISE_PATTERN.test(text) && !RECENT_SIGNAL_NOISE_OVERRIDE_PATTERN.test(text) && !RECENT_SIGNAL_EXPANSION_EVIDENCE_PATTERN.test(text)) {
     return false;
   }
   return true;
+}
+
+function looksLikeFirmRecentSignal({ title, snippet, url }) {
+  const text = `${stringValue(title)} ${stringValue(snippet)}`;
+  if (!RECENT_SIGNAL_INCLUDE_PATTERN.test(text) && !RECENT_SIGNAL_HIRING_ACTION_PATTERN.test(text) && !RECENT_SIGNAL_EXPANSION_EVIDENCE_PATTERN.test(text)) {
+    return false;
+  }
+  if (looksLikeRecentSignalBreadcrumb({ title, snippet, url })) {
+    return false;
+  }
+  return (RECENT_SIGNAL_HIRING_ACTION_PATTERN.test(text) && RECENT_SIGNAL_HIRING_ROLE_PATTERN.test(text))
+    || RECENT_SIGNAL_EXPANSION_EVIDENCE_PATTERN.test(text);
+}
+
+function looksLikeRecentSignalBreadcrumb(signal) {
+  const text = `${stringValue(signal?.title)} ${stringValue(signal?.snippet)}`;
+  const url = stringValue(signal?.url);
+  const isJobBoardProfile = RECENT_SIGNAL_JOB_BOARD_PATTERN.test(url) && /\/(?:cmp|company|locations)\//i.test(url);
+  return (RECENT_SIGNAL_GENERIC_BREADCRUMB_PATTERN.test(text) || isJobBoardProfile || /\bcareers?\b/i.test(text))
+    && !RECENT_SIGNAL_HIRING_ROLE_PATTERN.test(text)
+    && !RECENT_SIGNAL_EXPANSION_EVIDENCE_PATTERN.test(text);
 }
 
 function stringValue(value) {

@@ -127,6 +127,29 @@ const SIGNAL_STRONG_PATTERN = /\b(hiring|job opening|job posting|careers?|millwr
 const SIGNAL_NOISE_PATTERN = /\b(address|phone|official site|about|located|product list|products?|capabilities|independent craft|proudly located|built in|refurbished|facility address|contact page|store hours|taproom|tour|brewery tours?|charity|award|ambassador|walk a mile|sponsor|sponsorship|fundraiser|customer review|excellent service|newsletter|recipe|holiday hours|giveaway|webinar|conference|podcast|blog)\b/i;
 const SIGNAL_NOISE_OVERRIDE_PATTERN = /\b(hiring|hire|job opening|job posting|careers?|recruiting|expansion|expanded|expanding|planned expansion|new facility|new plant|new site|new production line|capacity|permit|approval|eca|construction|investment)\b/i;
 const SIGNAL_STALE_OR_GENERIC_PATTERN = /\b(gradually expanding|established by founder|for more than three decades|overview, news|similar companies|employee directory)\b/i;
+const SIGNAL_HIRING_ACTION_PATTERN = /\b(hiring|hire|job opening|job posting|job ad|jobs?|careers?|employment|recruiting|recruitment|seeking|apply|now hiring)\b/i;
+const SIGNAL_HIRING_ROLE_PATTERN = /\b(millwright|maintenance mechanic|maintenance technician|industrial mechanic|production operator|production worker|production associate|production supervisor|production manager|plant manager|plant supervisor|operations manager|operations supervisor|warehouse|logistics|quality assurance|quality control|qa\b|food safety|sanitation|packaging|machine operator)\b/i;
+const SIGNAL_EXPANSION_EVIDENCE_PATTERN = /\b(expansion|expand|expanding|expanded|planned expansion|new facility|new plant|new site|new location|opening|opened|relocat(?:e|ing|ed)|larger facility|production line|capacity|capacity increase|permit|approval|environmental compliance approval|eca|construction|building permit|investment|investing|invested|capital project|equipment upgrade|plant upgrade)\b/i;
+const SIGNAL_GENERIC_BREADCRUMB_PATTERN = /\b(careers and employment|careers in|career opportunities|company profile|company overview|employee reviews?|salaries|interview questions|overview, news|similar companies)\b/i;
+const SIGNAL_JOB_BOARD_PATTERN = /(?:indeed|glassdoor|workopolis|jobbank|monster|ziprecruiter|simplyhired|eluta)\./i;
+const SIGNAL_ROLE_LABELS = [
+  ["Maintenance Mechanic", /\bmaintenance mechanic\b/i],
+  ["Maintenance Technician", /\bmaintenance technician\b/i],
+  ["Millwright", /\bmillwright\b/i],
+  ["Industrial Mechanic", /\bindustrial mechanic\b/i],
+  ["Production Supervisor", /\bproduction supervisor\b/i],
+  ["Production Manager", /\bproduction manager\b/i],
+  ["Production Operator", /\bproduction operator\b/i],
+  ["Production Worker", /\bproduction worker\b/i],
+  ["Plant Manager", /\bplant manager\b/i],
+  ["Plant Supervisor", /\bplant supervisor\b/i],
+  ["Operations Manager", /\boperations manager\b/i],
+  ["Operations Supervisor", /\boperations supervisor\b/i],
+  ["Warehouse/Logistics", /\b(?:warehouse|logistics)\b/i],
+  ["Quality/QA", /\b(?:quality assurance|quality control|qa\b|food safety)\b/i],
+  ["Sanitation", /\bsanitation\b/i],
+  ["Machine Operator", /\bmachine operator\b/i]
+];
 const PAST_ROLE_DATE_RANGE_PATTERN = /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+20\d{2}\s*[-–]\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+20\d{2}\b/i;
 const UNVERIFIED_OR_STALE_CONTACT_PATTERN = /\b(historical|alleged|outdated|not verified|may be outdated|not verified as current)\b/i;
 const HTML_ENTITY_MAP = {
@@ -607,11 +630,27 @@ async function findHiringExpansionSignals(evidence) {
     }
   }
 
-  return dedupeSignals(
-    collected
-      .map((result) => normalizeSignalResult(result, evidence))
-      .filter(Boolean)
-  ).slice(0, 5);
+  let signals = normalizeSignalResults(collected, evidence);
+  if (signals.length < 2) {
+    const breadcrumbQueries = buildBreadcrumbSignalQueries(evidence, collected);
+    for (const query of breadcrumbQueries.slice(0, 8)) {
+      try {
+        const results = await searchWeb(query, {
+          limit: 2,
+          keepUrlPath: true,
+          allowBlockedDomains: true,
+          timeoutMs: 12000,
+          skipPatterns: ["salary estimate", "resume", "charity", "award", "review"]
+        });
+        collected.push(...results.map((result) => ({ ...result, query })));
+      } catch {
+        continue;
+      }
+    }
+    signals = normalizeSignalResults(collected, evidence);
+  }
+
+  return signals.slice(0, 5);
 }
 
 function buildRecentSignalQueries(evidence) {
@@ -637,37 +676,155 @@ function buildRecentSignalQueries(evidence) {
   ].filter(Boolean));
 }
 
+function buildBreadcrumbSignalQueries(evidence, results) {
+  const breadcrumbs = results.filter((result) => isRecentSignalBreadcrumb(result, evidence)).slice(0, 4);
+  if (!breadcrumbs.length) {
+    return [];
+  }
+
+  const company = evidence.searchCompany;
+  const city = evidence.city || "Ontario";
+  const host = normalizeHostname(evidence.websiteUrl);
+  const breadcrumbHosts = uniqueOrdered(
+    breadcrumbs
+      .map((result) => normalizeHostname(result?.url))
+      .filter((hostname) => hostname && SIGNAL_JOB_BOARD_PATTERN.test(hostname))
+  ).slice(0, 2);
+
+  return uniqueOrdered([
+    `"${company}" "maintenance mechanic" job ${city}`,
+    `"${company}" millwright job ${city}`,
+    `"${company}" "production operator" job ${city}`,
+    `"${company}" "production supervisor" job ${city}`,
+    `"${company}" "plant manager" job ${city}`,
+    `"${company}" "new facility" OR expansion ${city}`,
+    `"${company}" permit construction expansion ${city}`,
+    `"${company}" investment capacity production ${city}`,
+    host ? `site:${host} careers "maintenance" OR "production"` : "",
+    host ? `site:${host} "new facility" OR expansion OR investment` : "",
+    ...breadcrumbHosts.flatMap((hostname) => [
+      `site:${hostname} "${company}" "maintenance mechanic"`,
+      `site:${hostname} "${company}" "production operator"`,
+      `site:${hostname} "${company}" "production supervisor"`
+    ])
+  ].filter(Boolean));
+}
+
+function normalizeSignalResults(results, evidence) {
+  return dedupeSignals(
+    results
+      .map((result) => normalizeSignalResult(result, evidence))
+      .filter(Boolean)
+  );
+}
+
 function normalizeSignalResult(result, evidence) {
   const title = cleanText(result?.title);
   const snippet = cleanText(result?.snippet);
   const url = cleanText(result?.url);
   const text = `${title} ${snippet}`;
-  if (!url || !SIGNAL_INCLUDE_PATTERN.test(text) || !SIGNAL_STRONG_PATTERN.test(text)) {
+  if (!url) {
     return null;
   }
-  if (SIGNAL_NOISE_PATTERN.test(text) && !SIGNAL_NOISE_OVERRIDE_PATTERN.test(text)) {
+  const classification = classifyRecentSignalResult({ title, snippet, url });
+  if (!classification) {
     return null;
   }
-  if (SIGNAL_STALE_OR_GENERIC_PATTERN.test(text) && !/\b(hiring|job opening|job posting|careers?|planned expansion|new facility|new plant|new site|new production line|permit|approval|eca|construction|investment)\b/i.test(text)) {
+  if (SIGNAL_NOISE_PATTERN.test(text) && !classification.isHardEvidence && !SIGNAL_NOISE_OVERRIDE_PATTERN.test(text)) {
+    return null;
+  }
+  if (SIGNAL_STALE_OR_GENERIC_PATTERN.test(text) && !classification.isHardEvidence) {
     return null;
   }
   if (!matchesSignalCompanyContext({ titleText: title, snippet, evidence }) && !isOfficialCompanyHost(url, evidence.websiteUrl)) {
     return null;
   }
 
-  const type = /\b(hiring|job opening|career|recruit|millwright|maintenance mechanic|production operator|plant manager)\b/i.test(text)
-    ? "Hiring"
-    : "Expansion";
   return {
-    type,
+    type: classification.type,
     title,
     snippet,
     url,
     date: extractDateHint(text),
-    why: type === "Hiring"
-      ? "Hiring signal tied to plant, maintenance, production, or operations capacity."
-      : "Expansion/capacity signal tied to facilities, permits, production lines, or planned growth."
+    why: buildRecentSignalWhy(classification)
   };
+}
+
+function classifyRecentSignalResult({ title, snippet, url }) {
+  const text = `${title} ${snippet}`;
+  if (!SIGNAL_INCLUDE_PATTERN.test(text) && !SIGNAL_HIRING_ACTION_PATTERN.test(text) && !SIGNAL_EXPANSION_EVIDENCE_PATTERN.test(text)) {
+    return null;
+  }
+
+  const hasHiringAction = SIGNAL_HIRING_ACTION_PATTERN.test(text);
+  const role = extractSignalRole(text);
+  const hasExpansionEvidence = SIGNAL_EXPANSION_EVIDENCE_PATTERN.test(text);
+  const isGenericBreadcrumb = isRecentSignalBreadcrumb({ title, snippet, url });
+
+  if (hasHiringAction && role) {
+    return {
+      type: "Hiring",
+      role,
+      isHardEvidence: true
+    };
+  }
+  if (hasExpansionEvidence) {
+    return {
+      type: classifyExpansionSignalType(text),
+      isHardEvidence: true
+    };
+  }
+  if (isGenericBreadcrumb) {
+    return null;
+  }
+  return null;
+}
+
+function isRecentSignalBreadcrumb(result) {
+  const title = cleanText(result?.title);
+  const snippet = cleanText(result?.snippet);
+  const url = cleanText(result?.url);
+  const text = `${title} ${snippet}`;
+  const isJobBoardProfile = SIGNAL_JOB_BOARD_PATTERN.test(url) && /\/(?:cmp|company|locations)\//i.test(url);
+  return (SIGNAL_GENERIC_BREADCRUMB_PATTERN.test(text) || isJobBoardProfile || /\bcareers?\b/i.test(text))
+    && !SIGNAL_HIRING_ROLE_PATTERN.test(text)
+    && !SIGNAL_EXPANSION_EVIDENCE_PATTERN.test(text);
+}
+
+function extractSignalRole(text) {
+  const match = SIGNAL_ROLE_LABELS.find(([, pattern]) => pattern.test(text));
+  return match ? match[0] : "";
+}
+
+function classifyExpansionSignalType(text) {
+  if (/\b(permit|approval|environmental compliance approval|eca|building permit)\b/i.test(text)) {
+    return "Permit";
+  }
+  if (/\b(capacity|production line|equipment upgrade|plant upgrade)\b/i.test(text)) {
+    return "Capacity";
+  }
+  if (/\b(planned expansion|planning to expand|proposed expansion)\b/i.test(text)) {
+    return "Planned expansion";
+  }
+  return "Expansion";
+}
+
+function buildRecentSignalWhy(classification) {
+  if (classification.type === "Hiring") {
+    return classification.role
+      ? `They are publicly hiring for ${classification.role}, which points to active plant, maintenance, production, or operations capacity needs.`
+      : "They are publicly hiring for a plant-related role, which points to active operational capacity needs.";
+  }
+  if (classification.type === "Permit") {
+    return "A permit, approval, or ECA result can indicate facility work, process changes, or plant expansion activity.";
+  }
+  if (classification.type === "Capacity") {
+    return "The result mentions capacity, a production line, or plant equipment changes, which can point to operational growth.";
+  }
+  if (classification.type === "Planned expansion") {
+    return "The result mentions planned expansion, which can point to upcoming facility, staffing, or production needs.";
+  }
+  return "The result mentions facility, construction, investment, or expansion activity tied to operational growth.";
 }
 
 function formatRecentSignalsSection(signals) {

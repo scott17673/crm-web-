@@ -188,6 +188,8 @@ Contact rules:
 Recent signal rules:
 - Only include hiring or expansion-type signals.
 - Ignore awards, charity, generic marketing, ordinary about-page facts, addresses, product lists, and unrelated expansion news.
+- Generic careers pages, Indeed company profiles, LinkedIn company pages, and job-board location pages are breadcrumbs, not final signals. Only include them if the evidence names a specific plant/production/maintenance/warehouse/QA role or gives actual expansion/capacity/permit/construction/investment detail.
+- Make why_it_matters specific to the evidence. If no specific role or expansion detail is found, leave recent_signals empty.
 
 Return this exact JSON shape:
 {
