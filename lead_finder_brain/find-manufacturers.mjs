@@ -7,6 +7,7 @@ import { enrichPlantLead } from "./plant-enrichment.mjs";
 import { loadLocalEnv, verifyAndEnrichPlantLead, verifyPlantCandidateHeuristic } from "./plant-verifier.mjs";
 import { createCrmSync, syncQualifiedLeadToCrm } from "./runtime_lib/crm-sync.mjs";
 import { parseCsv, stringifyCsv } from "./runtime_lib/csv.mjs";
+import { runCompanyEnrichment } from "./runtime_lib/company-enrichment.mjs";
 import { buildExistingIndex, createEmptyIndex, isDuplicate, normalizeName, rememberCandidate } from "./runtime_lib/dedupe.mjs";
 import { enrichFromWebsite } from "./runtime_lib/enrich.mjs";
 import { DEFAULT_INDUSTRY_IDS, inferIndustryLabel } from "./runtime_lib/industries.mjs";
@@ -200,6 +201,12 @@ export async function runFinder(rawOptions = {}, hooks = {}) {
               });
               if (crmResult.action === "inserted") {
                 log(`  CRM sync: inserted ${record.company} (${crmResult.contactsInserted} contact(s))`);
+                await enrichInsertedCrmLead({
+                  manufacturerId: crmResult.manufacturerId,
+                  company: record.company,
+                  options,
+                  log
+                });
               } else if (crmResult.action === "duplicate") {
                 log(`  CRM sync skipped: ${record.company} | already in shadow CRM`);
               }
@@ -223,6 +230,28 @@ export async function runFinder(rawOptions = {}, hooks = {}) {
 
   log(`Finished. ${rows.length} kept prospect(s).`);
   return rows;
+}
+
+async function enrichInsertedCrmLead({ manufacturerId, company, options, log }) {
+  if (!manufacturerId) {
+    log(`  Contact enrichment skipped: ${company} | CRM row id missing`);
+    return;
+  }
+
+  try {
+    log(`  Contact enrichment: searching operations contacts/signals for ${company}`);
+    const result = await runCompanyEnrichment({
+      manufacturerId,
+      company,
+      crmConfigPath: options.crmConfigPath || path.join(repoRoot, "crm-config.js"),
+      repoRoot,
+      model: process.env.OPENAI_CONTACT_SEARCH_MODEL || process.env.OPENAI_CONTACT_EXTRACT_MODEL || options.enrichmentModel,
+      websitePageLimit: options.websitePageLimit
+    });
+    log(`  Contact enrichment: saved ${result.contactsInserted} new, updated ${result.contactsUpdated} contact(s); ${result.recentSignalsFound} signal(s)`);
+  } catch (error) {
+    log(`  Contact enrichment failed: ${company} | ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 async function processHit({ hit, city, query, options, log }) {
