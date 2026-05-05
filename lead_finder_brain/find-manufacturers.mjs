@@ -181,6 +181,28 @@ export async function runFinder(rawOptions = {}, hooks = {}) {
             continue;
           }
 
+          let crmResult = null;
+          if (crmSync) {
+            try {
+              crmResult = await syncQualifiedLeadToCrm({
+                crmSync,
+                record,
+                intelligence,
+                existingIndex: crmExistingIndex,
+                seenIndex: crmSeen
+              });
+              if (crmResult.action === "inserted") {
+                log(`  CRM sync: inserted ${record.company} (${crmResult.contactsInserted} contact(s))`);
+              } else if (crmResult.action === "duplicate") {
+                log(`  CRM sync skipped: ${record.company} | already in shadow CRM`);
+                continue;
+              }
+            } catch (error) {
+              log(`  CRM sync failed: ${record.company} | ${error instanceof Error ? error.message : String(error)}`);
+              continue;
+            }
+          }
+
           rememberCandidate(record, outputSeen);
           rows.push(record);
           await writeOutputCsv(options.out, rows);
@@ -190,29 +212,13 @@ export async function runFinder(rawOptions = {}, hooks = {}) {
 
           log(`  Added row ${rows.length}: ${record.company} | ${record.stage}`);
 
-          if (crmSync) {
-            try {
-              const crmResult = await syncQualifiedLeadToCrm({
-                crmSync,
-                record,
-                intelligence,
-                existingIndex: crmExistingIndex,
-                seenIndex: crmSeen
-              });
-              if (crmResult.action === "inserted") {
-                log(`  CRM sync: inserted ${record.company} (${crmResult.contactsInserted} contact(s))`);
-                await enrichInsertedCrmLead({
-                  manufacturerId: crmResult.manufacturerId,
-                  company: record.company,
-                  options,
-                  log
-                });
-              } else if (crmResult.action === "duplicate") {
-                log(`  CRM sync skipped: ${record.company} | already in shadow CRM`);
-              }
-            } catch (error) {
-              log(`  CRM sync failed: ${record.company} | ${error instanceof Error ? error.message : String(error)}`);
-            }
+          if (crmResult?.action === "inserted") {
+            await enrichInsertedCrmLead({
+              manufacturerId: crmResult.manufacturerId,
+              company: record.company,
+              options,
+              log
+            });
           }
         } catch (error) {
           log(`  Skipped: ${companyLabel} | ${error instanceof Error ? error.message : String(error)}`);
