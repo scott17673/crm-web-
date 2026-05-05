@@ -1884,6 +1884,30 @@ const replaceManufacturerContacts = async (manufacturerId, contacts) => {
     }))
   ));
 };
+const SUPABASE_PAGE_SIZE = 1000;
+const CONTACT_LOOKUP_BATCH_SIZE = 150;
+const fetchManufacturerContactsByIds = async manufacturerIds => {
+  const ids = [...new Set((manufacturerIds || []).filter(id => id !== null && id !== undefined))];
+  const contacts = [];
+  for(let index = 0; index < ids.length; index += CONTACT_LOOKUP_BATCH_SIZE){
+    const batch = ids.slice(index, index + CONTACT_LOOKUP_BATCH_SIZE);
+    let from = 0;
+    while(true){
+      const result = await sb
+        .from("manufacturer_contacts")
+        .select("*")
+        .in("manufacturer_id", batch)
+        .order("id", {ascending:true})
+        .range(from, from + SUPABASE_PAGE_SIZE - 1);
+      ensureOk(result);
+      const rows = result.data || [];
+      contacts.push(...rows);
+      if(rows.length < SUPABASE_PAGE_SIZE) break;
+      from += SUPABASE_PAGE_SIZE;
+    }
+  }
+  return contacts;
+};
 const dedupeTaskRows = rows => {
   const seen = new Set();
   return (rows || []).filter(row => {
@@ -2312,6 +2336,25 @@ function App(){
     }
   },[finderLogHistory]);
 
+  const selectedContactsSignature = useMemo(() => {
+    if(!selected) return "";
+    if(selected.type==="manufacturer") return manufacturerContactsSignature(selected.contacts || []);
+    if(selected.type==="vendor") return [selected.name || "", selected.title || "", selected.email || "", selected.phone || "", selected.industry || "", selected.region || ""].join("|");
+    return "";
+  },[selected?.id, selected?.type, selected?.contacts, selected?.name, selected?.title, selected?.email, selected?.phone, selected?.industry, selected?.region]);
+
+  useEffect(()=>{
+    if(!selected){
+      setNotesDraft("");
+      setContactsDraft("");
+      return;
+    }
+    const nextNotes = selected.notes || "";
+    const nextContacts = selected.type==="manufacturer" ? contactsTextFromRecord(selected) : selected.type==="vendor" ? vendorContactTextFromRecord(selected) : "";
+    setNotesDraft(current => current===nextNotes ? current : nextNotes);
+    setContactsDraft(current => current===nextContacts ? current : nextContacts);
+  },[selected?.id, selected?.type, selected?.notes, selectedContactsSignature]);
+
   const finderAction=async(endpoint)=>{
     // Try local dashboard first; fall back to Supabase command queue
     try{
@@ -2531,15 +2574,22 @@ const taskActivityFromTask = task => ({
   const hydrate = useCallback(async (withSpinner=false)=>{
     if(withSpinner) setLoading(true);
     try{
-      const [mr,cr,vr,lr,ar] = await Promise.all([
+      const [mr,vr,lr,ar] = await Promise.all([
         sb.from("manufacturers").select("*").order("created_at",{ascending:false}),
-        sb.from("manufacturer_contacts").select("*"),
         sb.from("vendors").select("*").order("created_at",{ascending:false}),
         sb.from("lost_contacts").select("*").order("created_at",{ascending:false}),
         sb.from("activities").select("*").order("date",{ascending:false}),
       ]);
-      const contacts = cr.data || [];
-      const m = (mr.data||[]).map(row => ({...row,type:"manufacturer",tags:row.tags||[],lastContact:row.last_contact,industry:row.industry||"",notes:row.signals||"",contacts:contacts.filter(c=>c.manufacturer_id===row.id)}));
+      [mr,vr,lr,ar].forEach(ensureOk);
+      const manufacturerRows = mr.data || [];
+      const contacts = await fetchManufacturerContactsByIds(manufacturerRows.map(row => row.id));
+      const contactsByManufacturer = contacts.reduce((map, contact) => {
+        const key = String(contact.manufacturer_id);
+        if(!map.has(key)) map.set(key, []);
+        map.get(key).push(contact);
+        return map;
+      }, new Map());
+      const m = manufacturerRows.map(row => ({...row,type:"manufacturer",tags:row.tags||[],lastContact:row.last_contact,industry:row.industry||"",notes:row.signals||"",contacts:contactsByManufacturer.get(String(row.id)) || []}));
       const v = (vr.data||[]).map(row => ({...row,type:"vendor",tags:row.tags||[],lastContact:row.last_contact}));
       const l = (lr.data||[]).map(row => ({...row,type:"lost",tags:row.tags||[],lastContact:row.last_contact,lostReason:row.lost_reason,value:row.deal_value}));
       const allRecords = [...m, ...v, ...l];
