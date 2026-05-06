@@ -997,9 +997,10 @@ const ensureOk = result => {
 };
 const trimTrailingSlash = value => String(value || "").trim().replace(/\/+$/,"");
 const isLocalFinderHost = host => /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[?::1\]?)$/i.test(String(host || "").trim());
+const isFinderDashboardPort = () => String(window.location.port || "") === "8780";
 const resolveFinderDashboardUrl = () => {
   const pageHost = window.location.hostname || "";
-  if(isLocalFinderHost(pageHost) && /^https?:$/i.test(window.location.protocol)){
+  if((isFinderDashboardPort() || isLocalFinderHost(pageHost)) && /^https?:$/i.test(window.location.protocol)){
     return trimTrailingSlash(window.location.origin);
   }
   return trimTrailingSlash(CRM_CONFIG.finderDashboardUrl) || "http://localhost:8780";

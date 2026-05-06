@@ -19,7 +19,8 @@ const outputRoot = path.join(__dirname, "output");
 const webRoot = path.join(__dirname, "web");
 const repoRoot = path.resolve(__dirname, "..");
 const settingsPath = path.join(dataRoot, "dashboard-settings.json");
-const host = String(process.env.HOST || "127.0.0.1").trim() || "127.0.0.1";
+await loadLocalEnvFile(path.join(repoRoot, ".env.local"));
+const host = String(process.env.HOST || "0.0.0.0").trim() || "0.0.0.0";
 const port = Number(process.env.PORT || 8780);
 const cycleDelayMs = Number(process.env.CYCLE_DELAY_MS || 1000 * 60 * 5);
 const watchdogMs = Number(process.env.FINDER_WATCHDOG_MS || 1000 * 60 * 10);
@@ -1114,6 +1115,33 @@ async function readJsonBody(req) {
     return JSON.parse(text);
   } catch {
     throw new Error(`Invalid JSON request body: ${text.slice(0, 120) || "empty body"}`);
+  }
+}
+
+async function loadLocalEnvFile(filePath) {
+  try {
+    const text = await readFile(filePath, "utf8");
+    for (const rawLine of text.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) {
+        continue;
+      }
+      const separator = line.indexOf("=");
+      if (separator <= 0) {
+        continue;
+      }
+      const key = line.slice(0, separator).trim();
+      let value = line.slice(separator + 1).trim();
+      if (!key || process.env[key]) {
+        continue;
+      }
+      if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      process.env[key] = value;
+    }
+  } catch {
+    // Optional local secrets file.
   }
 }
 
