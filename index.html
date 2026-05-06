@@ -77,6 +77,7 @@ const DEFAULT_OWNER = PEOPLE[0];
 const INTERNAL_TAG_PREFIX = "__";
 const IMPORT_BATCH_NEW_PREFIX = "__import_batch_new:";
 const FINDER_SKIP_TAG = "__finder_skip";
+const FINDER_SYNC_TAG = "__finder_sync";
 const ACTIVITY_TYPES = ["Call","Email","Meeting","Note"];
 const ACTIVITY_COLORS = {Call:"#1e3a8a",Email:"#ef4444",Meeting:"#16a34a",Note:"#f97316",All:"#475569"};
 const PERSON_COLORS = {Scott:"#1e3a8a",Jeff:"#16a34a"};
@@ -315,6 +316,22 @@ const LEAD_FINDER_MISSING_PRODUCT_HINTS = [
 ];
 
 const today = () => new Date().toISOString().slice(0,10);
+const localDateString = (date = new Date()) => `${date.getFullYear()}-${padDatePart(date.getMonth()+1)}-${padDatePart(date.getDate())}`;
+const finderDateRangeUtc = dateText => {
+  const parts = String(dateText || localDateString()).split("-").map(value => parseInt(value,10));
+  const start = Number.isFinite(parts[0]) && Number.isFinite(parts[1]) && Number.isFinite(parts[2])
+    ? new Date(parts[0], parts[1]-1, parts[2], 0, 0, 0, 0)
+    : new Date();
+  start.setHours(0,0,0,0);
+  const end = new Date(start);
+  end.setDate(end.getDate()+1);
+  return { from:start.toISOString(), to:end.toISOString() };
+};
+const localDateFromIso = iso => {
+  const date = new Date(iso || "");
+  return Number.isNaN(date.getTime()) ? "" : localDateString(date);
+};
+const finderDayLabel = dateText => dateText===localDateString() ? "Today's Leads" : `Leads for ${dateText}`;
 const leadFinderDefaultConfig = () => ({ mode:"endpoint", endpointUrl:"", model:"gpt-5-mini", limitPerCity:3 });
 const createLeadFinderDefaultStats = () => ({ rows:0, checked:0, skipped:0, phase:"-", company:"-", city:"-" });
 const normalizeLeadFinderIndustries = values => {
@@ -827,6 +844,7 @@ const uniqueTags = tags => [...new Set((tags || []).map(tag => String(tag || "")
 const isInternalTag = tag => String(tag || "").trim().startsWith(INTERNAL_TAG_PREFIX);
 const visibleTags = tags => uniqueTags(tags).filter(tag => !isInternalTag(tag));
 const internalTags = tags => uniqueTags(tags).filter(isInternalTag);
+const isFinderCreatedLead = record => uniqueTags(record?.tags).includes(FINDER_SYNC_TAG) || /\(verified plant lead\)/i.test(String(record?.signals || record?.notes || ""));
 const padDatePart = value => String(value).padStart(2,"0");
 const makeImportBatchId = () => {
   const now = new Date();
@@ -2238,6 +2256,8 @@ function App(){
   const [finderLogFilter,setFinderLogFilter] = useState("");
   const [finderRowSearch,setFinderRowSearch] = useState("");
   const [finderTodayLeads,setFinderTodayLeads] = useState([]);
+  const [finderLeadDate,setFinderLeadDate] = useState(()=>localDateString());
+  const [finderLeadHistoryDays,setFinderLeadHistoryDays] = useState([]);
   const [finderExpandedRow,setFinderExpandedRow] = useState(null);
   const [finderIndustries,setFinderIndustries] = useState(FINDER_DEFAULT_INDUSTRIES);
   const [finderCitiesText,setFinderCitiesText] = useState(null);
@@ -2319,17 +2339,35 @@ function App(){
     };
     const pollLeads=async()=>{
       try{
-        const today=new Date().toISOString().slice(0,10);
-        const {data}=await sb.from("manufacturers").select("id,company,stage,industry,end_product,signals,last_contact,created_at,tags").gte("created_at",today+"T00:00:00Z").order("created_at",{ascending:false});
-        if(!cancelled && data) setFinderTodayLeads(data.filter(passesLeadFinderPlantVerifierGuard));
+        const range=finderDateRangeUtc(finderLeadDate);
+        const {data}=await sb.from("manufacturers").select("id,company,stage,industry,end_product,signals,last_contact,created_at,tags").gte("created_at",range.from).lt("created_at",range.to).order("created_at",{ascending:false});
+        if(!cancelled && data) setFinderTodayLeads(data.filter(row=>isFinderCreatedLead(row)&&passesLeadFinderPlantVerifierGuard(row)));
+      }catch{}
+    };
+    const pollLeadHistory=async()=>{
+      try{
+        const since=new Date();
+        since.setDate(since.getDate()-120);
+        const {data}=await sb.from("manufacturers").select("id,company,stage,industry,end_product,signals,created_at,tags").gte("created_at",since.toISOString()).order("created_at",{ascending:false});
+        if(cancelled || !data) return;
+        const counts=data
+          .filter(row=>isFinderCreatedLead(row)&&passesLeadFinderPlantVerifierGuard(row))
+          .reduce((map,row)=>{
+            const day=localDateFromIso(row.created_at);
+            if(day) map.set(day,(map.get(day)||0)+1);
+            return map;
+          },new Map());
+        setFinderLeadHistoryDays(Array.from(counts.entries()).map(([date,count])=>({date,count})).sort((a,b)=>b.date.localeCompare(a.date)));
       }catch{}
     };
     poll();
     pollLeads();
+    pollLeadHistory();
     const id=setInterval(poll,3000);
     const id2=setInterval(pollLeads,15000);
-    return()=>{cancelled=true;clearInterval(id);clearInterval(id2);finderSyncedFromDashboard.current=false;};
-  },[mergeFinderLogHistory, view]);
+    const id3=setInterval(pollLeadHistory,60000);
+    return()=>{cancelled=true;clearInterval(id);clearInterval(id2);clearInterval(id3);finderSyncedFromDashboard.current=false;};
+  },[finderLeadDate, mergeFinderLogHistory, view]);
 
   useEffect(()=>{
     if(finderLogRef.current && finderFollowLogs.current){
@@ -4475,6 +4513,9 @@ const taskActivityFromTask = task => ({
           const activeCities=(finderCitiesText||"").split(/\n/).map(c=>c.trim()).filter(Boolean);
           const filteredLogs=finderLogFilter?logs.filter(l=>l.toLowerCase().includes(finderLogFilter.toLowerCase())):logs;
           const todayLeads=finderTodayLeads||[];
+          const selectedLeadDate=finderLeadDate||localDateString();
+          const selectedLeadLabel=finderDayLabel(selectedLeadDate);
+          const historyDays=finderLeadHistoryDays||[];
           const filteredRows=finderRowSearch?todayLeads.filter(r=>[r.company,r.stage,r.industry,r.end_product].some(v=>String(v||"").toLowerCase().includes(finderRowSearch.toLowerCase()))):todayLeads;
           const renderInline=v=>String(v||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/(https?:\/\/[^\s|<>"']+)/g,'<a href="$1" target="_blank" rel="noreferrer" style="color:#1e40af">$1</a>').replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>").replace(/\n/g,"<br>");
           const settingsDirty = fs && (
@@ -4512,6 +4553,7 @@ const taskActivityFromTask = task => ({
 
                   {label:"Checked",value:prog.checked||0,color:"#64748b"},
                   {label:"Skipped",value:prog.skipped||0,color:"#ef4444"},
+                  {label:"Awake",value:st.keepAwake?"On":"Off",color:st.keepAwake?"#16a34a":"#94a3b8",text:true},
                   {label:"Phase",value:st.currentPhase||"—",color:"#f97316",text:true},
                   {label:"Company",value:st.currentCompany||"—",color:"#1e40af",text:true},
                   {label:"City",value:st.currentCity||"—",color:"#64748b",text:true},
@@ -4614,12 +4656,24 @@ const taskActivityFromTask = task => ({
             </div>
 
             <div style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
-              <div style={{padding:"12px 18px",borderBottom:"1px solid #e8eef6",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase"}}>Today's Leads <span style={{color:"#cbd5e1"}}>({filteredRows.length})</span></div>
-                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+              <div style={{padding:"12px 18px",borderBottom:"1px solid #e8eef6",display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
+                <div>
+                  <div className="mono" style={{fontSize:11,letterSpacing:".14em",color:"#6f84a6",textTransform:"uppercase"}}>{selectedLeadLabel} <span style={{color:"#cbd5e1"}}>({filteredRows.length})</span></div>
+                  <div className="mono" style={{fontSize:10,color:"#94a3b8",marginTop:3}}>Finder history from CRM created dates</div>
+                </div>
+                <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
+                  <input className="field" type="date" style={{width:150,padding:"5px 10px",fontSize:12}} value={selectedLeadDate} onChange={e=>{setFinderLeadDate(e.target.value||localDateString());setFinderExpandedRow(null);}} />
+                  <select className="field" style={{width:170,padding:"5px 10px",fontSize:12}} value={selectedLeadDate} onChange={e=>{setFinderLeadDate(e.target.value||localDateString());setFinderExpandedRow(null);}}>
+                    <option value={localDateString()}>Today</option>
+                    {selectedLeadDate!==localDateString() && !historyDays.some(day=>day.date===selectedLeadDate) && <option value={selectedLeadDate}>{selectedLeadDate}</option>}
+                    {historyDays.map(day=><option key={day.date} value={day.date}>{day.date} ({day.count})</option>)}
+                  </select>
                   <input className="field" style={{width:220,padding:"5px 10px",fontSize:12}} placeholder="Search leads..." value={finderRowSearch} onChange={e=>setFinderRowSearch(e.target.value)} />
                 </div>
               </div>
+              {historyDays.length>0 && <div style={{padding:"10px 18px",borderBottom:"1px solid #eef3f9",display:"flex",gap:6,flexWrap:"wrap"}}>
+                {historyDays.slice(0,18).map(day=><button key={day.date} onClick={()=>{setFinderLeadDate(day.date);setFinderExpandedRow(null);}} style={{fontSize:11,padding:"4px 9px",borderRadius:3,border:"1px solid "+(day.date===selectedLeadDate?"#1e3a8a":"#e2e8f0"),background:day.date===selectedLeadDate?"#eef4ff":"#f8fafc",color:day.date===selectedLeadDate?"#1e3a8a":"#64748b",cursor:"pointer",fontWeight:day.date===selectedLeadDate?700:500}}>{day.date} ({day.count})</button>)}
+              </div>}
               <div style={{maxHeight:500,overflow:"auto"}}>
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                   <thead>
@@ -4648,7 +4702,7 @@ const taskActivityFromTask = task => ({
                           </div>
                         </td></tr>}
                       </React.Fragment>;
-                    }):<tr><td colSpan={5} style={{padding:"24px 14px",textAlign:"center",color:"#94a3b8"}}>{st.cycleRunning?"No new leads added to CRM yet today.":"No leads added today. Start a run to find leads."}</td></tr>}
+                    }):<tr><td colSpan={5} style={{padding:"24px 14px",textAlign:"center",color:"#94a3b8"}}>{st.cycleRunning?`No new leads added to CRM on ${selectedLeadDate} yet.`:`No leads added on ${selectedLeadDate}. Pick another date or start a run.`}</td></tr>}
                   </tbody>
                 </table>
               </div>

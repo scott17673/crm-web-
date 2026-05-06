@@ -264,6 +264,49 @@ export async function runCompanyEnrichment({
   };
 }
 
+export async function runCompanyPreInsertEnrichment({
+  company,
+  signals = "",
+  endProduct = "",
+  tags = [],
+  repoRoot,
+  model = process.env.OPENAI_CONTACT_SEARCH_MODEL || process.env.PLANT_ENRICHMENT_MODEL || "gpt-5-mini",
+  websitePageLimit = 3
+} = {}) {
+  const root = repoRoot || path.resolve(__dirname, "..", "..");
+  await loadLocalEnv({ cwd: root });
+  const manufacturer = {
+    id: "",
+    company: cleanText(company),
+    signals: cleanText(signals),
+    end_product: cleanText(endProduct),
+    tags: normalizeTagArray(tags)
+  };
+  if (!manufacturer.company) {
+    throw new Error("Cannot enrich a lead before insert without a company name.");
+  }
+
+  const evidence = await buildCompanyEvidence(manufacturer, { websitePageLimit });
+  const contacts = await findOperationsContacts(evidence, { model, existingContacts: [] });
+  const signalsFound = await findHiringExpansionSignals(evidence);
+  const nextTags = updateContactTags(manufacturer.tags, contacts);
+  const nextSignals = upsertRecentSignalsSection(
+    manufacturer.signals,
+    formatRecentSignalsSection(signalsFound)
+  );
+
+  return {
+    company: manufacturer.company,
+    website: evidence.websiteUrl,
+    contactsFound: contacts.length,
+    contacts,
+    recentSignalsFound: signalsFound.length,
+    recentSignals: signalsFound,
+    tags: nextTags,
+    signalsText: nextSignals
+  };
+}
+
 async function resolveManufacturer(client, { manufacturerId, company }) {
   if (manufacturerId !== undefined && manufacturerId !== null && String(manufacturerId).trim()) {
     const rows = await client.select("manufacturers", {

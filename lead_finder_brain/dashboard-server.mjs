@@ -22,6 +22,8 @@ const settingsPath = path.join(dataRoot, "dashboard-settings.json");
 const host = String(process.env.HOST || "127.0.0.1").trim() || "127.0.0.1";
 const port = Number(process.env.PORT || 8780);
 const cycleDelayMs = Number(process.env.CYCLE_DELAY_MS || 1000 * 60 * 5);
+const watchdogMs = Number(process.env.FINDER_WATCHDOG_MS || 1000 * 60 * 10);
+const keepAwakeEnabled = process.env.FINDER_KEEP_AWAKE !== "off";
 const CSV_COLUMNS = [
   "company",
   "stage",
@@ -98,6 +100,10 @@ const runtime = {
   progressPath: "",
   process: null,
   restartTimer: null,
+  watchdogTimer: null,
+  keepAwakeProcess: null,
+  lastLogAt: Date.now(),
+  watchdogRestarts: 0,
   logs: ["Dashboard ready."]
 };
 
@@ -398,7 +404,11 @@ async function buildState() {
       keptCount: stageCounts.total,
       summary: buildRunSummary(progress, stageCounts),
       currentCsvUrl: currentPath ? "/download/current.csv" : "",
-      finalCsvUrl: await fileExists(getFinalOutputPath(settings)) ? "/download/final.csv" : ""
+      finalCsvUrl: await fileExists(getFinalOutputPath(settings)) ? "/download/final.csv" : "",
+      keepAwake: Boolean(runtime.keepAwakeProcess),
+      lastProgressAt: new Date(runtime.lastLogAt).toISOString(),
+      watchdogMs,
+      watchdogRestarts: runtime.watchdogRestarts
     },
     logs: runtime.logs,
     results: {
@@ -430,6 +440,7 @@ async function startRun({ startup = false } = {}) {
   runtime.exitCode = null;
   runtime.nextRunAt = "";
   clearRestartTimer();
+  startRunSupport();
 
   if (!startup) {
     pushLog("Continuous run armed.");
@@ -513,6 +524,7 @@ async function launchRun() {
     if (runtime.stopRequested || !runtime.running || !settings.enabled || !settings.autoRun) {
       runtime.running = false;
       runtime.nextRunAt = "";
+      stopRunSupport();
       pushLog(runtime.stopRequested
         ? `Run stopped with exit code ${code ?? -1}.`
         : `Run finished with exit code ${code ?? -1}.`);
@@ -565,6 +577,7 @@ function stopRun() {
 
   if (!runtime.process || !runtime.cycleRunning) {
     runtime.running = false;
+    stopRunSupport();
     pushLog("Continuous run stopped.");
     return;
   }
@@ -597,6 +610,97 @@ function hookStream(stream, label) {
 
 function pushLog(message) {
   runtime.logs.push(message);
+  runtime.lastLogAt = Date.now();
+}
+
+function startRunSupport() {
+  startKeepAwake();
+  startWatchdog();
+}
+
+function stopRunSupport() {
+  stopWatchdog();
+  stopKeepAwake();
+}
+
+function startWatchdog() {
+  if (runtime.watchdogTimer || !watchdogMs) {
+    return;
+  }
+
+  runtime.watchdogTimer = setInterval(() => {
+    if (!runtime.running || runtime.stopRequested || !settings.enabled || !settings.autoRun) {
+      stopWatchdog();
+      return;
+    }
+
+    if (!runtime.cycleRunning || !runtime.process) {
+      return;
+    }
+
+    const quietMs = Date.now() - runtime.lastLogAt;
+    if (quietMs < watchdogMs) {
+      return;
+    }
+
+    runtime.watchdogRestarts += 1;
+    pushLog(`Watchdog: no finder progress for ${Math.round(quietMs / 1000)}s, restarting this cycle.`);
+    runtime.process.kill();
+  }, Math.min(60_000, Math.max(15_000, Math.floor(watchdogMs / 3))));
+}
+
+function stopWatchdog() {
+  if (runtime.watchdogTimer) {
+    clearInterval(runtime.watchdogTimer);
+    runtime.watchdogTimer = null;
+  }
+}
+
+function startKeepAwake() {
+  if (!keepAwakeEnabled || process.platform !== "win32" || runtime.keepAwakeProcess) {
+    return;
+  }
+
+  const command = [
+    "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class SleepGuard { [DllImport(\"kernel32.dll\")] public static extern uint SetThreadExecutionState(uint esFlags); }';",
+    "while ($true) { [SleepGuard]::SetThreadExecutionState(0x80000001) | Out-Null; Start-Sleep -Seconds 45 }"
+  ].join(" ");
+
+  const child = spawn("powershell.exe", [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-Command",
+    command
+  ], {
+    windowsHide: true,
+    stdio: "ignore"
+  });
+
+  runtime.keepAwakeProcess = child;
+  pushLog("Keep-awake guard active while continuous run is on.");
+  child.on("close", () => {
+    if (runtime.keepAwakeProcess === child) {
+      runtime.keepAwakeProcess = null;
+    }
+  });
+  child.on("error", (error) => {
+    if (runtime.keepAwakeProcess === child) {
+      runtime.keepAwakeProcess = null;
+    }
+    pushLog(`Keep-awake guard failed: ${error.message}`);
+  });
+}
+
+function stopKeepAwake() {
+  if (!runtime.keepAwakeProcess) {
+    return;
+  }
+
+  const child = runtime.keepAwakeProcess;
+  runtime.keepAwakeProcess = null;
+  child.kill();
+  pushLog("Keep-awake guard stopped.");
 }
 
 function summarizeLogs(logs) {
@@ -627,6 +731,7 @@ function summarizeLogs(logs) {
       }
     }
     if (line.includes("Skipped: ")) {
+      checked += 1;
       skipped += 1;
       lastDecision = line;
       const parts = line.split(" | ").slice(1);
@@ -639,6 +744,7 @@ function summarizeLogs(logs) {
       }
     }
     if (line.includes("Added row ")) {
+      checked += 1;
       added += 1;
       lastDecision = line;
     }

@@ -209,7 +209,7 @@ export function buildCrmContactRows(manufacturerId, intelligence) {
       manufacturer_id: manufacturerId,
       name: cleanText(contact?.name),
       title: cleanText(contact?.title),
-      linkedin: cleanText(contact?.linkedin)
+      linkedin: cleanText(contact?.linkedin || contact?.source_url)
     }))
     .filter((contact) => contact.name && contact.title)
     .filter((contact) => {
@@ -222,11 +222,7 @@ export function buildCrmContactRows(manufacturerId, intelligence) {
     });
 }
 
-export async function syncQualifiedLeadToCrm({ crmSync, record, intelligence, existingIndex, seenIndex }) {
-  if (!crmSync) {
-    return { action: "disabled", contactsInserted: 0 };
-  }
-
+export async function checkQualifiedLeadCrmDuplicate({ record, existingIndex, seenIndex, includeAi = true }) {
   if (isDuplicate(record, existingIndex, seenIndex)) {
     return { action: "duplicate", contactsInserted: 0 };
   }
@@ -237,13 +233,32 @@ export async function syncQualifiedLeadToCrm({ crmSync, record, intelligence, ex
   }
 
   const companyName = cleanText(record.company || record.company_name || record.name);
-  if (companyName && _cachedCrmCompanyNames.length > 0) {
+  if (includeAi && companyName && _cachedCrmCompanyNames.length > 0) {
     const aiResult = await aiCheckDuplicate(companyName, _cachedCrmCompanyNames);
     if (aiResult?.isDuplicate) {
       return { action: "duplicate", contactsInserted: 0, aiMatch: aiResult.matchedName || "" };
     }
   }
 
+  return { action: "ok", contactsInserted: 0 };
+}
+
+export async function syncQualifiedLeadToCrm({ crmSync, record, intelligence, existingIndex, seenIndex, duplicatePrechecked = false }) {
+  if (!crmSync) {
+    return { action: "disabled", contactsInserted: 0 };
+  }
+
+  const duplicateResult = await checkQualifiedLeadCrmDuplicate({
+    record,
+    existingIndex,
+    seenIndex,
+    includeAi: !duplicatePrechecked
+  });
+  if (duplicateResult.action === "duplicate") {
+    return duplicateResult;
+  }
+
+  const companyName = cleanText(record.company || record.company_name || record.name);
   const inserted = await crmSync.insertLead(record, intelligence);
   rememberCandidate(record, seenIndex);
   _cachedCrmCompanyNames.push(companyName);
@@ -333,21 +348,33 @@ function createPostgrestClient(config, fetchImpl) {
 
   return {
     async select(table, { select = "*", order = null, limit = 1000 } = {}) {
-      const url = new URL(`${baseUrl}/${table}`);
-      url.searchParams.set("select", select);
-      if (limit) {
-        url.searchParams.set("limit", String(limit));
-      }
-      if (order?.column) {
-        url.searchParams.set("order", `${order.column}.${order.ascending === false ? "desc" : "asc"}`);
-      }
-      return requestJson(fetchImpl, url, {
-        method: "GET",
-        headers: {
-          ...authHeaders,
-          Accept: "application/json"
+      const maxRows = Math.max(0, Number(limit) || 1000);
+      const pageSize = Math.min(maxRows || 1000, 1000);
+      const rows = [];
+
+      for (let offset = 0; offset < maxRows; offset += pageSize) {
+        const url = new URL(`${baseUrl}/${table}`);
+        url.searchParams.set("select", select);
+        url.searchParams.set("limit", String(Math.min(pageSize, maxRows - offset)));
+        url.searchParams.set("offset", String(offset));
+        if (order?.column) {
+          url.searchParams.set("order", `${order.column}.${order.ascending === false ? "desc" : "asc"}`);
         }
-      });
+        const page = await requestJson(fetchImpl, url, {
+          method: "GET",
+          headers: {
+            ...authHeaders,
+            Accept: "application/json"
+          }
+        });
+        const pageRows = toArray(page);
+        rows.push(...pageRows);
+        if (pageRows.length < pageSize) {
+          break;
+        }
+      }
+
+      return rows;
     },
     async insert(table, rows, { select = "" } = {}) {
       const url = new URL(`${baseUrl}/${table}`);

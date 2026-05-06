@@ -5,9 +5,9 @@ import { fileURLToPath } from "node:url";
 
 import { enrichPlantLead } from "./plant-enrichment.mjs";
 import { loadLocalEnv, verifyAndEnrichPlantLead, verifyPlantCandidateHeuristic } from "./plant-verifier.mjs";
-import { createCrmSync, syncQualifiedLeadToCrm } from "./runtime_lib/crm-sync.mjs";
+import { checkQualifiedLeadCrmDuplicate, createCrmSync, syncQualifiedLeadToCrm } from "./runtime_lib/crm-sync.mjs";
 import { parseCsv, stringifyCsv } from "./runtime_lib/csv.mjs";
-import { runCompanyEnrichment } from "./runtime_lib/company-enrichment.mjs";
+import { runCompanyPreInsertEnrichment } from "./runtime_lib/company-enrichment.mjs";
 import { buildExistingIndex, createEmptyIndex, isDuplicate, normalizeName, rememberCandidate } from "./runtime_lib/dedupe.mjs";
 import { enrichFromWebsite } from "./runtime_lib/enrich.mjs";
 import { DEFAULT_INDUSTRY_IDS, inferIndustryLabel } from "./runtime_lib/industries.mjs";
@@ -181,6 +181,29 @@ export async function runFinder(rawOptions = {}, hooks = {}) {
             continue;
           }
 
+          let crmDuplicatePrechecked = false;
+          if (crmSync) {
+            try {
+              const crmDuplicateResult = await checkQualifiedLeadCrmDuplicate({
+                record,
+                existingIndex: crmExistingIndex,
+                seenIndex: crmSeen,
+                includeAi: true
+              });
+              if (crmDuplicateResult.action === "duplicate") {
+                const matchText = crmDuplicateResult.aiMatch ? ` (${crmDuplicateResult.aiMatch})` : "";
+                log(`  CRM sync skipped: ${record.company} | already in shadow CRM${matchText}`);
+                continue;
+              }
+              crmDuplicatePrechecked = true;
+            } catch (error) {
+              log(`  CRM duplicate check failed: ${record.company} | ${error instanceof Error ? error.message : String(error)}`);
+              continue;
+            }
+          }
+
+          await enrichLeadBeforeCrmInsert({ record, intelligence, options, log });
+
           let crmResult = null;
           if (crmSync) {
             try {
@@ -189,7 +212,8 @@ export async function runFinder(rawOptions = {}, hooks = {}) {
                 record,
                 intelligence,
                 existingIndex: crmExistingIndex,
-                seenIndex: crmSeen
+                seenIndex: crmSeen,
+                duplicatePrechecked: crmDuplicatePrechecked
               });
               if (crmResult.action === "inserted") {
                 log(`  CRM sync: inserted ${record.company} (${crmResult.contactsInserted} contact(s))`);
@@ -211,15 +235,6 @@ export async function runFinder(rawOptions = {}, hooks = {}) {
           }
 
           log(`  Added row ${rows.length}: ${record.company} | ${record.stage}`);
-
-          if (crmResult?.action === "inserted") {
-            await enrichInsertedCrmLead({
-              manufacturerId: crmResult.manufacturerId,
-              company: record.company,
-              options,
-              log
-            });
-          }
         } catch (error) {
           log(`  Skipped: ${companyLabel} | ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -238,25 +253,47 @@ export async function runFinder(rawOptions = {}, hooks = {}) {
   return rows;
 }
 
-async function enrichInsertedCrmLead({ manufacturerId, company, options, log }) {
-  if (!manufacturerId) {
-    log(`  Contact enrichment skipped: ${company} | CRM row id missing`);
-    return;
-  }
-
+async function enrichLeadBeforeCrmInsert({ record, intelligence, options, log }) {
   try {
-    log(`  Contact enrichment: searching operations contacts/signals for ${company}`);
-    const result = await runCompanyEnrichment({
-      manufacturerId,
-      company,
-      crmConfigPath: options.crmConfigPath || path.join(repoRoot, "crm-config.js"),
+    log(`  Contact enrichment: pre-insert search for ${record.company}`);
+    const result = await runCompanyPreInsertEnrichment({
+      company: record.company,
+      signals: record.notes,
+      endProduct: intelligence.endProducts,
+      tags: record.tags,
       repoRoot,
       model: process.env.OPENAI_CONTACT_SEARCH_MODEL || process.env.OPENAI_CONTACT_EXTRACT_MODEL || options.enrichmentModel,
       websitePageLimit: options.websitePageLimit
     });
-    log(`  Contact enrichment: saved ${result.contactsInserted} new, updated ${result.contactsUpdated} contact(s); ${result.recentSignalsFound} signal(s)`);
+
+    const contacts = mergeMaintenanceContacts(intelligence.maintenanceContacts, result?.contacts);
+    intelligence.maintenanceContacts = contacts;
+    intelligence.contact_search_status = contacts.length ? "contacts_found" : "no_target_contacts_found";
+
+    if (result?.signalsText) {
+      record.notes = result.signalsText;
+    }
+
+    const stage = determineLeadStage({
+      hasContacts: contacts.length > 0,
+      hasProducts: hasConfirmedEndProducts(intelligence.endProducts)
+    });
+    intelligence.leadStage = stage;
+    intelligence.tags = buildLeadTags({
+      contacts,
+      endProducts: hasConfirmedEndProducts(intelligence.endProducts) ? intelligence.endProducts : "",
+      stage
+    });
+    record.stage = stage;
+    record.tags = intelligence.tags;
+    record.contacts = contacts.length ? formatEnrichedContactsField(contacts) : formatContactsField(intelligence);
+
+    log(`  Contact enrichment: found ${contacts.length} contact(s), ${result.recentSignalsFound || 0} signal(s) before insert`);
+    return result;
   } catch (error) {
-    log(`  Contact enrichment failed: ${company} | ${error instanceof Error ? error.message : String(error)}`);
+    record.contacts = formatContactsField(intelligence);
+    log(`  Contact enrichment failed before insert: ${record.company} | ${error instanceof Error ? error.message : String(error)}`);
+    return null;
   }
 }
 
@@ -638,6 +675,89 @@ function formatContactsField(intelligence) {
     .join("\n\n");
 }
 
+function formatEnrichedContactsField(contacts) {
+  const formatted = cleanArray(contacts)
+    .map((contact) => ({
+      name: cleanText(contact?.name),
+      title: cleanText(contact?.title),
+      linkedin: cleanText(contact?.linkedin || contact?.source_url),
+      notes: cleanText(contact?.notes)
+    }))
+    .filter((contact) => contact.name && contact.title)
+    .map((contact) => [
+      `Name - ${contact.name}`,
+      `Title - ${contact.title}`,
+      contact.linkedin ? `LinkedIn/source - ${contact.linkedin}` : "",
+      contact.notes ? `Notes - ${contact.notes}` : ""
+    ].filter(Boolean).join("\n"));
+
+  return formatted.length ? formatted.join("\n\n") : "";
+}
+
+function mergeMaintenanceContacts(existingContacts, nextContacts) {
+  const merged = [];
+  const indexByKey = new Map();
+  for (const contact of [...cleanArray(existingContacts), ...cleanArray(nextContacts)]) {
+    const normalized = normalizeLeadContact(contact);
+    if (!normalized.name || !normalized.title) {
+      continue;
+    }
+    const key = contactIdentityKey(normalized);
+    const nameKey = contactNameKey(normalized.name);
+    const existingIndex = indexByKey.get(key) ?? indexByKey.get(nameKey);
+    if (existingIndex === undefined) {
+      indexByKey.set(key, merged.length);
+      indexByKey.set(nameKey, merged.length);
+      merged.push(normalized);
+      continue;
+    }
+
+    const current = merged[existingIndex];
+    merged[existingIndex] = {
+      name: current.name,
+      title: shouldReplaceContactTitle(current.title, normalized.title) ? normalized.title : current.title,
+      linkedin: current.linkedin || normalized.linkedin,
+      source_url: current.source_url || normalized.source_url,
+      notes: current.notes || normalized.notes
+    };
+  }
+  return merged;
+}
+
+function normalizeLeadContact(contact) {
+  return {
+    name: cleanText(contact?.name),
+    title: cleanText(contact?.title),
+    linkedin: cleanText(contact?.linkedin || contact?.linkedin_url),
+    source_url: cleanText(contact?.source_url || contact?.source),
+    notes: cleanText(contact?.notes)
+  };
+}
+
+function contactIdentityKey(contact) {
+  const linkedin = cleanText(contact?.linkedin || contact?.source_url).toLowerCase();
+  if (/linkedin\.com\/in\//i.test(linkedin)) {
+    return `linkedin:${linkedin.replace(/\/+$/, "")}`;
+  }
+  return contactNameKey(contact?.name);
+}
+
+function contactNameKey(name) {
+  return `name:${cleanText(name).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()}`;
+}
+
+function shouldReplaceContactTitle(currentTitle, nextTitle) {
+  const current = cleanText(currentTitle);
+  const next = cleanText(nextTitle);
+  if (!next || current === next) {
+    return false;
+  }
+  if (!current) {
+    return true;
+  }
+  return /\b(?:title not public|title not available|title not found|operations contact|operations tied contact|unknown)\b/i.test(current);
+}
+
 function formatFacilityLine(facility) {
   return [
     cleanText(facility?.name || facility?.facility_type),
@@ -682,6 +802,15 @@ function determineLeadStage({ hasContacts, hasProducts }) {
   if (!hasContacts) return "Plant Verified - Needs Contact";
   if (!hasProducts) return "Plant Verified - Needs Products";
   return "Ready for Outreach";
+}
+
+function hasConfirmedEndProducts(value) {
+  const text = cleanText(value);
+  if (!text) {
+    return false;
+  }
+  const lower = text.toLowerCase();
+  return !MISSING_PRODUCT_HINTS.some((hint) => lower.includes(hint));
 }
 
 async function collectOfficialSiteEvidence({ companyName, city, query, websiteUrl }) {

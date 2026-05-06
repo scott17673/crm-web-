@@ -46,6 +46,7 @@ const GENERIC_EMAIL_DOMAINS = new Set([
 
 export function buildExistingIndex(records) {
   const names = new Set();
+  const addressIndex = new Set();
   const domains = new Set();
   const phones = new Set();
   const nameAddress = new Set();
@@ -58,7 +59,7 @@ export function buildExistingIndex(records) {
     const explicitAddress = normalizeAddress(pickFirst(record, ADDRESS_ALIASES));
     const explicitPhone = normalizePhone(pickFirst(record, PHONE_ALIASES));
     const explicitDomain = normalizeDomain(pickFirst(record, WEBSITE_ALIASES));
-    const addresses = new Set([
+    const recordAddresses = new Set([
       explicitAddress,
       ...extractAddresses(textBlob).map(normalizeAddress)
     ]);
@@ -87,7 +88,10 @@ export function buildExistingIndex(records) {
       }
     }
 
-    for (const address of addresses) {
+    for (const address of recordAddresses) {
+      if (address) {
+        addressIndex.add(address);
+      }
       if (name && address) {
         nameAddress.add(`${name}::${address}`);
       }
@@ -101,7 +105,7 @@ export function buildExistingIndex(records) {
     }
   }
 
-  return { names, domains, phones, nameAddress, hardSkipNames, hardSkipDomains };
+  return { names, addresses: addressIndex, domains, phones, nameAddress, hardSkipNames, hardSkipDomains };
 }
 
 export function normalizeCandidate(candidate) {
@@ -136,16 +140,18 @@ export function isDuplicate(candidate, existingIndex, seenIndex) {
   }
 
   const existingName = normalized.name && existingIndex.names.has(normalized.name);
+  const existingAddress = normalized.address && existingIndex.addresses?.has(normalized.address);
   const existingDomain = normalized.domain && existingIndex.domains.has(normalized.domain);
   const existingPhone = normalized.phone && existingIndex.phones.has(normalized.phone);
   const existingComposite = normalized.composite && existingIndex.nameAddress.has(normalized.composite);
 
   const seenName = normalized.name && seenIndex.names.has(normalized.name);
+  const seenAddress = normalized.address && seenIndex.addresses?.has(normalized.address);
   const seenDomain = normalized.domain && seenIndex.domains.has(normalized.domain);
   const seenPhone = normalized.phone && seenIndex.phones.has(normalized.phone);
   const seenComposite = normalized.composite && seenIndex.nameAddress.has(normalized.composite);
 
-  if (existingComposite || seenComposite) {
+  if (existingAddress || seenAddress || existingComposite || seenComposite) {
     return true;
   }
 
@@ -175,6 +181,9 @@ export function rememberCandidate(candidate, seenIndex) {
   if (normalized.name) {
     seenIndex.names.add(normalized.name);
   }
+  if (normalized.address) {
+    seenIndex.addresses.add(normalized.address);
+  }
   if (normalized.domain) {
     seenIndex.domains.add(normalized.domain);
   }
@@ -189,6 +198,7 @@ export function rememberCandidate(candidate, seenIndex) {
 export function createEmptyIndex() {
   return {
     names: new Set(),
+    addresses: new Set(),
     domains: new Set(),
     phones: new Set(),
     nameAddress: new Set(),
@@ -215,6 +225,12 @@ export function normalizeAddress(value) {
     .replace(/\b(avenue)\b/g, " ave ")
     .replace(/\b(drive)\b/g, " dr ")
     .replace(/\b(boulevard)\b/g, " blvd ")
+    .replace(/\b(north)\b/g, " n ")
+    .replace(/\b(south)\b/g, " s ")
+    .replace(/\b(east)\b/g, " e ")
+    .replace(/\b(west)\b/g, " w ")
+    .replace(/\b[A-Z]\d[A-Z][ -]?\d[A-Z]\d\b/gi, " ")
+    .replace(/\b(ontario|canada|on)\b/g, " ")
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -289,5 +305,8 @@ function extractDomains(text) {
 }
 
 function extractAddresses(text) {
-  return String(text ?? "").match(/\b\d{1,6}\s+[A-Za-z0-9.'#,\-/ ]{3,140}(?:Ontario|ON)[ ,]+[A-Z]\d[A-Z][ -]?\d[A-Z]\d\b/gi) || [];
+  const source = String(text ?? "");
+  const strict = source.match(/\b\d{1,6}\s+[A-Za-z0-9.'#,\-/ ]{3,140}(?:Ontario|ON)[ ,]+[A-Z]\d[A-Z][ -]?\d[A-Z]\d\b/gi) || [];
+  const loose = source.match(/\b\d{1,6}\s+[A-Za-z0-9.'#&/\- ]{2,90}\b(?:street|st|avenue|ave|road|rd|drive|dr|boulevard|blvd|lane|ln|court|ct|way|parkway|pkwy|highway|hwy|crescent|cres|circle|cir)\b(?:\s+(?:north|south|east|west|n|s|e|w))?(?:\s*(?:unit|suite|ste|#)\s*[A-Za-z0-9-]+)?/gi) || [];
+  return Array.from(new Set([...loose, ...strict]));
 }
