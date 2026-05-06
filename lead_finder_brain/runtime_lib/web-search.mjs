@@ -244,7 +244,7 @@ function filterSearchResults(parsed, query, options = {}) {
       continue;
     }
 
-    if (shouldSkipResult(result, options.skipPatterns)) {
+    if (shouldSkipResult(result, options.skipPatterns, options)) {
       continue;
     }
 
@@ -345,7 +345,7 @@ export async function searchYellowPagesListings(query, city, province = "Ontario
       sourceUrl: detail.detailUrl
     };
 
-    if (shouldSkipResult(result, options.skipPatterns)) {
+    if (shouldSkipResult(result, options.skipPatterns, options)) {
       continue;
     }
 
@@ -745,7 +745,7 @@ function normalizeResultUrl(url) {
   }
 }
 
-function shouldSkipResult(result, extraPatterns = []) {
+function shouldSkipResult(result, extraPatterns = [], options = {}) {
   const haystack = `${result.title} ${result.url} ${result.snippet}`.toLowerCase();
   if (isTrustedWorkforceSource(result)) {
     return false;
@@ -753,13 +753,16 @@ function shouldSkipResult(result, extraPatterns = []) {
 
   const industrialFoodSignal = /\b(roast|roastery|brewery|manufactur|plant|facility|production|processing)\b/.test(haystack);
 
+  const jobPatterns = options.keepJobResults ? [] : [
+    "/jobs/",
+    "jobs in",
+    "job opening"
+  ];
+
   const patterns = [
     ".pdf",
     "/pdf/",
     " filetype:pdf",
-    "/jobs/",
-    "jobs in",
-    "job opening",
     "search?q=",
     "manufacturing-companies",
     "major-employers",
@@ -814,7 +817,8 @@ function shouldSkipResult(result, extraPatterns = []) {
     "documentation",
     "resources",
     "factory outlet",
-    "shoe outlet"
+    "shoe outlet",
+    ...jobPatterns
   ].concat(extraPatterns || []).filter((pattern) => !(industrialFoodSignal && pattern === "cafe"));
 
   if (patterns.some((pattern) => haystack.includes(pattern))) {

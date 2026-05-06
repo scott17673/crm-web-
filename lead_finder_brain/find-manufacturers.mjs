@@ -262,7 +262,7 @@ async function enrichLeadBeforeCrmInsert({ record, intelligence, options, log })
       endProduct: intelligence.endProducts,
       tags: record.tags,
       repoRoot,
-      model: process.env.OPENAI_CONTACT_SEARCH_MODEL || process.env.OPENAI_CONTACT_EXTRACT_MODEL || options.enrichmentModel,
+      model: process.env.OPENAI_CONTACT_EXTRACT_MODEL || "gpt-5-nano",
       websitePageLimit: options.websitePageLimit
     });
 

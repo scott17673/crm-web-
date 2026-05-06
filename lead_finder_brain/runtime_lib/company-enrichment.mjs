@@ -2,21 +2,29 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { enrichPlantLead } from "../plant-enrichment.mjs";
 import { loadLocalEnv } from "../plant-verifier.mjs";
 import { normalizeLeadCompanyName } from "./lead-records.mjs";
 import { enrichFromWebsite } from "./enrich.mjs";
 import { searchWeb, toCanonicalWebsiteUrl } from "./web-search.mjs";
 
 const OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
-const DEFAULT_CONTACT_EXTRACT_MODEL = process.env.OPENAI_CONTACT_EXTRACT_MODEL || "gpt-5-nano";
+const CONFIGURED_CONTACT_EXTRACT_MODEL = String(process.env.OPENAI_CONTACT_EXTRACT_MODEL || "").trim();
+const DEFAULT_CONTACT_EXTRACT_MODEL = /nano/i.test(CONFIGURED_CONTACT_EXTRACT_MODEL) ? CONFIGURED_CONTACT_EXTRACT_MODEL : "gpt-5-nano";
+const CONFIGURED_SIGNAL_EXTRACT_MODEL = String(process.env.OPENAI_SIGNAL_EXTRACT_MODEL || "").trim();
+const DEFAULT_SIGNAL_EXTRACT_MODEL = /nano/i.test(CONFIGURED_SIGNAL_EXTRACT_MODEL) ? CONFIGURED_SIGNAL_EXTRACT_MODEL : DEFAULT_CONTACT_EXTRACT_MODEL;
 const TARGET_TITLE_TERMS = [
   "site director of manufacturing",
   "director of manufacturing",
   "manufacturing manager",
   "manufacturing supervisor",
   "manufacturing leader",
+  "production and manufacturing leader",
   "manufacturing and operations leader",
+  "chief operating officer",
+  "chief operations officer",
+  "coo",
+  "director of operations",
+  "operations director",
   "plant manager",
   "plant supervisor",
   "plant superintendent",
@@ -27,6 +35,10 @@ const TARGET_TITLE_TERMS = [
   "operator",
   "acquirer",
   "owner",
+  "founder",
+  "president",
+  "vice president",
+  "vp",
   "partner",
   "board member",
   "production manager",
@@ -53,6 +65,15 @@ const TARGET_TITLE_TERMS = [
   "food safety",
   "technical services",
   "materials and processing supervisor",
+  "head brewer",
+  "lead brewer",
+  "brewer",
+  "brewing assistant",
+  "brewery manager",
+  "cellar(?:man|person)",
+  "roast master",
+  "head roaster",
+  "roaster",
   "site supervisor",
   "warehouse manager",
   "warehouse supervisor",
@@ -70,6 +91,7 @@ const TARGET_TITLE_TERMS = [
   "procurement manager",
   "supply chain",
   "supply chain manager",
+  "supply chain director",
   "facilities manager",
   "facility manager",
   "supervisor",
@@ -85,11 +107,23 @@ const PEOPLE_DIRECTORY_PRIORITY_DOMAINS = ["wiza.co", "rocketreach.co", "signalh
 const OPERATIONS_CONTACT_SEARCH_TITLES = [
   "operations manager",
   "operations supervisor",
+  "chief operating officer",
+  "chief operations officer",
+  "coo",
+  "director of operations",
+  "operations director",
   "plant manager",
   "plant supervisor",
   "production manager",
   "production supervisor",
   "production lead",
+  "head brewer",
+  "lead brewer",
+  "brewer",
+  "brewing assistant",
+  "brewery manager",
+  "head roaster",
+  "roaster",
   "manufacturing manager",
   "manufacturing supervisor",
   "maintenance manager",
@@ -107,9 +141,15 @@ const OPERATIONS_CONTACT_SEARCH_TITLES = [
   "warehouse supervisor",
   "logistics manager",
   "supply chain manager",
+  "supply chain director",
   "procurement manager",
   "purchasing manager",
   "buyer",
+  "owner",
+  "founder",
+  "president",
+  "vice president",
+  "vp",
   "supervisor",
   "general manager"
 ];
@@ -118,21 +158,31 @@ const MAX_CONTACTS_PER_COMPANY = 20;
 const MAX_PRIORITY_PEOPLE_SEARCH_QUERIES = Number(process.env.PEOPLE_SEARCH_PRIORITY_QUERY_LIMIT || 72);
 const MAX_PEOPLE_SEARCH_QUERIES = 0;
 const PEOPLE_SEARCH_BATCH_SIZE = 6;
+const WIDE_PEOPLE_SEARCH_QUERY_LIMIT = Number(process.env.PEOPLE_SEARCH_WIDE_QUERY_LIMIT || 18);
+const NARROW_PEOPLE_RETRY_QUERY_LIMIT = Number(process.env.PEOPLE_SEARCH_NARROW_RETRY_LIMIT || 30);
+const PEOPLE_SEARCH_TIMEOUT_MS = Number(process.env.PEOPLE_SEARCH_TIMEOUT_MS || 3500);
 const MIN_TARGET_CONTACTS = Number(process.env.CONTACT_SEARCH_MIN_TARGETS || 3);
 const NANO_CONTACT_BATCH_SIZE = Number(process.env.OPENAI_CONTACT_EXTRACT_BATCH_SIZE || 18);
 const NANO_CONTACT_MAX_BATCHES = Number(process.env.OPENAI_CONTACT_EXTRACT_MAX_BATCHES || 4);
 const NANO_CONTACT_EXTRACT_ENABLED = process.env.OPENAI_CONTACT_EXTRACT !== "off";
-const SIGNAL_INCLUDE_PATTERN = /\b(hiring|hire|job opening|job posting|careers?|recruiting|recruitment|seeking|millwright|maintenance mechanic|maintenance technician|production operator|production supervisor|plant manager|operations manager|expansion|expand|expanding|expanded|new facility|new plant|new site|new production line|production line|capacity|permit|approval|environmental compliance approval|eca|construction|investment|investing|planned expansion)\b/i;
-const SIGNAL_STRONG_PATTERN = /\b(hiring|job opening|job posting|careers?|millwright|maintenance|production|plant|operations|expansion|expanded|expanding|new facility|new plant|new site|new production line|capacity|permit|approval|eca|construction|investment|planned expansion)\b/i;
+const NANO_SIGNAL_EXTRACT_ENABLED = process.env.OPENAI_SIGNAL_EXTRACT !== "off";
+const SIGNAL_INCLUDE_PATTERN = /\b(hiring|hire|job opening|job posting|careers?|recruiting|recruitment|seeking|millwright|maintenance mechanic|maintenance technician|production operator|production supervisor|plant manager|operations manager|head brewer|brewer|brewing assistant|roaster|head roaster|expansion|expand|expanding|expanded|new facility|new plant|new site|new production line|production line|capacity|permit|approval|environmental compliance approval|eca|construction|investment|investing|planned expansion)\b/i;
+const SIGNAL_STRONG_PATTERN = /\b(hiring|job opening|job posting|careers?|millwright|maintenance|production|plant|operations|head brewer|brewer|roaster|expansion|expanded|expanding|new facility|new plant|new site|new production line|capacity|permit|approval|eca|construction|investment|planned expansion)\b/i;
 const SIGNAL_NOISE_PATTERN = /\b(address|phone|official site|about|located|product list|products?|capabilities|independent craft|proudly located|built in|refurbished|facility address|contact page|store hours|taproom|tour|brewery tours?|charity|award|ambassador|walk a mile|sponsor|sponsorship|fundraiser|customer review|excellent service|newsletter|recipe|holiday hours|giveaway|webinar|conference|podcast|blog)\b/i;
 const SIGNAL_NOISE_OVERRIDE_PATTERN = /\b(hiring|hire|job opening|job posting|careers?|recruiting|expansion|expanded|expanding|planned expansion|new facility|new plant|new site|new production line|capacity|permit|approval|eca|construction|investment)\b/i;
 const SIGNAL_STALE_OR_GENERIC_PATTERN = /\b(gradually expanding|established by founder|for more than three decades|overview, news|similar companies|employee directory)\b/i;
 const SIGNAL_HIRING_ACTION_PATTERN = /\b(hiring|hire|job opening|job posting|job ad|jobs?|careers?|employment|recruiting|recruitment|seeking|apply|now hiring)\b/i;
-const SIGNAL_HIRING_ROLE_PATTERN = /\b(millwright|maintenance mechanic|maintenance technician|industrial mechanic|production operator|production worker|production associate|production supervisor|production manager|plant manager|plant supervisor|operations manager|operations supervisor|warehouse|logistics|quality assurance|quality control|qa\b|food safety|sanitation|packaging|machine operator)\b/i;
+const SIGNAL_HIRING_ROLE_PATTERN = /\b(millwright|maintenance mechanic|maintenance technician|industrial mechanic|production operator|production worker|production associate|production supervisor|production manager|plant manager|plant supervisor|operations manager|operations supervisor|warehouse|logistics|quality assurance|quality control|qa\b|food safety|sanitation|packaging|machine operator|head brewer|brewer|brewing assistant|roaster|head roaster)\b/i;
 const SIGNAL_EXPANSION_EVIDENCE_PATTERN = /\b(expansion|expand|expanding|expanded|planned expansion|new facility|new plant|new site|new location|opening|opened|relocat(?:e|ing|ed)|larger facility|production line|capacity|capacity increase|permit|approval|environmental compliance approval|eca|construction|building permit|investment|investing|invested|capital project|equipment upgrade|plant upgrade)\b/i;
 const SIGNAL_GENERIC_BREADCRUMB_PATTERN = /\b(careers and employment|careers in|career opportunities|company profile|company overview|employee reviews?|salaries|interview questions|overview, news|similar companies)\b/i;
 const SIGNAL_JOB_BOARD_PATTERN = /(?:indeed|glassdoor|workopolis|jobbank|monster|ziprecruiter|simplyhired|eluta)\./i;
+const SIGNAL_NON_OPERATIONAL_ROLE_PATTERN = /\b(barista|server|cashier|retail associate|sales associate|store associate|customer service|front of house|restaurant|cook|brand ambassador)\b/i;
+const SIGNAL_NEGATIVE_CHANGE_PATTERN = /\b(permanently clos(?:e|es|ed|ing)|plant closure|closed plants?|shut(?:ter| down)|recall|outbreak|listeria|bankrupt|layoff|lawsuit|for sale|sell(?:ing)? (?:two )?plants?)\b/i;
 const SIGNAL_ROLE_LABELS = [
+  ["Head Brewer", /\bhead brewer\b/i],
+  ["Brewer", /\b(?:lead brewer|brewer|brewing assistant)\b/i],
+  ["Head Roaster", /\bhead roaster\b/i],
+  ["Roaster", /\broaster\b/i],
   ["Maintenance Mechanic", /\bmaintenance mechanic\b/i],
   ["Maintenance Technician", /\bmaintenance technician\b/i],
   ["Millwright", /\bmillwright\b/i],
@@ -152,6 +202,8 @@ const SIGNAL_ROLE_LABELS = [
 ];
 const PAST_ROLE_DATE_RANGE_PATTERN = /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+20\d{2}\s*[-–]\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+20\d{2}\b/i;
 const UNVERIFIED_OR_STALE_CONTACT_PATTERN = /\b(historical|alleged|outdated|not verified|may be outdated|not verified as current)\b/i;
+const EXCLUDED_CONTACT_TITLE_PATTERN = /\b(?:chief financial officer|cfo\b|finance|accounting|controller|sales|marketing|human resources|hr\b|front of house|software developer|it support|information technology|consultant|customer service|intake executive)\b/i;
+const EXCLUDED_CONTACT_OVERRIDE_PATTERN = /\b(?:operations|production|plant|maintenance|manufacturing|facility|quality|qa\b|technical services|engineering|warehouse|logistics|supply chain|procurement|purchasing|buyer|owner|founder)\b/i;
 const HTML_ENTITY_MAP = {
   "&amp;": "&",
   "&#038;": "&",
@@ -168,7 +220,7 @@ export async function runCompanyEnrichment({
   company,
   crmConfigPath,
   repoRoot,
-  model = process.env.OPENAI_CONTACT_SEARCH_MODEL || process.env.PLANT_ENRICHMENT_MODEL || "gpt-5-mini",
+  model = DEFAULT_CONTACT_EXTRACT_MODEL,
   websitePageLimit = 3,
   dryRun = false
 } = {}) {
@@ -270,7 +322,7 @@ export async function runCompanyPreInsertEnrichment({
   endProduct = "",
   tags = [],
   repoRoot,
-  model = process.env.OPENAI_CONTACT_SEARCH_MODEL || process.env.PLANT_ENRICHMENT_MODEL || "gpt-5-mini",
+  model = DEFAULT_CONTACT_EXTRACT_MODEL,
   websitePageLimit = 3
 } = {}) {
   const root = repoRoot || path.resolve(__dirname, "..", "..");
@@ -321,26 +373,27 @@ async function resolveManufacturer(client, { manufacturerId, company }) {
   if (!needle) {
     return null;
   }
+  const directRows = await client.select("manufacturers", {
+    select: "id,company,stage,industry,end_product,signals,tags,last_enriched",
+    filters: { company: `ilike.*${escapePostgrestLike(cleanText(company))}*` },
+    limit: 50
+  });
+  const directMatch = directRows.find((row) => normalizeCompanyKey(row.company) === needle) ||
+    directRows.find((row) => isLooseCompanyMatch(row.company, company)) ||
+    directRows[0] ||
+    null;
+  if (directMatch) {
+    return directMatch;
+  }
+
   const rows = await client.select("manufacturers", {
     select: "id,company,stage,industry,end_product,signals,tags,last_enriched",
     limit: 5000
   });
   const localMatch = rows.find((row) => normalizeCompanyKey(row.company) === needle) ||
-    rows.find((row) => normalizeCompanyKey(row.company).includes(needle) || needle.includes(normalizeCompanyKey(row.company))) ||
+    rows.find((row) => isLooseCompanyMatch(row.company, company)) ||
     null;
-  if (localMatch) {
-    return localMatch;
-  }
-
-  const directRows = await client.select("manufacturers", {
-    select: "id,company,stage,industry,end_product,signals,tags,last_enriched",
-    filters: { company: `ilike.*${escapePostgrestLike(cleanText(company))}*` },
-    limit: 25
-  });
-  return directRows.find((row) => normalizeCompanyKey(row.company) === needle) ||
-    directRows.find((row) => normalizeCompanyKey(row.company).includes(needle) || needle.includes(normalizeCompanyKey(row.company))) ||
-    directRows[0] ||
-    null;
+  return localMatch;
 }
 
 async function buildCompanyEvidence(manufacturer, options) {
@@ -415,25 +468,34 @@ function filterPeopleResultsByCompany(results, companyHints, { city } = {}) {
   );
 }
 
-async function findOperationsContacts(evidence, { model, existingContacts = [] }) {
+async function findOperationsContacts(evidence, { model = DEFAULT_CONTACT_EXTRACT_MODEL, existingContacts = [] }) {
+  const nanoModel = resolveNanoOnlyModel(model, DEFAULT_CONTACT_EXTRACT_MODEL);
   const existingUsefulContacts = normalizeExistingCrmContacts(existingContacts);
-  const heuristicContacts = dedupeContacts([
-    ...extractWebsiteContacts(evidence.profile, evidence.websiteUrl),
-    ...extractLinkedInContacts(evidence.peopleResults, evidence.companyHints),
-    ...extractDirectoryContacts(evidence.peopleResults, evidence.companyHints),
-    ...extractOpenWebContacts(evidence.peopleResults, evidence.companyHints),
-    ...extractAcquisitionPartnerContacts(evidence.peopleResults, evidence.companyHints)
-  ]);
-  const linkedInFallbackContacts = extractLinkedInFallbackContacts(evidence.peopleResults, evidence.companyHints);
-  let contacts = dedupeContacts([...existingUsefulContacts, ...heuristicContacts, ...linkedInFallbackContacts].filter(isUsefulContact));
+  let heuristicContacts = extractHeuristicOperationContacts(evidence);
+  let seedContacts = dedupeContacts([...existingUsefulContacts, ...heuristicContacts]);
+  let contacts = dedupeContacts(seedContacts.filter(isUsefulContact));
+
+  if (!hasEnoughTargetContacts(contacts)) {
+    try {
+      const retryResults = await collectNarrowPeopleResults(evidence, contacts);
+      if (retryResults.length) {
+        mergePeopleResultsIntoEvidence(evidence, retryResults);
+        heuristicContacts = extractHeuristicOperationContacts(evidence);
+        seedContacts = dedupeContacts([...existingUsefulContacts, ...heuristicContacts]);
+        contacts = dedupeContacts(seedContacts.filter(isUsefulContact));
+      }
+    } catch {
+      // Keep the wider first-pass result if the narrow retry search is flaky.
+    }
+  }
 
   let nanoContacts = [];
   if (NANO_CONTACT_EXTRACT_ENABLED && process.env.OPENAI_API_KEY && !hasEnoughTargetContacts(contacts)) {
     try {
       nanoContacts = await extractContactsWithNanoBatches(evidence, {
         existingContacts,
-        seedContacts: contacts,
-        model: process.env.OPENAI_CONTACT_EXTRACT_MODEL || DEFAULT_CONTACT_EXTRACT_MODEL
+        seedContacts,
+        model: nanoModel
       });
       contacts = dedupeContacts([...contacts, ...nanoContacts].filter(isUsefulContact));
     } catch {
@@ -441,26 +503,30 @@ async function findOperationsContacts(evidence, { model, existingContacts = [] }
     }
   }
 
-  let modelContacts = [];
-  if (process.env.OPENAI_API_KEY && heuristicContacts.length && !hasEnoughTargetContacts(contacts)) {
+  if (NANO_CONTACT_EXTRACT_ENABLED && process.env.OPENAI_API_KEY) {
     try {
-      const enriched = await enrichPlantLead(evidence.packet, { model: process.env.OPENAI_CONTACT_EXTRACT_MODEL || DEFAULT_CONTACT_EXTRACT_MODEL, timeoutMs: 30000 });
-      modelContacts = dedupeContacts(
-        toArray(enriched.contacts).map((contact) => ({
-          name: cleanText(contact?.name),
-          title: cleanText(contact?.title || contact?.role_match),
-          linkedin: normalizeLinkedInUrl(contact?.linkedin_url),
-          source_url: cleanText(contact?.source_url),
-          notes: cleanText(contact?.notes)
-        }))
-      );
-      contacts = dedupeContacts([...contacts, ...modelContacts].filter(isUsefulContact));
+      const reviewedContacts = await reviewContactsWithNano(evidence, {
+        candidateContacts: dedupeContacts([...seedContacts, ...nanoContacts]),
+        existingContacts,
+        model: nanoModel
+      });
+      contacts = dedupeContacts([...contacts, ...reviewedContacts].filter(isUsefulContact));
     } catch {
-      modelContacts = [];
+      // The first nano pass still gives us the best cheap result if review fails.
     }
   }
 
   return contacts.slice(0, MAX_CONTACTS_PER_COMPANY);
+}
+
+function extractHeuristicOperationContacts(evidence) {
+  return dedupeContacts([
+    ...extractWebsiteContacts(evidence.profile, evidence.websiteUrl),
+    ...extractLinkedInContacts(evidence.peopleResults, evidence.companyHints),
+    ...extractDirectoryContacts(evidence.peopleResults, evidence.companyHints),
+    ...extractOpenWebContacts(evidence.peopleResults, evidence.companyHints),
+    ...extractAcquisitionPartnerContacts(evidence.peopleResults, evidence.companyHints)
+  ]);
 }
 
 async function extractContactsWithNanoBatches(evidence, {
@@ -551,6 +617,68 @@ async function extractContactsWithNanoBatch(evidence, snippets, {
   }
 }
 
+async function reviewContactsWithNano(evidence, {
+  apiKey = process.env.OPENAI_API_KEY,
+  model = DEFAULT_CONTACT_EXTRACT_MODEL,
+  candidateContacts = [],
+  existingContacts = [],
+  timeoutMs = 45000
+} = {}) {
+  if (!apiKey) {
+    return [];
+  }
+
+  const candidates = dedupeContacts(candidateContacts).slice(0, MAX_CONTACTS_PER_COMPANY);
+  const snippets = buildNanoContactEvidenceSnippets(evidence, existingContacts).slice(0, NANO_CONTACT_BATCH_SIZE * 2);
+  if (!candidates.length && !snippets.length) {
+    return [];
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const requestBody = {
+      model: resolveNanoOnlyModel(model, DEFAULT_CONTACT_EXTRACT_MODEL),
+      messages: buildNanoContactReviewMessages(evidence, { candidates, snippets }),
+      response_format: { type: "json_object" }
+    };
+    if (/^gpt-5/i.test(requestBody.model)) {
+      requestBody.max_completion_tokens = 2800;
+      requestBody.reasoning_effort = "minimal";
+    } else {
+      requestBody.max_tokens = 1400;
+      requestBody.temperature = 0;
+    }
+
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal
+    });
+    const body = await response.text();
+    if (!response.ok) {
+      throw new Error(`OpenAI nano contact review failed ${response.status}: ${body.slice(0, 500)}`);
+    }
+    const data = JSON.parse(body);
+    const content = cleanText(data?.choices?.[0]?.message?.content);
+    if (!content) {
+      return [];
+    }
+    const parsed = JSON.parse(content);
+    return dedupeContacts(
+      toArray(parsed.contacts)
+        .map((contact) => normalizeOpenAiWebContact(contact, evidence))
+        .filter(Boolean)
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function buildNanoContactExtractMessages(evidence, snippets, { existingContacts = [], knownContacts = [] } = {}) {
   const company = evidence.searchCompany || evidence.manufacturer?.company || "";
   const aliases = uniqueOrdered([company, ...toArray(evidence.companyHints)]).slice(0, 8);
@@ -574,7 +702,7 @@ function buildNanoContactExtractMessages(evidence, snippets, { existingContacts 
       content: `You extract manufacturing outreach contacts from public search snippets. Return JSON only: {"contacts":[{"name":"","title":"","linkedin":"","source_url":"","notes":""}]}.
 
 Keep only people tied to the target company with production, plant, maintenance, operations, quality/QA, warehouse/logistics, procurement/purchasing, supervisor, or owner/operator relevance.
-Use the exact title visible in the snippet/page title when available. If a targeted query clearly proves a role and the snippet shows the person at the company, you may infer the specific role from the query.
+Use the exact title visible in the snippet/page title when available. Do not infer a title from the search query alone.
 Never use filler titles like "operations contact", "title not public", "employee", or "staff".
 Every contact must include source_url: the URL where the name/title/company evidence was found. Use a personal LinkedIn /in/ URL in linkedin only when present.`
     },
@@ -586,6 +714,37 @@ Every contact must include source_url: the URL where the name/title/company evid
         minimum_goal: `Find up to ${MIN_TARGET_CONTACTS} strong contacts if present, especially plant manager, maintenance manager/supervisor, production manager/supervisor, operations manager/supervisor, QA/quality manager, procurement/purchasing.`,
         existing_weak_contacts_to_repair: weakExistingContacts,
         already_known_contacts: known,
+        public_search_snippets: snippets
+      }, null, 2)
+    }
+  ];
+}
+
+function buildNanoContactReviewMessages(evidence, { candidates = [], snippets = [] } = {}) {
+  const company = evidence.searchCompany || evidence.manufacturer?.company || "";
+  const aliases = uniqueOrdered([company, ...toArray(evidence.companyHints)]).slice(0, 8);
+  return [
+    {
+      role: "system",
+      content: `You are the second-pass reviewer for cheap manufacturing contact enrichment. Return JSON only: {"contacts":[{"name":"","title":"","linkedin":"","source_url":"","notes":""}]}.
+
+Keep every real person tied to the target company who is useful for production, maintenance, plant, operations, quality/QA, warehouse/logistics, procurement/purchasing, general management, owner/operator, or small-plant leadership outreach.
+For breweries, cideries, roasteries, bakeries, and small food plants, Head Brewer, Brewer, Brewing Assistant, Head Roaster, Roaster, Owner, Founder, President, VP, General Manager, and similar plant-adjacent leaders are valid operations contacts.
+Repair weak titles only when a snippet or page title supports the role. Do not infer a title from the search query alone. Keep the source_url where the name/title/company evidence was found. Use linkedin only for personal /in/ links.
+Do not invent people. Do not output departments, job openings, company pages, or filler titles like "operations contact" or "title not public".`
+    },
+    {
+      role: "user",
+      content: JSON.stringify({
+        target_company: company,
+        aliases,
+        candidate_contacts: candidates.map((contact) => ({
+          name: cleanText(contact?.name),
+          title: cleanText(contact?.title),
+          linkedin: normalizeLinkedInUrl(contact?.linkedin),
+          source_url: cleanText(contact?.source_url),
+          notes: cleanText(contact?.notes)
+        })),
         public_search_snippets: snippets
       }, null, 2)
     }
@@ -619,7 +778,7 @@ function buildNanoContactEvidenceSnippets(evidence, existingContacts = []) {
 
 function contactEvidencePriority(result) {
   const text = `${cleanText(result?.title)} ${cleanText(result?.snippet)} ${cleanText(result?.url)} ${cleanText(result?.query)}`;
-  if (/\b(?:plant manager|maintenance manager|maintenance supervisor|production manager|production supervisor|operations manager|operations supervisor|quality assurance manager|qa manager|procurement manager|purchasing manager)\b/i.test(text)) {
+  if (/\b(?:plant manager|maintenance manager|maintenance supervisor|production manager|production supervisor|operations manager|operations supervisor|quality assurance manager|qa manager|procurement manager|purchasing manager|head brewer|lead brewer|brewery manager|head roaster|owner|founder|president|vice president|vp)\b/i.test(text)) {
     return 1;
   }
   if (/\b(?:signalhire|wiza|rocketreach|zoominfo|apollo|allbiz|linkedin\.com\/in)\b/i.test(text)) {
@@ -645,6 +804,9 @@ function normalizeOpenAiWebContact(contact, evidence) {
   if (isWeakGenericOpenAiTitle(title)) {
     return null;
   }
+  if (!sourceSupportsContactTitle({ name, title, linkedin, source_url: sourceUrl }, evidence)) {
+    return null;
+  }
   return {
     name,
     title,
@@ -652,6 +814,54 @@ function normalizeOpenAiWebContact(contact, evidence) {
     source_url: sourceUrl || linkedin,
     notes: cleanText(contact?.notes || "gpt-5-nano contact extraction")
   };
+}
+
+function sourceSupportsContactTitle(contact, evidence) {
+  const title = cleanText(contact?.title);
+  if (!title) return false;
+  const supportText = contactSupportText(contact, evidence);
+  if (!supportText) return false;
+  return roleTitleAppearsInText(title, supportText);
+}
+
+function contactSupportText(contact, evidence) {
+  const sourceUrl = normalizeResultUrl(contact?.source_url || contact?.linkedin);
+  const nameKey = normalizePersonNameKey(contact?.name);
+  const lines = [];
+
+  for (const result of toArray(evidence?.peopleResults)) {
+    const resultUrl = normalizeResultUrl(result?.url);
+    const text = [cleanText(result?.title), cleanText(result?.snippet), cleanText(result?.url)].filter(Boolean).join(" ");
+    if ((sourceUrl && resultUrl === sourceUrl) || (nameKey && normalizeCompanyKey(text).includes(nameKey))) {
+      lines.push(text);
+    }
+  }
+
+  for (const entry of toArray(evidence?.packet?.evidence)) {
+    const text = cleanText(entry);
+    if (!text) continue;
+    if ((sourceUrl && normalizeCompanyKey(text).includes(normalizeCompanyKey(sourceUrl))) || (nameKey && normalizeCompanyKey(text).includes(nameKey))) {
+      lines.push(text);
+    }
+  }
+
+  return lines.join(" ");
+}
+
+function roleTitleAppearsInText(title, text) {
+  const role = normalizeCompanyKey(title);
+  const haystack = normalizeCompanyKey(text);
+  if (!role || !haystack) return false;
+  if (haystack.includes(role)) return true;
+  const synonyms = [
+    [/^vice president$/, /\b(?:vice president|vp)\b/i],
+    [/^chief operating officer$/, /\b(?:chief operating officer|chief operations officer|coo)\b/i],
+    [/^director of operations$/, /\b(?:director of operations|operations director)\b/i],
+    [/^brewing assistant$/, /\bbrewing assist(?:ant|\.)?\b/i],
+    [/^production and manufacturing leader$/, /\bproduction and manufacturing leader\b/i],
+    [/^manufacturing leader$/, /\bmanufacturing leader\b/i]
+  ];
+  return synonyms.some(([rolePattern, textPattern]) => rolePattern.test(role) && textPattern.test(text));
 }
 
 async function findHiringExpansionSignals(evidence) {
@@ -663,6 +873,7 @@ async function findHiringExpansionSignals(evidence) {
       const results = await searchWeb(query, {
         limit: 3,
         keepUrlPath: true,
+        keepJobResults: true,
         allowBlockedDomains: true,
         timeoutMs: 12000,
         skipPatterns: ["salary estimate", "resume", "charity", "award", "review"]
@@ -681,6 +892,7 @@ async function findHiringExpansionSignals(evidence) {
         const results = await searchWeb(query, {
           limit: 2,
           keepUrlPath: true,
+          keepJobResults: true,
           allowBlockedDomains: true,
           timeoutMs: 12000,
           skipPatterns: ["salary estimate", "resume", "charity", "award", "review"]
@@ -691,6 +903,18 @@ async function findHiringExpansionSignals(evidence) {
       }
     }
     signals = normalizeSignalResults(collected, evidence);
+  }
+
+  if (NANO_SIGNAL_EXTRACT_ENABLED && process.env.OPENAI_API_KEY && signals.length < 2 && collected.length) {
+    try {
+      const nanoSignals = await extractSignalsWithNano(evidence, collected, {
+        seedSignals: signals,
+        model: DEFAULT_SIGNAL_EXTRACT_MODEL
+      });
+      signals = dedupeSignals([...signals, ...nanoSignals]);
+    } catch {
+      // Keep the rule-based signal result when the cheap model pass fails.
+    }
   }
 
   return signals.slice(0, 5);
@@ -705,6 +929,8 @@ function buildRecentSignalQueries(evidence) {
     `"${company}" hiring production ${city}`,
     `"${company}" hiring operations ${city}`,
     `"${company}" millwright ${city}`,
+    `"${company}" brewer job ${city}`,
+    `"${company}" roaster job ${city}`,
     `"${company}" plant manager ${city} hiring`,
     `"${company}" expansion ${city}`,
     `"${company}" "planned expansion" ${city}`,
@@ -740,6 +966,8 @@ function buildBreadcrumbSignalQueries(evidence, results) {
     `"${company}" "production operator" job ${city}`,
     `"${company}" "production supervisor" job ${city}`,
     `"${company}" "plant manager" job ${city}`,
+    `"${company}" brewer job ${city}`,
+    `"${company}" roaster job ${city}`,
     `"${company}" "new facility" OR expansion ${city}`,
     `"${company}" permit construction expansion ${city}`,
     `"${company}" investment capacity production ${city}`,
@@ -753,12 +981,149 @@ function buildBreadcrumbSignalQueries(evidence, results) {
   ].filter(Boolean));
 }
 
+async function extractSignalsWithNano(evidence, results, {
+  apiKey = process.env.OPENAI_API_KEY,
+  model = DEFAULT_SIGNAL_EXTRACT_MODEL,
+  seedSignals = [],
+  timeoutMs = 35000
+} = {}) {
+  if (!apiKey) {
+    return [];
+  }
+
+  const snippets = dedupeResultsByUrl(results)
+    .slice(0, 48)
+    .map((result) => ({
+      title: cleanText(result?.title),
+      snippet: cleanText(result?.snippet),
+      url: cleanText(result?.url),
+      query: cleanText(result?.query)
+    }))
+    .filter((result) => result.title || result.snippet || result.url);
+  if (!snippets.length) {
+    return [];
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const requestBody = {
+      model: resolveNanoOnlyModel(model, DEFAULT_SIGNAL_EXTRACT_MODEL),
+      messages: buildNanoSignalMessages(evidence, snippets, seedSignals),
+      response_format: { type: "json_object" }
+    };
+    if (/^gpt-5/i.test(requestBody.model)) {
+      requestBody.max_completion_tokens = 2200;
+      requestBody.reasoning_effort = "minimal";
+    } else {
+      requestBody.max_tokens = 1100;
+      requestBody.temperature = 0;
+    }
+
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal
+    });
+    const body = await response.text();
+    if (!response.ok) {
+      throw new Error(`OpenAI nano signal extraction failed ${response.status}: ${body.slice(0, 500)}`);
+    }
+    const data = JSON.parse(body);
+    const content = cleanText(data?.choices?.[0]?.message?.content);
+    if (!content) {
+      return [];
+    }
+    const parsed = JSON.parse(content);
+    return dedupeSignals(
+      toArray(parsed.signals)
+        .map((signal) => normalizeNanoSignal(signal, evidence))
+        .filter(Boolean)
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function buildNanoSignalMessages(evidence, snippets, seedSignals = []) {
+  const company = evidence.searchCompany || evidence.manufacturer?.company || "";
+  const aliases = uniqueOrdered([company, ...toArray(evidence.companyHints)]).slice(0, 8);
+  return [
+    {
+      role: "system",
+      content: `You judge recent manufacturing hiring or expansion signals from public search snippets. Return JSON only: {"signals":[{"type":"","title":"","date":"","source_url":"","evidence":"","why_it_matters":""}]}.
+
+Keep only signals tied to the target company and plant/production/maintenance/warehouse/QA/operations hiring, or real expansion/planned expansion/new facility/new production line/capacity/permit/ECA/construction/investment evidence.
+Generic careers pages, Indeed company profiles, LinkedIn company pages, directory profiles, awards, about-page facts, product pages, and old founding/opening history are not final signals.
+If a careers/job-board result names a relevant role like millwright, maintenance, production, packaging, warehouse, QA, sanitation, brewer, roaster, or plant/operations supervisor, keep it.
+Prefer 2024, 2025, or 2026 signals. Reject clearly old-only results before 2024 unless they say planned/current/now hiring.
+Make why_it_matters specific to the evidence.`
+    },
+    {
+      role: "user",
+      content: JSON.stringify({
+        target_company: company,
+        aliases,
+        already_kept_signals: toArray(seedSignals).map((signal) => ({
+          type: cleanText(signal?.type),
+          title: cleanText(signal?.title),
+          source_url: cleanText(signal?.url),
+          evidence: cleanText(signal?.snippet)
+        })),
+        public_search_snippets: snippets
+      }, null, 2)
+    }
+  ];
+}
+
 function normalizeSignalResults(results, evidence) {
   return dedupeSignals(
     results
       .map((result) => normalizeSignalResult(result, evidence))
       .filter(Boolean)
   );
+}
+
+function normalizeNanoSignal(signal, evidence) {
+  const title = cleanText(signal?.title);
+  const snippet = cleanText(signal?.evidence || signal?.snippet);
+  const url = cleanText(signal?.source_url || signal?.url);
+  const text = snippet;
+  if (!title && !snippet) return null;
+  if (!url || isStaleSignalText(text)) return null;
+  if (!matchesSignalCompanyContext({ titleText: "", snippet, evidence }) && !isOfficialCompanyHost(url, evidence.websiteUrl)) {
+    return null;
+  }
+  const typeText = cleanText(signal?.type).toLowerCase();
+  let classification = classifyRecentSignalResult({ title: "", snippet, url });
+  if (!classification) {
+    const hasHiringEvidence = /hiring|job|career|recruit/i.test(typeText) && SIGNAL_HIRING_ACTION_PATTERN.test(text) && SIGNAL_HIRING_ROLE_PATTERN.test(text);
+    const hasExpansionEvidence = /expansion|facility|plant|construction|investment|permit|eca|approval|capacity|line|upgrade|planned/i.test(typeText) && SIGNAL_EXPANSION_EVIDENCE_PATTERN.test(text);
+    if (!hasHiringEvidence && !hasExpansionEvidence) {
+      return null;
+    }
+    classification = {
+      type: /permit|eca|approval/i.test(typeText) ? "Permit"
+        : /capacity|line|upgrade/i.test(typeText) ? "Capacity"
+        : /planned/i.test(typeText) ? "Planned expansion"
+        : /expansion|facility|plant|construction|investment/i.test(typeText) ? "Expansion"
+        : "Hiring"
+    };
+  }
+  if (!classification?.type) return null;
+  if (isInvalidRecentSignal({ title, snippet, url, classification })) return null;
+  return {
+    type: classification.type,
+    title,
+    snippet,
+    url,
+    date: cleanText(signal?.date) || extractDateHint(text),
+    why: cleanText(signal?.why_it_matters) || buildRecentSignalWhy(classification)
+  };
 }
 
 function normalizeSignalResult(result, evidence) {
@@ -769,8 +1134,14 @@ function normalizeSignalResult(result, evidence) {
   if (!url) {
     return null;
   }
+  if (isStaleSignalText(text)) {
+    return null;
+  }
   const classification = classifyRecentSignalResult({ title, snippet, url });
   if (!classification) {
+    return null;
+  }
+  if (isInvalidRecentSignal({ title, snippet, url, classification })) {
     return null;
   }
   if (SIGNAL_NOISE_PATTERN.test(text) && !classification.isHardEvidence && !SIGNAL_NOISE_OVERRIDE_PATTERN.test(text)) {
@@ -791,6 +1162,27 @@ function normalizeSignalResult(result, evidence) {
     date: extractDateHint(text),
     why: buildRecentSignalWhy(classification)
   };
+}
+
+function isInvalidRecentSignal({ title, snippet, url, classification }) {
+  const text = `${cleanText(title)} ${cleanText(snippet)}`;
+  const sourceUrl = cleanText(url);
+  if (/linkedin\.com\/company\//i.test(sourceUrl)) {
+    return true;
+  }
+  if (SIGNAL_NEGATIVE_CHANGE_PATTERN.test(text)) {
+    return true;
+  }
+  if (SIGNAL_NON_OPERATIONAL_ROLE_PATTERN.test(text) && !SIGNAL_HIRING_ROLE_PATTERN.test(text)) {
+    return true;
+  }
+  if (SIGNAL_JOB_BOARD_PATTERN.test(sourceUrl) && SIGNAL_HIRING_ACTION_PATTERN.test(text) && !SIGNAL_HIRING_ROLE_PATTERN.test(text)) {
+    return true;
+  }
+  if (classification?.type === "Hiring" && !SIGNAL_HIRING_ROLE_PATTERN.test(text)) {
+    return true;
+  }
+  return false;
 }
 
 function classifyRecentSignalResult({ title, snippet, url }) {
@@ -896,12 +1288,22 @@ function upsertRecentSignalsSection(notes, sectionBody) {
 }
 
 async function collectPeopleResults({ companyHints = [], city }) {
+  const wideQueries = buildWidePeopleSearchQueries(companyHints);
   const publicSourceQueries = buildPublicSourcePeopleSearchQueries(companyHints);
   const priorityQueries = buildPriorityPeopleSearchQueries(companyHints)
-    .filter((query) => !publicSourceQueries.includes(query));
+    .filter((query) => !publicSourceQueries.includes(query) && !wideQueries.includes(query));
   const queries = buildPeopleSearchQueries(companyHints, city);
 
   const collected = [];
+  for (const batch of chunkArray(wideQueries.slice(0, WIDE_PEOPLE_SEARCH_QUERY_LIMIT), 4)) {
+    const settled = await Promise.allSettled(batch.map((query) => searchPeopleQuery(query)));
+    for (const result of settled) {
+      if (result.status === "fulfilled") {
+        collected.push(...result.value);
+      }
+    }
+  }
+
   for (const query of publicSourceQueries) {
     try {
       collected.push(...await searchPeopleQuery(query));
@@ -932,6 +1334,133 @@ async function collectPeopleResults({ companyHints = [], city }) {
   return dedupeResultsByUrl(collected).slice(0, 100);
 }
 
+function buildWidePeopleSearchQueries(companyHints = []) {
+  const hints = buildCompanySearchAliases(companyHints, 5);
+  const queries = [];
+  for (const hint of hints) {
+    queries.push(`"${hint}" LinkedIn`);
+    queries.push(`"${hint}" employees`);
+    queries.push(`"${hint}" employee directory`);
+    queries.push(`"${hint}" management team`);
+    queries.push(`site:linkedin.com/in "${hint}"`);
+    queries.push(`site:ca.linkedin.com/in "${hint}"`);
+    queries.push(`site:wiza.co "${hint}"`);
+    queries.push(`site:rocketreach.co "${hint}"`);
+    queries.push(`site:zoominfo.com "${hint}"`);
+    queries.push(`site:signalhire.com "${hint}"`);
+    queries.push(`site:apollo.io "${hint}"`);
+    queries.push(`site:theorg.com "${hint}"`);
+  }
+  return uniqueOrdered(queries);
+}
+
+async function collectNarrowPeopleResults(evidence, contacts = []) {
+  const queries = buildNarrowPeopleRetryQueries(evidence, contacts);
+  const collected = [];
+  for (const batch of chunkArray(queries.slice(0, NARROW_PEOPLE_RETRY_QUERY_LIMIT), 5)) {
+    const settled = await Promise.allSettled(batch.map((query) => searchPeopleQuery(query)));
+    for (const result of settled) {
+      if (result.status === "fulfilled") {
+        collected.push(...result.value);
+      }
+    }
+    const filtered = filterPeopleResultsByCompany(collected, evidence.companyHints, { city: evidence.city });
+    const candidateContacts = dedupeContacts([
+      ...extractLinkedInContacts(filtered, evidence.companyHints),
+      ...extractDirectoryContacts(filtered, evidence.companyHints),
+      ...extractOpenWebContacts(filtered, evidence.companyHints)
+    ]).filter(isUsefulContact);
+    if (hasEnoughTargetContacts(dedupeContacts([...contacts, ...candidateContacts]))) {
+      break;
+    }
+  }
+  return filterPeopleResultsByCompany(dedupeResultsByUrl(collected), evidence.companyHints, { city: evidence.city });
+}
+
+function buildNarrowPeopleRetryQueries(evidence, contacts = []) {
+  const aliases = buildCompanySearchAliases([
+    evidence.searchCompany,
+    ...toArray(evidence.companyHints),
+    companyAliasFromWebsite(evidence.websiteUrl)
+  ].filter(Boolean), 6);
+  const foundRoles = new Set(toArray(contacts).map((contact) => normalizeCompanyKey(contact?.title)));
+  const retryTitles = [
+    "maintenance manager",
+    "maintenance supervisor",
+    "maintenance technician",
+    "millwright",
+    "plant manager",
+    "facility manager",
+    "production manager",
+    "production supervisor",
+    "operations manager",
+    "director of operations",
+    "chief operating officer",
+    "quality assurance manager",
+    "quality manager",
+    "technical services manager",
+    "engineering manager",
+    "warehouse manager",
+    "logistics manager",
+    "supply chain manager",
+    "procurement manager",
+    "purchasing manager",
+    "head brewer",
+    "brewing assistant",
+    "brewer",
+    "head roaster",
+    "roaster",
+    "owner",
+    "president"
+  ].filter((title) => !foundRoles.has(normalizeCompanyKey(title)));
+
+  const queries = [];
+  for (const alias of aliases) {
+    for (const title of retryTitles) {
+      queries.push(`"${alias}" "${title}"`);
+      queries.push(`site:linkedin.com/in "${alias}" "${title}"`);
+      queries.push(`site:ca.linkedin.com/in "${alias}" "${title}"`);
+      queries.push(`site:wiza.co "${alias}" "${title}"`);
+      queries.push(`site:rocketreach.co "${alias}" "${title}"`);
+      queries.push(`site:zoominfo.com "${alias}" "${title}"`);
+    }
+  }
+  return uniqueOrdered(queries);
+}
+
+function mergePeopleResultsIntoEvidence(evidence, results) {
+  const mergedResults = dedupeResultsByUrl([
+    ...toArray(evidence.peopleResults),
+    ...toArray(results)
+  ]).slice(0, 140);
+  evidence.peopleResults = mergedResults;
+
+  if (evidence.packet) {
+    evidence.packet.source_urls = uniqueOrdered([
+      ...toArray(evidence.packet.source_urls),
+      ...mergedResults.map((result) => cleanText(result?.url))
+    ].filter(Boolean));
+    evidence.packet.evidence = uniqueOrdered([
+      ...toArray(evidence.packet.evidence),
+      ...toArray(results).slice(0, 60).map((result) => [
+        cleanText(result?.title),
+        cleanText(result?.snippet),
+        cleanText(result?.url)
+      ].filter(Boolean).join(" | "))
+    ].filter(Boolean)).slice(0, 140);
+  }
+}
+
+function companyAliasFromWebsite(websiteUrl) {
+  const hostname = normalizeHostname(websiteUrl);
+  if (!hostname) return "";
+  return hostname
+    .replace(/\.(?:com|ca|net|org|co)$/i, "")
+    .replace(/inc$/i, "")
+    .replace(/[-_]+/g, " ")
+    .trim();
+}
+
 function buildPublicSourcePeopleSearchQueries(companyHints = []) {
   const hints = buildCompanySearchAliases(companyHints, 3);
   const queries = [];
@@ -945,14 +1474,16 @@ function buildPublicSourcePeopleSearchQueries(companyHints = []) {
 function buildPriorityPeopleSearchQueries(companyHints = []) {
   const hints = buildCompanySearchAliases(companyHints, 3);
   const topLinkedInTitles = [
-    "acquired",
-    "owner",
-    "operator",
-    "partner",
-    "board member",
+    "head brewer",
+    "brewing assistant",
+    "brewer",
+    "head roaster",
+    "roaster",
+    "plant manager",
     "operations manager",
     "production manager",
     "maintenance supervisor",
+    "maintenance manager",
     "quality assurance manager",
     "quality assurance specialist",
     "qa manager",
@@ -960,7 +1491,15 @@ function buildPriorityPeopleSearchQueries(companyHints = []) {
     "supervisor",
     "machine operator",
     "sanitation worker",
-    "plant manager"
+    "operator",
+    "owner",
+    "president",
+    "vice president",
+    "vp",
+    "founder",
+    "partner",
+    "board member",
+    "acquired"
   ];
   const queries = [];
   for (const hint of hints) {
@@ -983,6 +1522,7 @@ function buildPriorityPeopleSearchQueries(companyHints = []) {
   }
   for (const title of topLinkedInTitles) {
     for (const hint of hints) {
+      queries.push(`"${hint}" "${title}"`);
       queries.push(`site:linkedin.com/in "${hint}" "${title}"`);
       queries.push(`site:ca.linkedin.com/in "${hint}" "${title}"`);
       queries.push(`site:signalhire.com "${hint}" "${title}"`);
@@ -1075,7 +1615,7 @@ async function searchPeopleQuery(query) {
     allowBlockedDomains: isDirectoryQuery || !isScopedPeopleQuery,
     keepUrlPath: true,
     skipPatterns: ["salary estimate", "resume", "job alert"],
-    timeoutMs: 6000
+    timeoutMs: PEOPLE_SEARCH_TIMEOUT_MS
   });
   return results.map((result) => ({ ...result, query }));
 }
@@ -1095,14 +1635,43 @@ function extractWebsiteContacts(profile, websiteUrl) {
 
 function normalizeExistingCrmContacts(existingContacts) {
   return dedupeContacts(
-    toArray(existingContacts).map((contact) => ({
-      name: cleanText(contact?.name),
-      title: cleanText(contact?.title),
-      linkedin: normalizeLinkedInUrl(contact?.linkedin) || cleanText(contact?.linkedin),
-      source_url: cleanText(contact?.linkedin),
-      notes: "Existing CRM contact"
-    }))
+    toArray(existingContacts).flatMap((contact) => [
+      {
+        name: cleanText(contact?.name),
+        title: cleanText(contact?.title),
+        linkedin: normalizeLinkedInUrl(contact?.linkedin) || cleanText(contact?.linkedin),
+        source_url: cleanText(contact?.linkedin),
+        notes: "Existing CRM contact"
+      },
+      ...parseEmbeddedExistingContacts(contact)
+    ])
   );
+}
+
+function parseEmbeddedExistingContacts(contact) {
+  const raw = String(contact?.name || "");
+  const link = normalizeLinkedInUrl(contact?.linkedin) || cleanText(contact?.linkedin);
+  const chunks = raw
+    .split(/\t+|\s{2,}|\s+\|\s+/)
+    .map((chunk) => cleanText(chunk).replace(/^\d+\s*[-.)]?\s*/, "").trim())
+    .filter(Boolean);
+  const contacts = [];
+
+  for (let index = 0; index < chunks.length; index += 1) {
+    const name = cleanPersonNameVariant(chunks[index]);
+    if (!name || isUsefulContactTitle(chunks[index])) continue;
+    const title = cleanRoleText(chunks[index + 1] || "");
+    if (!title || !isUsefulContactTitle(title)) continue;
+    contacts.push({
+      name,
+      title,
+      linkedin: link,
+      source_url: link,
+      notes: "Repaired from existing CRM pasted contact text"
+    });
+  }
+
+  return contacts;
 }
 
 function extractLinkedInContacts(results, companyHints) {
@@ -1273,6 +1842,14 @@ function parseDirectoryContact(title, snippet) {
     return buildParsedContact(businessProfileMatch[1], businessProfileMatch[2]);
   }
 
+  const titleBeforeAtMatch = snippetText.match(/\b([A-Z][A-Za-z'`.-]+(?:\s+[A-Z][A-Za-z'`.-]+){1,4})\s+(chief operating officer|chief operations officer|coo|director of operations|operations director|production manager|production supervisor|plant manager|maintenance manager|maintenance supervisor|quality assurance manager|supply chain manager|supply chain director)\s+at\s+/i);
+  if (titleBeforeAtMatch) {
+    const nameValue = /\bPeople Like\b/i.test(snippetText)
+      ? lastNameWords(titleBeforeAtMatch[1], 2)
+      : titleBeforeAtMatch[1];
+    return buildParsedContact(nameValue, titleBeforeAtMatch[2]);
+  }
+
   const sentenceRoleMatch = `${titleText}. ${snippetText}`.match(/\b([A-Z][A-Za-z'`.-]+(?:\s+[A-Z][A-Za-z'`.-]+){1,4}),?\s+(?:is|was)?\s*(?:a|an|the)?\s*(.{4,120}?)\s+(?:at|with)\s+/i);
   if (sentenceRoleMatch) {
     return buildParsedContact(sentenceRoleMatch[1], sentenceRoleMatch[2]);
@@ -1310,6 +1887,11 @@ function buildParsedContact(nameValue, titleValue) {
     return { name: "", title: "" };
   }
   return { name, title };
+}
+
+function lastNameWords(value, count = 2) {
+  const words = cleanText(value).split(/\s+/).filter(Boolean);
+  return words.slice(Math.max(0, words.length - count)).join(" ");
 }
 
 function isPeopleDirectoryDomain(domain) {
@@ -1382,12 +1964,16 @@ function hasEnoughTargetContacts(contacts) {
 
 function isStrongProductionContact(contact) {
   const text = `${cleanText(contact?.title)} ${cleanText(contact?.notes)}`;
-  return /\b(?:plant manager|plant supervisor|maintenance manager|maintenance supervisor|production manager|production supervisor|operations manager|operations supervisor|quality assurance manager|qa manager|quality manager|procurement manager|purchasing manager|warehouse manager|logistics manager)\b/i.test(text);
+  return /\b(?:plant manager|plant supervisor|maintenance manager|maintenance supervisor|production manager|production supervisor|operations manager|operations supervisor|quality assurance manager|qa manager|quality manager|procurement manager|purchasing manager|warehouse manager|logistics manager|head brewer|lead brewer|brewery manager|head roaster|owner|founder|president|vice president|vp)\b/i.test(text);
 }
 
 function isUsefulContactTitle(title) {
   const text = cleanText(title);
-  return !!text && text.length <= 140 && !isWeakGenericOpenAiTitle(text) && TARGET_TITLE_PATTERN.test(text);
+  return !!text &&
+    text.length <= 140 &&
+    !isWeakGenericOpenAiTitle(text) &&
+    !(EXCLUDED_CONTACT_TITLE_PATTERN.test(text) && !EXCLUDED_CONTACT_OVERRIDE_PATTERN.test(text)) &&
+    TARGET_TITLE_PATTERN.test(text);
 }
 
 function looksLikePersonName(value) {
@@ -1411,6 +1997,9 @@ function parseLinkedInRole(title, snippet, result = {}, companyHints = []) {
   if (visibleRole && matchesCompanyTitlePart(parts, companyHints)) {
     return visibleRole;
   }
+  if (visibleRole && matchesStrictCompanyContext({ titleText: cleanTitle, snippet, companyHints })) {
+    return visibleRole;
+  }
   if (parts.length > 1) {
     const role = cleanRoleText(parts.slice(1).join(" - "));
     if (isUsefulContactTitle(role)) {
@@ -1432,6 +2021,18 @@ function parseLinkedInRole(title, snippet, result = {}, companyHints = []) {
 function inferRoleFromVisibleText(value) {
   const text = cleanText(value);
   const roleHints = [
+    [/\bchief operating officer\b|\bchief operations officer\b|\bcoo\b/i, "Chief Operating Officer"],
+    [/\bdirector of operations\b|\boperations director\b/i, "Director of Operations"],
+    [/\bproduction and manufacturing leader\b/i, "Production and Manufacturing Leader"],
+    [/\bmanufacturing leader\b/i, "Manufacturing Leader"],
+    [/\bhead brewer\b/i, "Head Brewer"],
+    [/\blead brewer\b/i, "Lead Brewer"],
+    [/\bbrewing assist(?:ant|\.)?\b/i, "Brewing Assistant"],
+    [/\bbrewery manager\b/i, "Brewery Manager"],
+    [/\bbrewer\b/i, "Brewer"],
+    [/\bhead roaster\b/i, "Head Roaster"],
+    [/\broast master\b/i, "Roast Master"],
+    [/\broaster\b/i, "Roaster"],
     [/\bmachine operator\b/i, "Machine Operator"],
     [/\bsanitation worker\b/i, "Sanitation Worker"],
     [/\bquality assurance specialist\b/i, "Quality Assurance Specialist"],
@@ -1441,12 +2042,15 @@ function inferRoleFromVisibleText(value) {
     [/\bmaintenance supervisor\b/i, "Maintenance Supervisor"],
     [/\bproduction manager\b/i, "Production Manager"],
     [/\boperations manager\b/i, "Operations Manager"],
+    [/\bfacilit(?:y|ies) manager\b/i, "Facility Manager"],
     [/\bplant manager\b/i, "Plant Manager"],
     [/\bsupervisor\b/i, "Supervisor"],
     [/\bboard member\b/i, "Board Member"],
     [/\bpartner\b/i, "Partner / operator"],
     [/\bowner\b/i, "Owner / operator"],
-    [/\bacquir(?:ed|er)\b/i, "Acquirer / operator"],
+    [/\bfounder\b/i, "Founder / operator"],
+    [/\bvice president\b|\bvp\b/i, "Vice President"],
+    [/\bpresident\b/i, "President"],
     [/\boperator\b/i, "Operator"]
   ];
   const match = roleHints.find(([pattern]) => pattern.test(text));
@@ -1473,11 +2077,20 @@ function matchesCompanyTitlePart(parts, companyHints = []) {
 }
 
 function cleanRoleText(value) {
+  const rawRoleText = cleanText(value);
+  const profileRoleMatch = rawRoleText.match(/\b(?:about\s+.+?\s+)?(?:is|works as)\s+(?:currently\s+)?(?:a|an|the)?\s*([^.,|]{3,100})(?:$|\s+at\s+)/i);
+  if (/phone number|zoominfo|rocketreach|about\s+/i.test(rawRoleText) && profileRoleMatch) {
+    return cleanText(profileRoleMatch[1]).replace(/^[-,|]+|[-,|]+$/g, "").trim();
+  }
   return cleanText(value)
+    .replace(/\bBrewing\s+Assist\.?\.?/i, "Brewing Assistant")
     .replace(/\s*\|\s*LinkedIn.*$/i, "")
+    .replace(/\s+-\s+(?:Wiza|RocketReach|ZoomInfo).*$/i, "")
     .replace(/\s+[Â·|].*$/, "")
     .replace(/^experience:\s*/i, "")
+    .replace(/\s+\.{3,}.*$/, "")
     .replace(/\s+at\s+.*$/i, "")
+    .replace(/\s+(?:and|&)\s*$/i, "")
     .replace(/^[-,|]+|[-,|]+$/g, "")
     .trim();
 }
@@ -1488,6 +2101,15 @@ function cleanPersonName(value) {
     .replace(/\s+(?:email|e-mail|phone|summary|profile|linkedin)\b.*$/i, "")
     .trim();
   return looksLikePersonName(name) ? name : "";
+}
+
+function cleanPersonNameVariant(value) {
+  const direct = cleanPersonName(value);
+  if (direct) return direct;
+  return cleanText(value)
+    .split(/\s*\/\s*|\s+or\s+/i)
+    .map((part) => cleanPersonName(part))
+    .find(Boolean) || "";
 }
 
 function splitPersonList(value) {
@@ -1526,11 +2148,11 @@ function updateContactTags(existingTags, contacts) {
 }
 
 function findExistingContact(existingRows, nextContact) {
-  const nextName = normalizeCompanyKey(nextContact.name);
+  const nextName = normalizePersonNameKey(nextContact.name);
   const nextTitle = normalizeCompanyKey(nextContact.title);
   const nextLinkedIn = normalizeLinkedInUrl(nextContact.linkedin);
   return toArray(existingRows).find((row) => {
-    const sameName = normalizeCompanyKey(row?.name) === nextName;
+    const sameName = normalizePersonNameKey(row?.name) === nextName;
     const sameTitle = normalizeCompanyKey(row?.title) === nextTitle;
     const sameLinkedIn = normalizeLinkedInUrl(row?.linkedin) === nextLinkedIn;
     return (nextLinkedIn && sameLinkedIn) || (sameName && (sameTitle || isWeakContactTitle(row?.title)));
@@ -1556,12 +2178,12 @@ function dedupeContacts(contacts) {
   const seenLinkedIn = new Set();
   const seenNames = new Set();
   const unique = [];
-  for (const contact of toArray(contacts)) {
+  for (const contact of toArray(contacts).sort((left, right) => contactScore(right) - contactScore(left))) {
     const name = cleanText(contact?.name);
     const title = cleanText(contact?.title);
     const linkedin = normalizeLinkedInUrl(contact?.linkedin);
     const key = `${normalizeCompanyKey(name)}::${normalizeCompanyKey(title)}::${linkedin}`;
-    const nameKey = normalizeCompanyKey(name);
+    const nameKey = normalizePersonNameKey(name);
     if (!name || !title || seen.has(key) || seenNames.has(nameKey) || (linkedin && seenLinkedIn.has(linkedin))) {
       continue;
     }
@@ -1579,6 +2201,34 @@ function dedupeContacts(contacts) {
     });
   }
   return unique;
+}
+
+function normalizePersonNameKey(value) {
+  return cleanText(value)
+    .toLowerCase()
+    .replace(/\bsteve\b/g, "steven")
+    .replace(/\bmike\b/g, "michael")
+    .replace(/\bjoe\b/g, "joseph")
+    .replace(/\bbob\b/g, "robert")
+    .replace(/\brob\b/g, "robert")
+    .replace(/\bliz\b/g, "elizabeth")
+    .replace(/\b[a-z]\.?\b/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function contactScore(contact) {
+  const title = cleanText(contact?.title);
+  const link = normalizeLinkedInUrl(contact?.linkedin) || cleanText(contact?.source_url);
+  let score = 0;
+  if (normalizeLinkedInUrl(contact?.linkedin)) score += 30;
+  if (link) score += 8;
+  if (isStrongProductionContact(contact)) score += 20;
+  if (/\b(?:plant|maintenance|production|operations|quality|qa|head brewer|brewer|roaster|owner|founder|president|vice president|vp|general manager)\b/i.test(title)) score += 8;
+  if (isWeakGenericOpenAiTitle(title)) score -= 30;
+  if (/phone number|zoominfo|rocketreach|about\s+/i.test(title)) score -= 8;
+  return score;
 }
 
 function isPastRoleSnippet(value) {
@@ -1989,6 +2639,36 @@ function normalizeCompanyKey(value) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
+}
+
+function isLooseCompanyMatch(rowCompany, requestedCompany) {
+  const rowKey = normalizeCompanyKey(rowCompany);
+  const requestedKey = normalizeCompanyKey(requestedCompany);
+  if (!rowKey || !requestedKey) return false;
+  if (rowKey === requestedKey) return true;
+  const rowTokens = tokenizeCompanyName(rowCompany).filter((token) => !["com", "ca", "www"].includes(token));
+  const requestedTokens = tokenizeCompanyName(requestedCompany).filter((token) => !["com", "ca", "www"].includes(token));
+  if (rowTokens.length < 2 || requestedTokens.length < 2) return false;
+  const rowInRequested = rowTokens.every((token) => requestedTokens.includes(token));
+  const requestedInRow = requestedTokens.every((token) => rowTokens.includes(token));
+  return rowInRequested || requestedInRow;
+}
+
+function resolveNanoOnlyModel(model, fallback = DEFAULT_CONTACT_EXTRACT_MODEL) {
+  const preferred = String(model || "").trim();
+  if (/nano/i.test(preferred)) {
+    return preferred;
+  }
+  const configured = String(process.env.OPENAI_CONTACT_EXTRACT_MODEL || "").trim();
+  if (/nano/i.test(configured)) {
+    return configured;
+  }
+  return fallback || "gpt-5-nano";
+}
+
+function isStaleSignalText(text) {
+  const value = cleanText(text);
+  return /\b20(?:0\d|1\d|20|21|22|23)\b/.test(value) && !/\b20(?:24|25|26)\b/.test(value) && !/\b(?:current|now hiring|actively hiring|planned|proposed|upcoming)\b/i.test(value);
 }
 
 function escapePostgrestLike(value) {
