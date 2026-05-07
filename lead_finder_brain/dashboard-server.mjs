@@ -313,6 +313,9 @@ async function startSupabaseCommandPoll() {
       if (!job) return;
 
       const { id, command, settings: jobSettings } = job;
+      if (jobSettings?.target === "cloud" || jobSettings?.target === "github-actions") {
+        return;
+      }
       await updateCommandStatus(id, "running");
 
       if (command === "start") {

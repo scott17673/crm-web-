@@ -998,7 +998,9 @@ const ensureOk = result => {
 const trimTrailingSlash = value => String(value || "").trim().replace(/\/+$/,"");
 const isLocalFinderHost = host => /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[?::1\]?)$/i.test(String(host || "").trim());
 const isFinderDashboardPort = () => String(window.location.port || "") === "8780";
+const IS_GITHUB_PAGES_CRM = /(^|\.)github\.io$/i.test(window.location.hostname || "");
 const REMOTE_FINDER_STATE_COMMAND_ID = "00000000-0000-4000-8000-000000000878";
+const REMOTE_FINDER_CLOUD_STATE_COMMAND_ID = "00000000-0000-4000-8000-000000000879";
 const resolveFinderDashboardUrl = () => {
   const pageHost = window.location.hostname || "";
   if((isFinderDashboardPort() || isLocalFinderHost(pageHost)) && /^https?:$/i.test(window.location.protocol)){
@@ -2322,6 +2324,7 @@ function App(){
     let cancelled=false;
     const poll=async()=>{
       try{
+        if(IS_GITHUB_PAGES_CRM) throw new Error("Using GitHub cloud status");
         const r=await fetch(FINDER_URL+"/api/state",{cache:"no-store"});
         if(!r.ok) throw new Error("Dashboard unreachable");
         const data=await readJsonResponse(r);
@@ -2337,10 +2340,13 @@ function App(){
         }
       }catch(e){
         try{
-          const {data,error}=await sb.from("finder_commands").select("settings,created_at").eq("id",REMOTE_FINDER_STATE_COMMAND_ID).limit(1);
+          const {data,error}=await sb.from("finder_commands").select("id,settings,created_at").in("id",[REMOTE_FINDER_CLOUD_STATE_COMMAND_ID,REMOTE_FINDER_STATE_COMMAND_ID]);
           if(error) throw error;
-          const remoteRow=Array.isArray(data)?data[0]:data;
-          const remoteState=remoteRow?.settings;
+          const remoteRows=Array.isArray(data)?data:[data].filter(Boolean);
+          const cloudState=remoteRows.find(row=>row.id===REMOTE_FINDER_CLOUD_STATE_COMMAND_ID)?.settings;
+          const localState=remoteRows.find(row=>row.id===REMOTE_FINDER_STATE_COMMAND_ID)?.settings;
+          const cloudAgeMs=cloudState?.remotePublishedAt ? Date.now()-new Date(cloudState.remotePublishedAt).getTime() : Infinity;
+          const remoteState=(cloudState?.status && (cloudState.status.running || cloudAgeMs<2*60*60*1000)) ? cloudState : (localState?.status ? localState : cloudState);
           if(remoteState?.status){
             mergeFinderLogHistory(remoteState);
             setFinderState(remoteState);
@@ -2416,6 +2422,7 @@ function App(){
   const finderAction=async(endpoint)=>{
     // Try local dashboard first; fall back to Supabase command queue
     try{
+      if(!IS_GITHUB_PAGES_CRM){
       const r=await fetch(FINDER_URL+endpoint,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
       const data=await readJsonResponse(r);
       if(!r.ok) throw new Error(data.error||"Request failed");
@@ -2428,6 +2435,7 @@ function App(){
       setFinderState(data);
       toast2(endpoint.includes("start")?"Run started":endpoint.includes("stop")?"Run stopped":"Results cleared");
       return;
+      }
     }catch(localErr){
       // Local unreachable — try Supabase command queue
     }
@@ -2438,11 +2446,17 @@ function App(){
         command,
         status:"pending",
         settings: command==="start"
-          ? {industries: finderIndustries, citiesText: String(finderCitiesText||"").trim()?finderCitiesText:LEAD_FINDER_CITY_CHIPS.join("\n")}
-          : null
+          ? {target: IS_GITHUB_PAGES_CRM ? "cloud" : "any", industries: finderIndustries, citiesText: String(finderCitiesText||"").trim()?finderCitiesText:LEAD_FINDER_CITY_CHIPS.join("\n")}
+          : {target: IS_GITHUB_PAGES_CRM ? "cloud" : "any"}
       };
       const {error}=await sb.from("finder_commands").insert([payload]);
       if(error) throw error;
+      if(command==="start"){
+        toast2(IS_GITHUB_PAGES_CRM ? "Start command sent - GitHub cloud will pick it up shortly." : "Start command sent - finder worker will pick it up.");
+        return;
+      }
+      toast2(IS_GITHUB_PAGES_CRM ? "Stop command sent - GitHub cloud will stop after it sees the command." : "Stop command sent - finder worker will stop.");
+      return;
       toast2(command==="start"
         ? "Start command sent — finder will begin on your local machine."
         : "Stop command sent — finder will stop on your local machine.");

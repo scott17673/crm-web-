@@ -24,19 +24,15 @@ on:
         required: false
         default: ""
   schedule:
-    # 9 PM to 7 AM Toronto during daylight time, every 30 minutes.
-    - cron: "*/30 1-11 * * *"
+    # Checks CRM Start/Stop commands roughly every 5 minutes.
+    - cron: "*/5 * * * *"
 
 permissions:
   contents: read
 
-concurrency:
-  group: lead-finder-cloud
-  cancel-in-progress: false
-
 jobs:
   run:
-    name: Run lead finder in GitHub cloud
+    name: Listen for CRM cloud commands
     runs-on: ubuntu-latest
     timeout-minutes: 55
 
@@ -49,7 +45,7 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Run cloud lead finder
+      - name: Listen for CRM cloud command
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PLANT_VERIFIER_MODEL: gpt-5-nano
@@ -65,7 +61,7 @@ jobs:
           CLOUD_INDUSTRIES: ${{ github.event.inputs.industries || 'food_beverage|concrete|metal_refineries|recycling|mining_aggregate|asphalt_plants|building_products|others' }}
           CLOUD_CITIES: ${{ github.event.inputs.cities || '' }}
           CLOUD_CRM_CONFIG: crm-config.js
-        run: node lead_finder_brain/cloud-runner.mjs
+        run: node lead_finder_brain/cloud-command-listener.mjs ${{ github.event_name == 'workflow_dispatch' && '--run-now' || '' }}
 
       - name: Upload lead finder CSV artifacts
         if: always()

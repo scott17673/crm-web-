@@ -10,7 +10,7 @@ import { parseCsv } from "./runtime_lib/csv.mjs";
 import { DEFAULT_INDUSTRY_IDS, INDUSTRY_PRESETS } from "./runtime_lib/industries.mjs";
 import { NEARBY_CITIES } from "./runtime_lib/nearby-cities.mjs";
 
-const REMOTE_STATE_COMMAND_ID = "00000000-0000-4000-8000-000000000878";
+const REMOTE_STATE_COMMAND_ID = "00000000-0000-4000-8000-000000000879";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
@@ -41,7 +41,8 @@ const settings = {
   outputName: path.basename(outputPath),
   progressName: path.basename(progressPath),
   verifierModel: getSetting("verifier-model", process.env.PLANT_VERIFIER_MODEL || "gpt-5-nano"),
-  enrichmentModel: getSetting("enrichment-model", process.env.PLANT_ENRICHMENT_MODEL || process.env.PLANT_VERIFIER_MODEL || "gpt-5-nano")
+  enrichmentModel: getSetting("enrichment-model", process.env.PLANT_ENRICHMENT_MODEL || process.env.PLANT_VERIFIER_MODEL || "gpt-5-nano"),
+  cloudAutoRun: process.env.CLOUD_AUTORUN === "true" || process.argv.includes("--cloud-autorun")
 };
 
 const runtime = {
@@ -138,6 +139,9 @@ runtime.pid = child.pid;
 publishTimer = setInterval(() => {
   void publishState().catch((error) => console.error(error instanceof Error ? error.message : String(error)));
 }, 10000);
+const stopPollTimer = setInterval(() => {
+  void pollStopCommands().catch((error) => console.error(error instanceof Error ? error.message : String(error)));
+}, 15000);
 
 hookStream(child.stdout);
 hookStream(child.stderr);
@@ -156,6 +160,7 @@ if (publishTimer) {
   clearInterval(publishTimer);
   publishTimer = null;
 }
+clearInterval(stopPollTimer);
 
 const rows = await readRows();
 const counts = buildStageCounts(rows);
@@ -302,7 +307,8 @@ async function publishState() {
       stageCounts
     },
     remotePublishedAt: new Date().toISOString(),
-    remoteSource: "github-actions"
+    remoteSource: "github-actions",
+    cloudAutoRun: Boolean(settings.cloudAutoRun)
   };
 
   const baseUrl = `${config.supabaseUrl.replace(/\/+$/, "")}/rest/v1`;
@@ -326,6 +332,43 @@ async function publishState() {
     const text = await response.text();
     throw new Error(`Supabase state publish failed ${response.status}: ${text.slice(0, 300)}`);
   }
+}
+
+async function pollStopCommands() {
+  if (stopping) return;
+  const config = await loadCrmConfig();
+  const rows = await supabaseRest(config, "/finder_commands?status=eq.pending&command=eq.stop&order=created_at.asc&limit=20");
+  const stopJob = (Array.isArray(rows) ? rows : []).find((row) => row.settings?.target === "cloud" || row.settings?.target === "github-actions");
+  if (!stopJob) return;
+  await supabaseRest(config, `/finder_commands?id=eq.${stopJob.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "running" })
+  });
+  settings.cloudAutoRun = false;
+  stopChild("remote stop");
+  await supabaseRest(config, `/finder_commands?id=eq.${stopJob.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "done" })
+  });
+}
+
+async function supabaseRest(config, restPath, options = {}) {
+  const response = await fetch(`${config.supabaseUrl.replace(/\/+$/, "")}/rest/v1${restPath}`, {
+    ...options,
+    headers: {
+      apikey: config.apiKey,
+      Authorization: `Bearer ${config.apiKey}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      ...(options.headers || {})
+    }
+  });
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!response.ok) {
+    throw new Error(`Supabase request failed ${response.status}: ${text.slice(0, 300)}`);
+  }
+  return data;
 }
 
 async function readRows() {
