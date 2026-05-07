@@ -94,7 +94,7 @@ const LEAD_FINDER_CONFIG_KEY = "ed_lead_finder_config";
 const LEAD_FINDER_OPENAI_URL = "https://api.openai.com/v1/responses";
 const LEAD_FINDER_STAGE = "Prospect";
 const LEAD_FINDER_DEFAULT_CITIES = ["Brampton","Burlington","Cambridge","Guelph","Hamilton","Kitchener","Markham","Milton","Mississauga","Oakville","Toronto","Vaughan","Waterloo"];
-const LEAD_FINDER_CITY_CHIPS = ["Milton","Mississauga","Brampton","Oakville","Burlington","Hamilton","Ancaster","Toronto","Etobicoke","North York","Scarborough","Vaughan","Woodbridge","Concord","Markham","Richmond Hill","Whitchurch-Stouffville","Georgetown","Halton Hills","Acton","Guelph","Cambridge","Kitchener","Waterloo"];
+const LEAD_FINDER_CITY_CHIPS = ["Milton","Mississauga","Brampton","Oakville","Burlington","Hamilton","Ancaster","Toronto","Etobicoke","North York","Scarborough","Vaughan","Woodbridge","Concord","Markham","Richmond Hill","Whitchurch-Stouffville","Georgetown","Halton Hills","Acton","Guelph","Cambridge","Kitchener","Waterloo","Brantford","Stoney Creek","Grimsby","Dundas","Caledon","Bolton","Paris","Ayr","Flamborough","Ajax","Pickering","Oshawa"];
 const LEAD_FINDER_STATUS_COLORS = {idle:"#64748b",running:"#16a34a",stopped:"#ef4444"};
 const LEAD_FINDER_LEAD_ITEM_SCHEMA = {
   type: "object",
@@ -4510,7 +4510,7 @@ const taskActivityFromTask = task => ({
           const prog=res.progress||{};
           const sc=res.stageCounts||{};
           const presets=fs?.presets||FINDER_DEFAULT_PRESETS;
-          const nearbyCities=fs?.nearbyCities||[];
+          const nearbyCities=(Array.isArray(fs?.nearbyCities)&&fs.nearbyCities.length?fs.nearbyCities:LEAD_FINDER_CITY_CHIPS);
           const activeCities=(finderCitiesText||"").split(/\n/).map(c=>c.trim()).filter(Boolean);
           const filteredLogs=finderLogFilter?logs.filter(l=>l.toLowerCase().includes(finderLogFilter.toLowerCase())):logs;
           const todayLeads=finderTodayLeads||[];
