@@ -38,8 +38,8 @@ export const DEFAULTS = {
   existing: "",
   crmConfigPath: "",
   cities: [],
-  verifierModel: process.env.PLANT_VERIFIER_MODEL || "gpt-5-mini",
-  enrichmentModel: process.env.PLANT_ENRICHMENT_MODEL || process.env.PLANT_VERIFIER_MODEL || "gpt-5-mini",
+  verifierModel: process.env.PLANT_VERIFIER_MODEL || "gpt-5-nano",
+  enrichmentModel: process.env.PLANT_ENRICHMENT_MODEL || process.env.PLANT_VERIFIER_MODEL || "gpt-5-nano",
   heuristicVerifier: false
 };
 

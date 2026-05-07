@@ -22,7 +22,7 @@ async function aiCheckDuplicate(newCompanyName, existingNames) {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
-        model: "gpt-5-mini",
+        model: process.env.CRM_DUPLICATE_MODEL || "gpt-5-nano",
         messages: [
           {
             role: "system",

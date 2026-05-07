@@ -164,6 +164,7 @@ const PEOPLE_SEARCH_TIMEOUT_MS = Number(process.env.PEOPLE_SEARCH_TIMEOUT_MS || 
 const MIN_TARGET_CONTACTS = Number(process.env.CONTACT_SEARCH_MIN_TARGETS || 3);
 const NANO_CONTACT_BATCH_SIZE = Number(process.env.OPENAI_CONTACT_EXTRACT_BATCH_SIZE || 18);
 const NANO_CONTACT_MAX_BATCHES = Number(process.env.OPENAI_CONTACT_EXTRACT_MAX_BATCHES || 4);
+const NANO_CONTACT_TIMEOUT_MS = Number(process.env.OPENAI_CONTACT_EXTRACT_TIMEOUT_MS || 45000);
 const NANO_CONTACT_EXTRACT_ENABLED = process.env.OPENAI_CONTACT_EXTRACT !== "off";
 const NANO_SIGNAL_EXTRACT_ENABLED = process.env.OPENAI_SIGNAL_EXTRACT !== "off";
 const SIGNAL_INCLUDE_PATTERN = /\b(hiring|hire|job opening|job posting|careers?|recruiting|recruitment|seeking|millwright|maintenance mechanic|maintenance technician|production operator|production supervisor|plant manager|operations manager|head brewer|brewer|brewing assistant|roaster|head roaster|expansion|expand|expanding|expanded|new facility|new plant|new site|new production line|production line|capacity|permit|approval|environmental compliance approval|eca|construction|investment|investing|planned expansion)\b/i;
@@ -222,7 +223,9 @@ export async function runCompanyEnrichment({
   repoRoot,
   model = DEFAULT_CONTACT_EXTRACT_MODEL,
   websitePageLimit = 3,
-  dryRun = false
+  dryRun = false,
+  includeSignals = true,
+  allowContactUpdates = true
 } = {}) {
   const root = repoRoot || path.resolve(__dirname, "..", "..");
   await loadLocalEnv({ cwd: root });
@@ -241,7 +244,7 @@ export async function runCompanyEnrichment({
 
   const evidence = await buildCompanyEvidence(manufacturer, { websitePageLimit });
   const contacts = await findOperationsContacts(evidence, { model, existingContacts });
-  const signals = await findHiringExpansionSignals(evidence);
+  const signals = includeSignals ? await findHiringExpansionSignals(evidence) : [];
 
   const contactUpgrades = contacts
     .map((contact) => {
@@ -263,10 +266,9 @@ export async function runCompanyEnrichment({
     }));
 
   const nextTags = updateContactTags(manufacturer.tags, contacts);
-  const nextSignals = upsertRecentSignalsSection(
-    manufacturer.signals,
-    formatRecentSignalsSection(signals)
-  );
+  const nextSignals = includeSignals
+    ? upsertRecentSignalsSection(manufacturer.signals, formatRecentSignalsSection(signals))
+    : manufacturer.signals;
 
   if (!dryRun) {
     if (newContactRows.length) {
@@ -274,16 +276,18 @@ export async function runCompanyEnrichment({
         select: "id,manufacturer_id,name,title,linkedin"
       });
     }
-    for (const upgrade of contactUpgrades) {
-      await client.patch("manufacturer_contacts", { id: `eq.${upgrade.existing.id}` }, {
-        name: upgrade.contact.name,
-        title: upgrade.contact.title,
-        linkedin: upgrade.contact.linkedin || upgrade.contact.source_url || upgrade.existing.linkedin || ""
-      });
+    if (allowContactUpdates) {
+      for (const upgrade of contactUpgrades) {
+        await client.patch("manufacturer_contacts", { id: `eq.${upgrade.existing.id}` }, {
+          name: upgrade.contact.name,
+          title: upgrade.contact.title,
+          linkedin: upgrade.contact.linkedin || upgrade.contact.source_url || upgrade.existing.linkedin || ""
+        });
+      }
     }
     await client.patch("manufacturers", { id: `eq.${manufacturer.id}` }, {
       tags: nextTags,
-      signals: nextSignals,
+      ...(includeSignals ? { signals: nextSignals } : {}),
       last_enriched: new Date().toISOString()
     });
   }
@@ -294,9 +298,10 @@ export async function runCompanyEnrichment({
     website: evidence.websiteUrl,
     contactsFound: contacts.length,
     contactsInserted: dryRun ? 0 : newContactRows.length,
-    contactsUpdated: dryRun ? 0 : contactUpgrades.length,
+    contactsUpdated: dryRun || !allowContactUpdates ? 0 : contactUpgrades.length,
     contactsToInsert: newContactRows.length,
-    contactsToUpdate: contactUpgrades.length,
+    contactsToUpdate: allowContactUpdates ? contactUpgrades.length : 0,
+    contactUpdatesSkipped: allowContactUpdates ? 0 : contactUpgrades.length,
     contacts,
     recentSignalsFound: signals.length,
     recentSignals: signals,
@@ -495,7 +500,8 @@ async function findOperationsContacts(evidence, { model = DEFAULT_CONTACT_EXTRAC
       nanoContacts = await extractContactsWithNanoBatches(evidence, {
         existingContacts,
         seedContacts,
-        model: nanoModel
+        model: nanoModel,
+        timeoutMs: NANO_CONTACT_TIMEOUT_MS
       });
       contacts = dedupeContacts([...contacts, ...nanoContacts].filter(isUsefulContact));
     } catch {
@@ -508,7 +514,8 @@ async function findOperationsContacts(evidence, { model = DEFAULT_CONTACT_EXTRAC
       const reviewedContacts = await reviewContactsWithNano(evidence, {
         candidateContacts: dedupeContacts([...seedContacts, ...nanoContacts]),
         existingContacts,
-        model: nanoModel
+        model: nanoModel,
+        timeoutMs: NANO_CONTACT_TIMEOUT_MS
       });
       contacts = dedupeContacts([...contacts, ...reviewedContacts].filter(isUsefulContact));
     } catch {

@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { normalizeEnrichmentResult } from "./plant-enrichment.mjs";
 
-const DEFAULT_MODEL = process.env.PLANT_VERIFIER_MODEL || "gpt-5-mini";
+const DEFAULT_MODEL = process.env.PLANT_VERIFIER_MODEL || "gpt-5-nano";
 const OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
 
 export async function loadLocalEnv({

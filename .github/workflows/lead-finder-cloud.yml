@@ -1,0 +1,78 @@
+name: Lead Finder Cloud Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      city_limit:
+        description: "How many nearby cities to search"
+        required: false
+        default: "6"
+      results_per_query:
+        description: "Search results per query"
+        required: false
+        default: "3"
+      website_page_limit:
+        description: "Website pages to inspect per company"
+        required: false
+        default: "2"
+      industries:
+        description: "Industry ids separated by |"
+        required: false
+        default: "food_beverage|concrete|metal_refineries|recycling|mining_aggregate|asphalt_plants|building_products|others"
+      cities:
+        description: "City names separated by |; blank uses city_limit nearby cities"
+        required: false
+        default: ""
+  schedule:
+    # 9 PM to 7 AM Toronto during daylight time, every 30 minutes.
+    - cron: "*/30 1-11 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lead-finder-cloud
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: Run lead finder in GitHub cloud
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run cloud lead finder
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PLANT_VERIFIER_MODEL: gpt-5-nano
+          PLANT_ENRICHMENT_MODEL: gpt-5-nano
+          OPENAI_CONTACT_EXTRACT_MODEL: gpt-5-nano
+          OPENAI_SIGNAL_EXTRACT_MODEL: gpt-5-nano
+          CRM_DUPLICATE_MODEL: gpt-5-nano
+          CLOUD_CITY_LIMIT: ${{ github.event.inputs.city_limit || '6' }}
+          CLOUD_RESULTS_PER_QUERY: ${{ github.event.inputs.results_per_query || '3' }}
+          CLOUD_WEBSITE_PAGE_LIMIT: ${{ github.event.inputs.website_page_limit || '2' }}
+          CLOUD_SEARCH_DELAY_MS: "250"
+          CLOUD_MIN_EMPLOYEES: "10"
+          CLOUD_INDUSTRIES: ${{ github.event.inputs.industries || 'food_beverage|concrete|metal_refineries|recycling|mining_aggregate|asphalt_plants|building_products|others' }}
+          CLOUD_CITIES: ${{ github.event.inputs.cities || '' }}
+          CLOUD_CRM_CONFIG: crm-config.js
+        run: node lead_finder_brain/cloud-runner.mjs
+
+      - name: Upload lead finder CSV artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lead-finder-cloud-output
+          path: |
+            lead_finder_brain/output/github-cloud-manufacturers.csv
+            lead_finder_brain/output/github-cloud-live.csv
+          if-no-files-found: ignore
