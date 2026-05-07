@@ -4526,10 +4526,10 @@ const taskActivityFromTask = task => ({
           return (
           <div className="fade" style={{display:"grid",gap:14}}>
             {finderError && <div style={{padding:"12px 18px",background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:6,display:"flex",alignItems:"center",gap:12}}>
-              <span style={{fontSize:18}}>☁️</span>
+              <span style={{fontSize:12,fontWeight:700,color:"#166534"}}>REMOTE</span>
               <div>
                 <div style={{fontSize:13,fontWeight:600,color:"#166534"}}>Remote mode — commands sent via Supabase</div>
-                <div style={{fontSize:12,color:"#4ade80",marginTop:2}}>Start/Stop will queue a command that your local machine picks up automatically. Live logs and rows only show when the local server is running.</div>
+                <div style={{fontSize:12,color:"#4ade80",marginTop:2}}>Start/Stop queues a command that your local machine picks up automatically. Live logs/status only show at {FINDER_URL}. New CRM rows still appear in the Today's Leads table after they sync.</div>
               </div>
             </div>}
 
