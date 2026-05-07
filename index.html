@@ -16,19 +16,6 @@ window.CRM_CONFIG = {
   "finderDashboardUrl": "http://10.0.0.114:8780"
 };
 </script>
-<script>
-(function redirectGitHubPagesToFinderDashboard(){
-  var cfg = window.CRM_CONFIG || {};
-  var dashboardUrl = String(cfg.finderDashboardUrl || "").trim().replace(/\/+$/,"");
-  var host = String(window.location.hostname || "").toLowerCase();
-  var isGitHubPages = host === "scott17673.github.io";
-  var isFinderDashboard = String(window.location.port || "") === "8780";
-  var isLocalOnlyUrl = /^https?:\/\/(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0)(?::|\/|$)/i.test(dashboardUrl);
-  if(isGitHubPages && !isFinderDashboard && dashboardUrl && !isLocalOnlyUrl){
-    window.location.replace(dashboardUrl + "/");
-  }
-})();
-</script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Barlow+Condensed:wght@400;500;600;700;800&family=Barlow:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
