@@ -1931,6 +1931,19 @@ const fetchManufacturerContactsByIds = async manufacturerIds => {
   }
   return contacts;
 };
+const fetchAllSupabaseRows = async buildQuery => {
+  const rows = [];
+  let from = 0;
+  while(true){
+    const result = await buildQuery().range(from, from + SUPABASE_PAGE_SIZE - 1);
+    ensureOk(result);
+    const batch = result.data || [];
+    rows.push(...batch);
+    if(batch.length < SUPABASE_PAGE_SIZE) break;
+    from += SUPABASE_PAGE_SIZE;
+  }
+  return rows;
+};
 const dedupeTaskRows = rows => {
   const seen = new Set();
   return (rows || []).filter(row => {
@@ -2365,7 +2378,7 @@ function App(){
     const pollLeads=async()=>{
       try{
         const range=finderDateRangeUtc(finderLeadDate);
-        const {data}=await sb.from("manufacturers").select("id,company,stage,industry,end_product,signals,last_contact,created_at,tags").gte("created_at",range.from).lt("created_at",range.to).order("created_at",{ascending:false});
+        const data=await fetchAllSupabaseRows(()=>sb.from("manufacturers").select("id,company,stage,industry,end_product,signals,last_contact,created_at,tags").gte("created_at",range.from).lt("created_at",range.to).order("created_at",{ascending:false}));
         if(!cancelled && data) setFinderTodayLeads(data.filter(row=>isFinderCreatedLead(row)&&passesLeadFinderPlantVerifierGuard(row)));
       }catch{}
     };
@@ -2373,7 +2386,7 @@ function App(){
       try{
         const since=new Date();
         since.setDate(since.getDate()-120);
-        const {data}=await sb.from("manufacturers").select("id,company,stage,industry,end_product,signals,created_at,tags").gte("created_at",since.toISOString()).order("created_at",{ascending:false});
+        const data=await fetchAllSupabaseRows(()=>sb.from("manufacturers").select("id,company,stage,industry,end_product,signals,created_at,tags").gte("created_at",since.toISOString()).order("created_at",{ascending:false}));
         if(cancelled || !data) return;
         const counts=data
           .filter(row=>isFinderCreatedLead(row)&&passesLeadFinderPlantVerifierGuard(row))
@@ -2646,14 +2659,12 @@ const taskActivityFromTask = task => ({
   const hydrate = useCallback(async (withSpinner=false)=>{
     if(withSpinner) setLoading(true);
     try{
-      const [mr,vr,lr,ar] = await Promise.all([
-        sb.from("manufacturers").select("*").order("created_at",{ascending:false}),
-        sb.from("vendors").select("*").order("created_at",{ascending:false}),
-        sb.from("lost_contacts").select("*").order("created_at",{ascending:false}),
-        sb.from("activities").select("*").order("date",{ascending:false}),
+      const [manufacturerRows,vendorRows,lostRows,activityRowsRaw] = await Promise.all([
+        fetchAllSupabaseRows(()=>sb.from("manufacturers").select("*").order("created_at",{ascending:false})),
+        fetchAllSupabaseRows(()=>sb.from("vendors").select("*").order("created_at",{ascending:false})),
+        fetchAllSupabaseRows(()=>sb.from("lost_contacts").select("*").order("created_at",{ascending:false})),
+        fetchAllSupabaseRows(()=>sb.from("activities").select("*").order("date",{ascending:false})),
       ]);
-      [mr,vr,lr,ar].forEach(ensureOk);
-      const manufacturerRows = mr.data || [];
       const contacts = await fetchManufacturerContactsByIds(manufacturerRows.map(row => row.id));
       const contactsByManufacturer = contacts.reduce((map, contact) => {
         const key = String(contact.manufacturer_id);
@@ -2662,10 +2673,10 @@ const taskActivityFromTask = task => ({
         return map;
       }, new Map());
       const m = manufacturerRows.map(row => ({...row,type:"manufacturer",tags:row.tags||[],lastContact:row.last_contact,industry:row.industry||"",notes:row.signals||"",contacts:contactsByManufacturer.get(String(row.id)) || []}));
-      const v = (vr.data||[]).map(row => ({...row,type:"vendor",tags:row.tags||[],lastContact:row.last_contact}));
-      const l = (lr.data||[]).map(row => ({...row,type:"lost",tags:row.tags||[],lastContact:row.last_contact,lostReason:row.lost_reason,value:row.deal_value}));
+      const v = (vendorRows||[]).map(row => ({...row,type:"vendor",tags:row.tags||[],lastContact:row.last_contact}));
+      const l = (lostRows||[]).map(row => ({...row,type:"lost",tags:row.tags||[],lastContact:row.last_contact,lostReason:row.lost_reason,value:row.deal_value}));
       const allRecords = [...m, ...v, ...l];
-      let activityRows = ar.data || [];
+      let activityRows = activityRowsRaw || [];
       const legacyAskFeedback = safeJson(localStorage.getItem(ASK_FEEDBACK_KEY), []);
       if(Array.isArray(legacyAskFeedback) && legacyAskFeedback.length){
         try{
