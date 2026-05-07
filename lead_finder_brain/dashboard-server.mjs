@@ -25,6 +25,7 @@ const port = Number(process.env.PORT || 8780);
 const cycleDelayMs = Number(process.env.CYCLE_DELAY_MS || 1000 * 60 * 5);
 const watchdogMs = Number(process.env.FINDER_WATCHDOG_MS || 1000 * 60 * 10);
 const keepAwakeEnabled = process.env.FINDER_KEEP_AWAKE !== "off";
+const REMOTE_STATE_COMMAND_ID = "00000000-0000-4000-8000-000000000878";
 const CSV_COLUMNS = [
   "company",
   "stage",
@@ -277,6 +278,30 @@ async function startSupabaseCommandPoll() {
     });
   };
 
+  const publishState = async () => {
+    const state = await buildState();
+    await supabaseFetch(`/finder_commands?on_conflict=id`, {
+      method: "POST",
+      headers: {
+        Prefer: "resolution=merge-duplicates,return=minimal"
+      },
+      body: JSON.stringify([{
+        id: REMOTE_STATE_COMMAND_ID,
+        command: "state",
+        status: "live",
+        settings: {
+          ...state,
+          remotePublishedAt: new Date().toISOString(),
+          logs: state.logs.slice(-300),
+          results: {
+            ...state.results,
+            rows: state.results.rows.slice(0, 250)
+          }
+        }
+      }])
+    });
+  };
+
   pushLog("Supabase command polling active.");
 
   const poll = async () => {
@@ -294,7 +319,7 @@ async function startSupabaseCommandPoll() {
         if (jobSettings?.industries) {
           settings = normalizeSettings({ ...settings, industries: jobSettings.industries });
         }
-        if (jobSettings?.citiesText !== undefined) {
+        if (jobSettings && Object.prototype.hasOwnProperty.call(jobSettings, "citiesText") && jobSettings.citiesText !== null) {
           settings = normalizeSettings({ ...settings, citiesText: jobSettings.citiesText });
         }
         await saveSettings(settings);
@@ -317,7 +342,15 @@ async function startSupabaseCommandPoll() {
   };
 
   setInterval(poll, 30_000);
+  setInterval(() => {
+    publishState().catch(() => {
+      // Network or RLS blip; next heartbeat will try again.
+    });
+  }, 5_000);
   poll();
+  publishState().catch(() => {
+    // Optional remote status mirror.
+  });
 }
 
 async function loadSettings() {
