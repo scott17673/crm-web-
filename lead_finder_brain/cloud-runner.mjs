@@ -11,6 +11,7 @@ import { DEFAULT_INDUSTRY_IDS, INDUSTRY_PRESETS } from "./runtime_lib/industries
 import { NEARBY_CITIES } from "./runtime_lib/nearby-cities.mjs";
 
 const REMOTE_STATE_COMMAND_ID = "00000000-0000-4000-8000-000000000879";
+const CLOUD_PENDING_STATUS = "cloud_pending";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
@@ -337,7 +338,7 @@ async function publishState() {
 async function pollStopCommands() {
   if (stopping) return;
   const config = await loadCrmConfig();
-  const rows = await supabaseRest(config, "/finder_commands?status=eq.pending&command=eq.stop&order=created_at.asc&limit=20");
+  const rows = await supabaseRest(config, `/finder_commands?status=eq.${CLOUD_PENDING_STATUS}&command=eq.stop&order=created_at.asc&limit=20`);
   const stopJob = (Array.isArray(rows) ? rows : []).find((row) => row.settings?.target === "cloud" || row.settings?.target === "github-actions");
   if (!stopJob) return;
   await supabaseRest(config, `/finder_commands?id=eq.${stopJob.id}`, {

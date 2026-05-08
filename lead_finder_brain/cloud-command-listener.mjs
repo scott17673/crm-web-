@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { loadLocalEnv } from "./plant-verifier.mjs";
 
 const CLOUD_STATE_ID = "00000000-0000-4000-8000-000000000879";
+const CLOUD_PENDING_STATUS = "cloud_pending";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
@@ -83,7 +84,7 @@ async function runCloudFinder({ industries, citiesText, autoRun }) {
 }
 
 async function fetchPendingCommands() {
-  const rows = await supabaseRequest("/finder_commands?status=eq.pending&order=created_at.asc&limit=20");
+  const rows = await supabaseRequest(`/finder_commands?status=eq.${CLOUD_PENDING_STATUS}&order=created_at.asc&limit=20`);
   return Array.isArray(rows) ? rows : [];
 }
 

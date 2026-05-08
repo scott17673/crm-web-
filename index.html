@@ -2455,12 +2455,13 @@ function App(){
     if(endpoint.includes("clear")) { toast2("Clear only works when the local dashboard is running."); return; }
     try{
       const command=endpoint.includes("stop")?"stop":"start";
+      const isCloudCommand=IS_GITHUB_PAGES_CRM;
       const payload={
         command,
-        status:"pending",
+        status:isCloudCommand ? "cloud_pending" : "pending",
         settings: command==="start"
-          ? {target: IS_GITHUB_PAGES_CRM ? "cloud" : "any", industries: finderIndustries, citiesText: String(finderCitiesText||"").trim()?finderCitiesText:LEAD_FINDER_CITY_CHIPS.join("\n")}
-          : {target: IS_GITHUB_PAGES_CRM ? "cloud" : "any"}
+          ? {target: isCloudCommand ? "cloud" : "any", industries: finderIndustries, citiesText: String(finderCitiesText||"").trim()?finderCitiesText:LEAD_FINDER_CITY_CHIPS.join("\n")}
+          : {target: isCloudCommand ? "cloud" : "any"}
       };
       const {error}=await sb.from("finder_commands").insert([payload]);
       if(error) throw error;

@@ -307,15 +307,12 @@ async function startSupabaseCommandPoll() {
   const poll = async () => {
     try {
       const rows = await supabaseFetch(
-        `/finder_commands?status=eq.pending&order=created_at.asc&limit=1`
+        `/finder_commands?status=eq.pending&order=created_at.asc&limit=20`
       );
-      const job = Array.isArray(rows) ? rows[0] : null;
+      const job = (Array.isArray(rows) ? rows : []).find((row) => !isCloudTarget(row.settings));
       if (!job) return;
 
       const { id, command, settings: jobSettings } = job;
-      if (jobSettings?.target === "cloud" || jobSettings?.target === "github-actions") {
-        return;
-      }
       await updateCommandStatus(id, "running");
 
       if (command === "start") {
@@ -354,6 +351,10 @@ async function startSupabaseCommandPoll() {
   publishState().catch(() => {
     // Optional remote status mirror.
   });
+}
+
+function isCloudTarget(commandSettings) {
+  return commandSettings?.target === "cloud" || commandSettings?.target === "github-actions";
 }
 
 async function loadSettings() {
