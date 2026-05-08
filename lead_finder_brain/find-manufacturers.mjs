@@ -554,14 +554,10 @@ function buildLeadIntelligence({ verifierResult, enrichmentResult, hit, city, qu
   const facilities = enrichmentResult.facilities.length
     ? enrichmentResult.facilities
     : fallbackEnrichment(verifierResult, { company: companyName }).facilities;
-  const contacts = cleanArray(enrichmentResult.contacts).map((contact) => ({
-    name: cleanText(contact?.name),
-    title: cleanText(contact?.title),
-    linkedin: cleanText(contact?.linkedin_url),
-    source_url: cleanText(contact?.source_url),
-    confidence: cleanText(contact?.confidence),
-    notes: cleanText(contact?.notes)
-  })).filter((contact) => contact.name && contact.title);
+  // Contacts from the verifier/enrichment GPT pass were too noisy. The lead
+  // finder now only accepts contacts from the dedicated contact finder that
+  // runs immediately before CRM insert.
+  const contacts = [];
   const endProducts = uniqueOrdered([
     ...cleanArray(enrichmentResult.end_products).map((entry) => cleanText(entry)),
     ...cleanArray(verifierResult.end_products).map((entry) => cleanText(entry))
@@ -604,7 +600,7 @@ function buildLeadIntelligence({ verifierResult, enrichmentResult, hit, city, qu
     maintenanceContacts: contacts,
     recentSignals,
     proof,
-    contact_search_status: cleanText(enrichmentResult.contact_search_status),
+    contact_search_status: "not_searched",
     leadStage: stage,
     tags: buildLeadTags({
       contacts,

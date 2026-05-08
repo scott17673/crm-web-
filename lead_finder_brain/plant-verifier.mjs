@@ -172,18 +172,13 @@ When qualified is true, enrich the CRM row with:
 - confirmed facilities/site addresses
 - end products or product categories
 - likely plant equipment/process clues
-- production, maintenance, operations, quality, general management, purchasing, supply chain, warehouse/logistics, owner/operator, or plant-adjacent contacts
-- full personal LinkedIn profile URLs when the evidence provides them
 - recent hiring, expansion, planned expansion, new facility, new production line, capacity, permit, ECA, construction, or operational-growth signals
 - cited proof
 
 Contact rules:
-- Do not invent names, titles, emails, phone numbers, or LinkedIn links.
-- Include a LinkedIn URL only when evidence gives a full /in/ profile URL.
-- Never use company LinkedIn pages as a person's linkedin_url.
-- Do not output job titles, departments, or job postings as contact names.
+- Do not search for or output contacts in this verifier step.
+- Always leave contacts empty here. The dedicated contact finder runs after qualification.
 - Missing contacts must not reject the lead.
-- Similar-name companies are not enough. Contacts must tie to the exact verified company identity, location, website, or facility.
 
 Recent signal rules:
 - Only include hiring or expansion-type signals.
