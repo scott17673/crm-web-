@@ -156,7 +156,7 @@ Return only valid JSON. Do not use markdown.
 You must do this in order:
 1. First decide whether the company qualifies as a real in-range industrial plant lead.
 2. If qualified is false, stop there: return the reject fields and leave all enrichment arrays empty.
-3. Only if qualified is true, fill the non-contact lead enrichment fields from the same evidence packet.
+3. Only if qualified is true, fill the plant/product proof fields from the same evidence packet.
 
 QUALIFY ONLY IF ALL ARE PROVEN FROM THE EVIDENCE PACKET:
 1. The result is an actual company, not a page title, article, directory, recipe, search result category, association, or generic phrase.
@@ -172,19 +172,17 @@ When qualified is true, enrich the CRM row with:
 - confirmed facilities/site addresses
 - end products or product categories
 - likely plant equipment/process clues
-- recent hiring, expansion, planned expansion, new facility, new production line, capacity, permit, ECA, construction, or operational-growth signals
 - cited proof
 
 Contact rules:
 - Do not search for or output contacts in this verifier step.
 - Always leave contacts empty here. The dedicated contact finder runs after qualification.
 - Missing contacts must not reject the lead.
+- Do not search for or output recent hiring/expansion signals in this verifier step.
+- Always leave recent_signals empty here. The dedicated contact/signal finder runs after qualification and duplicate checks.
 
 Recent signal rules:
-- Only include hiring or expansion-type signals.
-- Ignore awards, charity, generic marketing, ordinary about-page facts, addresses, product lists, and unrelated expansion news.
-- Generic careers pages, Indeed company profiles, LinkedIn company pages, and job-board location pages are breadcrumbs, not final signals. Only include them if the evidence names a specific plant/production/maintenance/warehouse/QA role or gives actual expansion/capacity/permit/construction/investment detail.
-- Make why_it_matters specific to the evidence. If no specific role or expansion detail is found, leave recent_signals empty.
+- Leave recent_signals as an empty array. Signals are handled after dedupe, right before CRM insert.
 
 Return this exact JSON shape:
 {

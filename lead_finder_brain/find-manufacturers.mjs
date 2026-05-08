@@ -3,7 +3,6 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { enrichPlantLead } from "./plant-enrichment.mjs";
 import { loadLocalEnv, verifyAndEnrichPlantLead, verifyPlantCandidateHeuristic } from "./plant-verifier.mjs";
 import { checkQualifiedLeadCrmDuplicate, createCrmSync, syncQualifiedLeadToCrm } from "./runtime_lib/crm-sync.mjs";
 import { parseCsv, stringifyCsv } from "./runtime_lib/csv.mjs";
@@ -74,7 +73,6 @@ const STRICT_PHONE_PATTERN = /(?:\+?1[-.\s]*)?(?:\(?\d{3}\)?[-.\s]*)\d{3}[-.\s]*
 const STRICT_PLANT_LANGUAGE_PATTERN = /\b(manufactur|processing|production|plant|facility|brewery|roastery|asphalt plant|ready[- ]mix|precast|quarry|recycling facility|molding|extrusion|fabricat|machin|packag)\b/i;
 const EVIDENCE_KEYWORD_PATTERN = /\b(address|location|facility|plant|manufactur|processing|production|products?|capabilities|asphalt|aggregate|quarry|precast|concrete|brewery|roastery|coffee|bakery|meat|poultry|recycling|molding|extrusion|fabrication|composite|steel|plastic|packaging)\b/i;
 const RECENT_SIGNAL_INCLUDE_PATTERN = /\b(hiring|hire|job opening|job posting|careers?|recruiting|recruitment|seeking|millwright|maintenance mechanic|maintenance technician|production operator|production supervisor|plant manager|operations manager|expansion|expand|expanding|expanded|planned expansion|new facility|new plant|new site|new production line|production line|capacity|permit|approval|environmental compliance approval|eca|construction|investment|investing)\b/i;
-const RECENT_SIGNAL_STRONG_PATTERN = /\b(hiring|job opening|job posting|careers?|recruiting|millwright|maintenance|production|plant|operations|expansion|expanded|expanding|new facility|new plant|new site|new production line|capacity|permit|approval|eca|construction|investment|planned expansion)\b/i;
 const RECENT_SIGNAL_NOISE_PATTERN = /\b(address|phone|official site|about|located|product list|products?|capabilities|independent craft|proudly located|built in|refurbished|facility address|contact page|store hours|taproom|tour|brewery tours?)\b/i;
 const RECENT_SIGNAL_NOISE_OVERRIDE_PATTERN = /\b(hiring|hire|job opening|job posting|careers?|recruiting|expansion|expanded|expanding|planned expansion|new facility|new plant|new site|new production line|capacity|permit|approval|eca|construction|investment)\b/i;
 const RECENT_SIGNAL_HIRING_ACTION_PATTERN = /\b(hiring|hire|job opening|job posting|job ad|jobs?|careers?|employment|recruiting|recruitment|seeking|apply|now hiring)\b/i;
@@ -82,20 +80,6 @@ const RECENT_SIGNAL_HIRING_ROLE_PATTERN = /\b(millwright|maintenance mechanic|ma
 const RECENT_SIGNAL_EXPANSION_EVIDENCE_PATTERN = /\b(expansion|expand|expanding|expanded|planned expansion|new facility|new plant|new site|new location|opening|opened|relocat(?:e|ing|ed)|larger facility|production line|capacity|capacity increase|permit|approval|environmental compliance approval|eca|construction|building permit|investment|investing|invested|capital project|equipment upgrade|plant upgrade)\b/i;
 const RECENT_SIGNAL_GENERIC_BREADCRUMB_PATTERN = /\b(careers and employment|careers in|career opportunities|company profile|company overview|employee reviews?|salaries|interview questions|overview, news|similar companies)\b/i;
 const RECENT_SIGNAL_JOB_BOARD_PATTERN = /(?:indeed|glassdoor|workopolis|jobbank|monster|ziprecruiter|simplyhired|eluta)\./i;
-const CONTACT_TITLE_QUERIES = [
-  "plant manager",
-  "maintenance manager",
-  "maintenance supervisor",
-  "millwright",
-  "maintenance mechanic",
-  "production manager",
-  "production supervisor",
-  "operations manager",
-  "general manager",
-  "purchaser",
-  "engineering manager",
-  "quality manager"
-];
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -351,14 +335,7 @@ async function processHit({ hit, city, query, options, log }) {
   }
 
   if (!enrichmentResult) {
-    try {
-      enrichmentResult = options.heuristicVerifier
-        ? await enrichPlantLead(evidencePacket, { model: options.enrichmentModel })
-        : fallbackEnrichment(verifierResult, evidencePacket);
-    } catch (error) {
-      log(`  Enrichment fallback: ${companyName} | ${error instanceof Error ? error.message : String(error)}`);
-      enrichmentResult = fallbackEnrichment(verifierResult, evidencePacket);
-    }
+    enrichmentResult = fallbackEnrichment(verifierResult, evidencePacket);
   }
 
   const intelligence = buildLeadIntelligence({
@@ -409,25 +386,6 @@ async function buildVerifierEnrichmentPacket({ hit, city, query, websiteUrl, pro
   for (const result of companyQueries) {
     if (result.url) source_urls.add(result.url);
     evidence.push(buildSearchEvidenceLine(result));
-  }
-
-  const peopleQueries = await collectPeopleSearchEvidence({
-    company,
-    city
-  });
-  for (const result of peopleQueries) {
-    if (result.url) source_urls.add(result.url);
-    evidence.push(`People contact candidate | ${buildSearchEvidenceLine(result)}`);
-  }
-
-  const recentSignalQueries = await collectRecentSignalEvidence({
-    company,
-    city,
-    websiteUrl
-  });
-  for (const result of recentSignalQueries) {
-    if (result.url) source_urls.add(result.url);
-    evidence.push(`Recent hiring/expansion signal candidate | ${buildSearchEvidenceLine(result)}`);
   }
 
   return {
@@ -484,31 +442,6 @@ async function buildEnrichmentEvidencePacket({ verifierResult, hit, city, query,
     evidence.push(buildSearchEvidenceLine(result));
   }
 
-  const peopleQueries = await collectPeopleSearchEvidence({
-    company,
-    city
-  });
-
-  for (const result of peopleQueries) {
-    if (result.url) {
-      source_urls.add(result.url);
-    }
-    evidence.push(buildSearchEvidenceLine(result));
-  }
-
-  const recentSignalQueries = await collectRecentSignalEvidence({
-    company,
-    city,
-    websiteUrl
-  });
-
-  for (const result of recentSignalQueries) {
-    if (result.url) {
-      source_urls.add(result.url);
-    }
-    evidence.push(`Recent hiring/expansion signal candidate | ${buildSearchEvidenceLine(result)}`);
-  }
-
   return {
     company,
     source_urls: Array.from(source_urls),
@@ -545,7 +478,7 @@ function fallbackEnrichment(verifierResult, evidencePacket) {
       source_url: cleanText(entry?.source_url),
       evidence: cleanText(entry?.evidence)
     })).filter((entry) => entry.claim || entry.evidence || entry.source_url),
-    contact_search_status: "no_target_contacts_found"
+    contact_search_status: "not_searched"
   };
 }
 
@@ -868,97 +801,6 @@ async function collectCompanySearchEvidence({ company, city, query, websiteUrl }
   return dedupeByUrl(collected).slice(0, 12);
 }
 
-async function collectPeopleSearchEvidence({ company, city }) {
-  const searches = CONTACT_TITLE_QUERIES.map((title) => `site:linkedin.com/in "${company}" "${title}" "${city}"`);
-  const collected = [];
-
-  for (const searchQuery of searches.slice(0, 8)) {
-    try {
-      const results = await searchWeb(searchQuery, {
-        limit: 2,
-        allowedDomains: ["linkedin.com"],
-        keepUrlPath: true,
-        skipPatterns: ["jobs", "/company/", "job opening"]
-      });
-      collected.push(...results);
-    } catch {
-      continue;
-    }
-  }
-
-  return dedupeByUrl(collected).slice(0, 16);
-}
-
-async function collectRecentSignalEvidence({ company, city, websiteUrl }) {
-  const hostname = normalizeHostname(websiteUrl);
-  const searches = uniqueOrdered([
-    `"${company}" hiring maintenance "${city || "Ontario"}"`,
-    `"${company}" hiring production "${city || "Ontario"}"`,
-    `"${company}" hiring operations "${city || "Ontario"}"`,
-    `"${company}" millwright "${city || "Ontario"}"`,
-    `"${company}" expansion "${city || "Ontario"}"`,
-    `"${company}" "planned expansion" "${city || "Ontario"}"`,
-    `"${company}" "new facility" "${city || "Ontario"}"`,
-    `"${company}" "new plant" "${city || "Ontario"}"`,
-    `"${company}" "production line" "${city || "Ontario"}"`,
-    `"${company}" ECA Ontario expansion`,
-    hostname ? `site:${hostname} careers maintenance production operations` : "",
-    hostname ? `site:${hostname} expansion "new facility" "new plant"` : ""
-  ].filter(Boolean));
-
-  const collected = [];
-  for (const searchQuery of searches.slice(0, 12)) {
-    try {
-      const results = await searchWeb(searchQuery, {
-        limit: 2,
-        keepUrlPath: true,
-        allowBlockedDomains: true,
-        skipPatterns: ["charity", "award", "review", "salary estimate"]
-      });
-      collected.push(...results);
-    } catch {
-      continue;
-    }
-  }
-
-  let filtered = collected.filter(looksLikeRecentOperationalSignal);
-  if (filtered.length < 2) {
-    const breadcrumbSearches = buildRecentSignalBreadcrumbSearches({
-      company,
-      city: city || "Ontario",
-      websiteUrl,
-      results: collected
-    });
-    for (const searchQuery of breadcrumbSearches.slice(0, 8)) {
-      try {
-        const results = await searchWeb(searchQuery, {
-          limit: 2,
-          keepUrlPath: true,
-          allowBlockedDomains: true,
-          skipPatterns: ["charity", "award", "review", "salary estimate"]
-        });
-        collected.push(...results);
-      } catch {
-        continue;
-      }
-    }
-    filtered = collected.filter(looksLikeRecentOperationalSignal);
-  }
-
-  return dedupeByUrl(filtered).slice(0, 10);
-}
-
-function looksLikeRecentOperationalSignal(result) {
-  const text = `${cleanText(result?.title)} ${cleanText(result?.snippet)}`;
-  if (!looksLikeFirmRecentSignal({ title: result?.title, snippet: result?.snippet, url: result?.url })) {
-    return false;
-  }
-  if (RECENT_SIGNAL_NOISE_PATTERN.test(text) && !RECENT_SIGNAL_NOISE_OVERRIDE_PATTERN.test(text) && !RECENT_SIGNAL_EXPANSION_EVIDENCE_PATTERN.test(text)) {
-    return false;
-  }
-  return true;
-}
-
 function looksLikeRecentSignalEntry(signal) {
   const text = [
     signal?.title,
@@ -974,38 +816,6 @@ function looksLikeRecentSignalEntry(signal) {
     return false;
   }
   return true;
-}
-
-function buildRecentSignalBreadcrumbSearches({ company, city, websiteUrl, results }) {
-  const breadcrumbs = results.filter(looksLikeRecentSignalBreadcrumb).slice(0, 4);
-  if (!breadcrumbs.length) {
-    return [];
-  }
-
-  const hostname = normalizeHostname(websiteUrl);
-  const breadcrumbHosts = uniqueOrdered(
-    breadcrumbs
-      .map((result) => normalizeHostname(result?.url))
-      .filter((host) => host && RECENT_SIGNAL_JOB_BOARD_PATTERN.test(host))
-  ).slice(0, 2);
-
-  return uniqueOrdered([
-    `"${company}" "maintenance mechanic" job "${city || "Ontario"}"`,
-    `"${company}" millwright job "${city || "Ontario"}"`,
-    `"${company}" "production operator" job "${city || "Ontario"}"`,
-    `"${company}" "production supervisor" job "${city || "Ontario"}"`,
-    `"${company}" "plant manager" job "${city || "Ontario"}"`,
-    `"${company}" "new facility" OR expansion "${city || "Ontario"}"`,
-    `"${company}" permit construction expansion "${city || "Ontario"}"`,
-    `"${company}" investment capacity production "${city || "Ontario"}"`,
-    hostname ? `site:${hostname} careers "maintenance" OR "production"` : "",
-    hostname ? `site:${hostname} "new facility" OR expansion OR investment` : "",
-    ...breadcrumbHosts.flatMap((host) => [
-      `site:${host} "${company}" "maintenance mechanic"`,
-      `site:${host} "${company}" "production operator"`,
-      `site:${host} "${company}" "production supervisor"`
-    ])
-  ].filter(Boolean));
 }
 
 function looksLikeFirmRecentSignal({ title, snippet, url }) {
