@@ -30,11 +30,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: lead-finder-cloud-listener
+  cancel-in-progress: false
+
 jobs:
   run:
     name: Listen for CRM cloud commands
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 355
 
     steps:
       - name: Check out repository
@@ -61,6 +65,9 @@ jobs:
           CLOUD_INDUSTRIES: ${{ github.event.inputs.industries || 'food_beverage|concrete|metal_refineries|recycling|mining_aggregate|asphalt_plants|building_products|others' }}
           CLOUD_CITIES: ${{ github.event.inputs.cities || '' }}
           CLOUD_CRM_CONFIG: crm-config.js
+          CLOUD_LISTENER: ${{ github.event_name == 'schedule' && 'true' || 'false' }}
+          CLOUD_LISTENER_MAX_MINUTES: "330"
+          CLOUD_LISTENER_POLL_SECONDS: "15"
         run: node lead_finder_brain/cloud-command-listener.mjs ${{ github.event_name == 'workflow_dispatch' && '--run-now' || '' }}
 
       - name: Upload lead finder CSV artifacts

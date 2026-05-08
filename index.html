@@ -2456,6 +2456,14 @@ function App(){
     try{
       const command=endpoint.includes("stop")?"stop":"start";
       const isCloudCommand=IS_GITHUB_PAGES_CRM;
+      if(isCloudCommand && command==="start"){
+        const {data:queued,error:queueError}=await sb.from("finder_commands").select("id,created_at").eq("command","start").eq("status","cloud_pending").order("created_at",{ascending:false}).limit(1);
+        if(queueError) throw queueError;
+        if(Array.isArray(queued) && queued.length){
+          toast2("Start already queued - GitHub cloud will pick it up shortly.");
+          return;
+        }
+      }
       const payload={
         command,
         status:isCloudCommand ? "cloud_pending" : "pending",

@@ -15,46 +15,77 @@ const repoRoot = path.resolve(__dirname, "..");
 await loadLocalEnv({ cwd: repoRoot });
 
 const runNow = process.argv.includes("--run-now");
+const listenMode = process.env.CLOUD_LISTENER === "true" || process.argv.includes("--listen");
+const listenerMaxMs = toNumber(process.env.CLOUD_LISTENER_MAX_MINUTES, 330) * 60 * 1000;
+const listenerPollMs = toNumber(process.env.CLOUD_LISTENER_POLL_SECONDS, 15) * 1000;
 const crmConfigPath = resolvePath(process.env.CLOUD_CRM_CONFIG || "crm-config.js");
 const config = await loadCrmConfig();
-const pending = await fetchPendingCommands();
-const cloudCommand = pending.find((row) => isCloudTarget(row.settings));
 
-if (cloudCommand?.command === "stop") {
-  const current = await fetchCloudState();
-  if (isFreshCloudRunning(current)) {
-    console.log("Cloud stop command left pending for the active cloud runner.");
-    process.exit(0);
+if (listenMode) {
+  process.exit(await listenForCloudCommands());
+}
+
+const singlePass = await handleCloudCommandPass({ quiet: false });
+process.exit(singlePass.exitCode);
+
+async function listenForCloudCommands() {
+  const startedAt = Date.now();
+  const deadline = startedAt + Math.max(listenerPollMs, listenerMaxMs);
+  console.log(`Cloud command listener active for ${Math.round((deadline - startedAt) / 60000)} minute(s).`);
+
+  while (Date.now() < deadline) {
+    const result = await handleCloudCommandPass({ quiet: true });
+    if (result.exitCode !== 0) {
+      return result.exitCode;
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    await sleep(Math.min(listenerPollMs, remainingMs));
   }
-  await updateCommandStatus(cloudCommand.id, "running");
-  await publishCloudStoppedState("GitHub cloud run stopped from CRM.");
-  await updateCommandStatus(cloudCommand.id, "done");
-  console.log("Cloud stop command handled.");
-  process.exit(0);
+
+  console.log("Cloud command listener window ended.");
+  return 0;
 }
 
-const currentCloudState = await fetchCloudState();
-if (!cloudCommand && !runNow && !shouldContinueCloudAutoRun(currentCloudState)) {
-  console.log("No cloud start command and cloud autorun is off.");
-  process.exit(0);
+async function handleCloudCommandPass({ quiet }) {
+  const pending = await fetchPendingCommands();
+  const cloudCommand = pending.find((row) => isCloudTarget(row.settings));
+
+  if (cloudCommand?.command === "stop") {
+    const current = await fetchCloudState();
+    if (isFreshCloudRunning(current)) {
+      if (!quiet) console.log("Cloud stop command left pending for the active cloud runner.");
+      return { exitCode: 0, didRun: false };
+    }
+    await updateCommandStatus(cloudCommand.id, "running");
+    await publishCloudStoppedState("GitHub cloud run stopped from CRM.");
+    await updateCommandStatus(cloudCommand.id, "done");
+    console.log("Cloud stop command handled.");
+    return { exitCode: 0, didRun: false };
+  }
+
+  const currentCloudState = await fetchCloudState();
+  if (!cloudCommand && !runNow && !shouldContinueCloudAutoRun(currentCloudState)) {
+    if (!quiet) console.log("No cloud start command and cloud autorun is off.");
+    return { exitCode: 0, didRun: false };
+  }
+
+  if (cloudCommand) {
+    await updateCommandStatus(cloudCommand.id, "running");
+  }
+
+  const commandSettings = cloudCommand?.settings || {};
+  const exitCode = await runCloudFinder({
+    industries: commandSettings.industries,
+    citiesText: commandSettings.citiesText,
+    autoRun: true
+  });
+
+  if (cloudCommand) {
+    await updateCommandStatus(cloudCommand.id, exitCode === 0 ? "done" : "failed");
+  }
+  return { exitCode, didRun: true };
 }
-
-if (cloudCommand) {
-  await updateCommandStatus(cloudCommand.id, "running");
-}
-
-const commandSettings = cloudCommand?.settings || {};
-const exitCode = await runCloudFinder({
-  industries: commandSettings.industries,
-  citiesText: commandSettings.citiesText,
-  autoRun: true
-});
-
-if (cloudCommand) {
-  await updateCommandStatus(cloudCommand.id, exitCode === 0 ? "done" : "failed");
-}
-
-process.exit(exitCode);
 
 async function runCloudFinder({ industries, citiesText, autoRun }) {
   const env = {
@@ -211,4 +242,13 @@ function resolvePath(filePath) {
 
 function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function toNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
