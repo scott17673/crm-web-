@@ -156,7 +156,7 @@ Return only valid JSON. Do not use markdown.
 You must do this in order:
 1. First decide whether the company qualifies as a real in-range industrial plant lead.
 2. If qualified is false, stop there: return the reject fields and leave all enrichment arrays empty.
-3. Only if qualified is true, fill the lead enrichment fields and operations-tied contacts from the same evidence packet.
+3. Only if qualified is true, fill the non-contact lead enrichment fields from the same evidence packet.
 
 QUALIFY ONLY IF ALL ARE PROVEN FROM THE EVIDENCE PACKET:
 1. The result is an actual company, not a page title, article, directory, recipe, search result category, association, or generic phrase.

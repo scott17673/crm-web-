@@ -78,6 +78,8 @@ const INTERNAL_TAG_PREFIX = "__";
 const IMPORT_BATCH_NEW_PREFIX = "__import_batch_new:";
 const FINDER_SKIP_TAG = "__finder_skip";
 const FINDER_SYNC_TAG = "__finder_sync";
+const FINDER_CONTACTS_V2_TAG = "__finder_contacts_v2";
+const FINDER_CONTACT_FIX_CUTOFF = "2026-05-08T12:09:00.000Z";
 const ACTIVITY_TYPES = ["Call","Email","Meeting","Note"];
 const ACTIVITY_COLORS = {Call:"#1e3a8a",Email:"#ef4444",Meeting:"#16a34a",Note:"#f97316",All:"#475569"};
 const PERSON_COLORS = {Scott:"#1e3a8a",Jeff:"#16a34a"};
@@ -845,6 +847,15 @@ const isInternalTag = tag => String(tag || "").trim().startsWith(INTERNAL_TAG_PR
 const visibleTags = tags => uniqueTags(tags).filter(tag => !isInternalTag(tag));
 const internalTags = tags => uniqueTags(tags).filter(isInternalTag);
 const isFinderCreatedLead = record => uniqueTags(record?.tags).includes(FINDER_SYNC_TAG) || /\(verified plant lead\)/i.test(String(record?.signals || record?.notes || ""));
+const isCurrentFinderCreatedLead = record => {
+  if(!isFinderCreatedLead(record)) return false;
+  const createdAt = Date.parse(record?.created_at || record?.createdAt || "");
+  const cutoff = Date.parse(FINDER_CONTACT_FIX_CUTOFF);
+  if(Number.isFinite(createdAt) && createdAt >= cutoff){
+    return uniqueTags(record?.tags).includes(FINDER_CONTACTS_V2_TAG);
+  }
+  return true;
+};
 const padDatePart = value => String(value).padStart(2,"0");
 const makeImportBatchId = () => {
   const now = new Date();
@@ -2379,7 +2390,7 @@ function App(){
       try{
         const range=finderDateRangeUtc(finderLeadDate);
         const data=await fetchAllSupabaseRows(()=>sb.from("manufacturers").select("id,company,stage,industry,end_product,signals,last_contact,created_at,tags").gte("created_at",range.from).lt("created_at",range.to).order("created_at",{ascending:false}));
-        if(!cancelled && data) setFinderTodayLeads(data.filter(row=>isFinderCreatedLead(row)&&passesLeadFinderPlantVerifierGuard(row)));
+        if(!cancelled && data) setFinderTodayLeads(data.filter(row=>isCurrentFinderCreatedLead(row)&&passesLeadFinderPlantVerifierGuard(row)));
       }catch{}
     };
     const pollLeadHistory=async()=>{
@@ -2389,7 +2400,7 @@ function App(){
         const data=await fetchAllSupabaseRows(()=>sb.from("manufacturers").select("id,company,stage,industry,end_product,signals,created_at,tags").gte("created_at",since.toISOString()).order("created_at",{ascending:false}));
         if(cancelled || !data) return;
         const counts=data
-          .filter(row=>isFinderCreatedLead(row)&&passesLeadFinderPlantVerifierGuard(row))
+          .filter(row=>isCurrentFinderCreatedLead(row)&&passesLeadFinderPlantVerifierGuard(row))
           .reduce((map,row)=>{
             const day=localDateFromIso(row.created_at);
             if(day) map.set(day,(map.get(day)||0)+1);

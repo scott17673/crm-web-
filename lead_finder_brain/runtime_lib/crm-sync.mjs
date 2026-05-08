@@ -6,9 +6,15 @@ import { isDuplicate, normalizeName, rememberCandidate } from "./dedupe.mjs";
 
 export const CRM_IMPORT_BATCH_PREFIX = "__import_batch_new:";
 export const FINDER_SYNC_TAG = "__finder_sync";
+export const FINDER_CONTACTS_V2_TAG = "__finder_contacts_v2";
 
 const DEFAULT_STAGE = "Prospect";
 let _cachedCrmCompanyNames = [];
+const CONTACT_PERSON_BLOCK_PATTERN = /\b(?:team|department|office|staff|contact|info|sales|support|company|inc|ltd|limited|corp|corporation|operations|plant|facility|personnel|public|provided|granite|metal|recycling|concrete|products?|services?)\b/i;
+const CONTACT_WEAK_TITLE_PATTERN = /\b(?:general contact|general inquiries?|not provided|information only|profile owner|team|personnel|facility-level contact|operations contact|contact\s*\/\s*operations|not confirmed|potential|staff|front office|main office|sales|office manager|customer service)\b/i;
+const CONTACT_TARGET_TITLE_PATTERN = /\b(?:plant|production|operations?|maintenance|manufacturing|facility|quality|qa\b|food safety|technical services|engineering|warehouse|logistics|supply chain|procurement|purchasing|buyer|head brewer|lead brewer|brewer|brewery manager|head roaster|roaster|general manager|owner|founder|president|vice president|vp|coo|operator|supervisor|manager|millwright|mechanic)\b/i;
+const CONTACT_TITLE_EXCLUDE_PATTERN = /\b(?:sales|marketing|human resources|hr\b|finance|accounting|customer service|office manager|front office|general inquiries?)\b/i;
+const CONTACT_TITLE_EXCLUDE_OVERRIDE_PATTERN = /\b(?:owner|founder|president|operations?|production|plant|maintenance|manufacturing|facility|quality|qa\b|technical services|engineering|warehouse|logistics|procurement|purchasing|buyer|operator|supervisor|millwright|mechanic)\b/i;
 
 async function aiCheckDuplicate(newCompanyName, existingNames) {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -188,6 +194,7 @@ export function buildCrmManufacturerPayload(record, intelligence, { batchTag = "
   const tags = uniqueValues([
     ...splitTagText(record?.tags),
     FINDER_SYNC_TAG,
+    FINDER_CONTACTS_V2_TAG,
     batchTag
   ]);
 
@@ -211,7 +218,7 @@ export function buildCrmContactRows(manufacturerId, intelligence) {
       title: cleanText(contact?.title),
       linkedin: cleanText(contact?.linkedin || contact?.source_url)
     }))
-    .filter((contact) => contact.name && contact.title)
+    .filter(isCrmContactWorthSaving)
     .filter((contact) => {
       const key = `${contact.name.toLowerCase()}::${contact.title.toLowerCase()}::${contact.linkedin.toLowerCase()}`;
       if (seen.has(key)) {
@@ -220,6 +227,33 @@ export function buildCrmContactRows(manufacturerId, intelligence) {
       seen.add(key);
       return true;
     });
+}
+
+function isCrmContactWorthSaving(contact) {
+  const name = cleanText(contact?.name);
+  const title = cleanText(contact?.title);
+  const link = cleanText(contact?.linkedin);
+  if (!looksLikeCrmPersonName(name) || !looksLikeCrmOpsTitle(title)) {
+    return false;
+  }
+  return Boolean(link);
+}
+
+function looksLikeCrmPersonName(value) {
+  const text = cleanText(value);
+  return /^[A-Z][A-Za-z'`.-]+(?:\s+[A-Z][A-Za-z'`.-]+){1,4}$/.test(text) &&
+    !CONTACT_PERSON_BLOCK_PATTERN.test(text);
+}
+
+function looksLikeCrmOpsTitle(value) {
+  const text = cleanText(value);
+  if (!text || text.length > 140 || CONTACT_WEAK_TITLE_PATTERN.test(text)) {
+    return false;
+  }
+  if (CONTACT_TITLE_EXCLUDE_PATTERN.test(text) && !CONTACT_TITLE_EXCLUDE_OVERRIDE_PATTERN.test(text)) {
+    return false;
+  }
+  return CONTACT_TARGET_TITLE_PATTERN.test(text);
 }
 
 export async function checkQualifiedLeadCrmDuplicate({ record, existingIndex, seenIndex, includeAi = true }) {
