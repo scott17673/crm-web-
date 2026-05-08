@@ -1,0 +1,8 @@
+---
+name: If im not sure they manufacture or supply
+category: Qualification
+subject:
+---
+Hi {{first_name}},
+My name is Scott with ED Industrial. We are a mechanical contractor that supports high-volume food plants such as Unilever, Mother Parkers, Celtrade, and Ferrero. Our work includes process piping, machine upkeep, and fabrication.
+I wanted to reach out and ask whether your facility does any processing in-house, or if you operate strictly as a supplier.

@@ -1,0 +1,9 @@
+---
+name: For not the maintenance person
+category: Referral Request
+subject:
+---
+Hi {{first_name}},
+Could you point me to the person responsible for mechanical maintenance or contractor coordination at your facility?
+We support high-volume food plants like Unilever, Mother Parkers, and Celtrade with machine maintenance, piping, welding, and pre-fabrication.
+We assume you wouldn't use an unvetted contractor for these kinds of things, so I had a few questions for your maintenance person to make sure we can be of use when the time comes.

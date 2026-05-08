@@ -1,0 +1,7 @@
+---
+name: I set a calender meeting request follow up
+category: Follow Up
+subject:
+---
+Hi {{first_name}}
+Was Thursday at 1:00 PM a bad time, or do you already have an overflow millwright and mechanical company supporting the facility?

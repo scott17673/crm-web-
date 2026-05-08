@@ -1,0 +1,12 @@
+---
+name: Maybe for larger companies
+category: Larger Companies
+subject:
+---
+Hi {{first_name}},
+I wanted to ask what your process looks like for bringing new subcontractors on-site?
+We support high-volume food plants like Unilever, Mother Parkers, and Celtrade, handling general machine maintenance, piping, welding, and pre-fabrication.
+To make it easy to try us out, we offer a first-job confidence guarantee, free quotes, and a one contact per job approach.
+If it makes sense, we'd appreciate the chance to be considered for future quote opportunities. Any information you can share on your subcontractor process or upcoming maintenance needs would be appreciated.
+
+Thanks for your time,

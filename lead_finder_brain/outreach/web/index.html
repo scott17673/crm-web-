@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ED Industrial - Outreach</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="page">
+    <header class="hdr">
+      <h1>Outreach</h1>
+      <p id="status" class="status">checking setup...</p>
+    </header>
+
+    <section class="card">
+      <label>Contact</label>
+      <input id="contact-search" type="search" placeholder="Type to filter by name or company..." autocomplete="off" />
+      <select id="contact" size="8"></select>
+      <p id="contact-count" class="muted"></p>
+    </section>
+
+    <section class="card">
+      <label>Template</label>
+      <select id="template"></select>
+      <pre id="template-preview" class="preview" hidden></pre>
+    </section>
+
+    <section class="card">
+      <button id="send-btn" type="button">Send Email</button>
+      <p class="muted">Sends to one personal-email candidate at a time, waits 45s for a bounce, then tries the next. Final summary is logged to the CRM.</p>
+    </section>
+
+    <section class="card">
+      <label>Run log</label>
+      <pre id="log" class="log"></pre>
+      <pre id="summary" class="summary" hidden></pre>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

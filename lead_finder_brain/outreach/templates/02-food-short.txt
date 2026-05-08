@@ -1,0 +1,11 @@
+---
+name: Food short
+category: Food Manufacturer
+subject: {{first_name}}, would you be the maintenance contact?
+---
+Hi {{first_name}},
+ED Industrial is a one-stop mechanical partner based in Milton. We handle maintenance support and in-house fabrication. Anything from mechanical work, welding, piping/fitting during production to complete project management for line installs and shutdown support.
+We work with high-volume food plants like Mother Parkers (Folgers K-Cups), Unilever (Hellmann's mayo), Ferrero.
+We can send certified tradespeople for conveyors, drives, piping, or general machine maintenance. Need custom guarding or platforms? We engineer, fabricate in our 20,000 sq ft shop, then deliver with our flat bed truck and install on site.
+We offer a First Job Confidence Guarantee. Need help now? We'll send a project manager and get you a free competitive quote.
+Give me a time i can set up a virtual tour of our site or just get you set up with the right project manager on our end depending on your needs.

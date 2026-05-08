@@ -1,0 +1,11 @@
+---
+name: I sent a calendar meeting request
+category: Meeting Request
+subject:
+---
+Hi {{first_name}},
+I wanted to ask what your process looks like for bringing new subcontractors on-site?
+We support high-volume food plants like Unilever, Mother Parkers, Celtrade, and others. Handling general machine maintenance, piping, welding, and pre-fabrication.
+To make it easy to try us out, we offer a first-job confidence guarantee, free competitive quotes, and a one contact per job approach.
+I assume you wouldn't work with a company you haven't vetted, so I would like to learn more about the kind of support you need to find you to the right project manager on our side. This would let you have us in your back pocket when needed. Any info you can share on your subcontractor process or upcoming maintenance needs would be appreciated!
+I set a meeting invite at a time I'm available. Join if you can, happy to give you a virtual tour of our facilities.

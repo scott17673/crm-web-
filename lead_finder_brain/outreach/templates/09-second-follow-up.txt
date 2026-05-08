@@ -1,0 +1,6 @@
+---
+name: Regular 2nd follow up
+category: Second Follow Up
+subject:
+---
+Hi {{first_name}}, please give me your thoughts on this when you get the chance.
