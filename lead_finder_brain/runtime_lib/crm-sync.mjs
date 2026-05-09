@@ -7,8 +7,10 @@ import { isDuplicate, normalizeName, rememberCandidate } from "./dedupe.mjs";
 export const CRM_IMPORT_BATCH_PREFIX = "__import_batch_new:";
 export const FINDER_SYNC_TAG = "__finder_sync";
 export const FINDER_CONTACTS_V2_TAG = "__finder_contacts_v2";
+export const FINDER_SKIP_CACHE_ID = "00000000-0000-4000-8000-000000000880";
 
 const DEFAULT_STAGE = "Prospect";
+const FINDER_SKIP_CACHE_MAX_ENTRIES = 8000;
 let _cachedCrmCompanyNames = [];
 const CONTACT_PERSON_BLOCK_PATTERN = /\b(?:team|department|office|staff|contact|info|sales|support|company|inc|ltd|limited|corp|corporation|operations|plant|facility|personnel|public|provided|granite|metal|recycling|concrete|products?|services?)\b/i;
 const CONTACT_WEAK_TITLE_PATTERN = /\b(?:general contact|general inquiries?|not provided|information only|profile owner|team|personnel|facility-level contact|operations contact|contact\s*\/\s*operations|not confirmed|potential|staff|front office|main office|sales|office manager|customer service)\b/i;
@@ -146,6 +148,76 @@ export async function createCrmSync(rawOptions = {}, deps = {}) {
         manufacturerId,
         contactsInserted: contactRows.length
       };
+    }
+  };
+}
+
+export async function createFinderSkipCache(rawOptions = {}, deps = {}) {
+  const fetchImpl = deps.fetch || globalThis.fetch;
+  const config = await resolveCrmConfig(rawOptions, deps);
+  if (!config) {
+    return null;
+  }
+
+  if (typeof fetchImpl !== "function") {
+    throw new Error("Fetch is not available for finder skip cache.");
+  }
+
+  const entries = new Map();
+  let dirty = 0;
+
+  try {
+    const existing = await loadFinderSkipCacheRow(config, fetchImpl);
+    for (const entry of normalizeFinderSkipEntries(existing?.settings?.entries)) {
+      if (entry.key) {
+        entries.set(entry.key, entry);
+      }
+    }
+  } catch {
+    // Cache failure should never stop lead finding; it only saves cost.
+  }
+
+  return {
+    get size() {
+      return entries.size;
+    },
+    hasAny(keys = []) {
+      return keys.some((key) => entries.has(cleanText(key)));
+    },
+    remember(keys = [], meta = {}) {
+      const now = new Date().toISOString();
+      let changed = false;
+      for (const rawKey of keys) {
+        const key = cleanText(rawKey);
+        if (!key) continue;
+        const existing = entries.get(key);
+        entries.set(key, {
+          key,
+          company: cleanText(meta.company) || existing?.company || "",
+          reason: cleanText(meta.reason).slice(0, 300) || existing?.reason || "",
+          city: cleanText(meta.city) || existing?.city || "",
+          source: cleanText(meta.source) || existing?.source || "",
+          first_seen_at: existing?.first_seen_at || now,
+          last_seen_at: now,
+          times_seen: Number(existing?.times_seen || 0) + 1
+        });
+        changed = true;
+      }
+      if (changed) {
+        dirty += 1;
+      }
+      return changed;
+    },
+    async flush({ force = false } = {}) {
+      if (!force && dirty < 20) {
+        return false;
+      }
+      if (!dirty && !force) {
+        return false;
+      }
+      await saveFinderSkipCacheRow(config, fetchImpl, Array.from(entries.values()));
+      dirty = 0;
+      return true;
     }
   };
 }
@@ -438,6 +510,80 @@ async function requestJson(fetchImpl, url, options) {
     throw new Error(message);
   }
   return data;
+}
+
+async function loadFinderSkipCacheRow(config, fetchImpl) {
+  const baseUrl = `${config.supabaseUrl.replace(/\/+$/, "")}/rest/v1`;
+  const url = new URL(`${baseUrl}/finder_commands`);
+  url.searchParams.set("id", `eq.${FINDER_SKIP_CACHE_ID}`);
+  url.searchParams.set("select", "settings");
+  url.searchParams.set("limit", "1");
+  const rows = await requestJson(fetchImpl, url, {
+    method: "GET",
+    headers: {
+      apikey: config.apiKey,
+      Authorization: `Bearer ${config.apiKey}`,
+      Accept: "application/json"
+    }
+  });
+  return toArray(rows)[0] || null;
+}
+
+async function saveFinderSkipCacheRow(config, fetchImpl, entries) {
+  const baseUrl = `${config.supabaseUrl.replace(/\/+$/, "")}/rest/v1`;
+  const url = new URL(`${baseUrl}/finder_commands`);
+  url.searchParams.set("on_conflict", "id");
+  const compactEntries = entries
+    .filter((entry) => cleanText(entry?.key))
+    .sort((left, right) => cleanText(right.last_seen_at).localeCompare(cleanText(left.last_seen_at)))
+    .slice(0, FINDER_SKIP_CACHE_MAX_ENTRIES);
+
+  await requestJson(fetchImpl, url, {
+    method: "POST",
+    headers: {
+      apikey: config.apiKey,
+      Authorization: `Bearer ${config.apiKey}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      Prefer: "resolution=merge-duplicates,return=minimal"
+    },
+    body: JSON.stringify([{
+      id: FINDER_SKIP_CACHE_ID,
+      command: "skip_cache",
+      status: "active",
+      settings: {
+        version: 1,
+        entries: compactEntries,
+        updated_at: new Date().toISOString(),
+        max_entries: FINDER_SKIP_CACHE_MAX_ENTRIES
+      }
+    }])
+  });
+}
+
+function normalizeFinderSkipEntries(value) {
+  if (Array.isArray(value)) {
+    return value.map(normalizeFinderSkipEntry).filter((entry) => entry.key);
+  }
+  if (value && typeof value === "object") {
+    return Object.entries(value)
+      .map(([key, meta]) => normalizeFinderSkipEntry({ key, ...(meta || {}) }))
+      .filter((entry) => entry.key);
+  }
+  return [];
+}
+
+function normalizeFinderSkipEntry(entry) {
+  return {
+    key: cleanText(entry?.key),
+    company: cleanText(entry?.company),
+    reason: cleanText(entry?.reason).slice(0, 300),
+    city: cleanText(entry?.city),
+    source: cleanText(entry?.source),
+    first_seen_at: cleanText(entry?.first_seen_at),
+    last_seen_at: cleanText(entry?.last_seen_at),
+    times_seen: Number(entry?.times_seen || 0)
+  };
 }
 
 function uniqueContactsFromIntelligence(intelligence) {

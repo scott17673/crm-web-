@@ -4,10 +4,10 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { loadLocalEnv, verifyAndEnrichPlantLead, verifyPlantCandidateHeuristic } from "./plant-verifier.mjs";
-import { checkQualifiedLeadCrmDuplicate, createCrmSync, syncQualifiedLeadToCrm } from "./runtime_lib/crm-sync.mjs";
+import { checkQualifiedLeadCrmDuplicate, createCrmSync, createFinderSkipCache, syncQualifiedLeadToCrm } from "./runtime_lib/crm-sync.mjs";
 import { parseCsv, stringifyCsv } from "./runtime_lib/csv.mjs";
 import { runCompanyPreInsertEnrichment } from "./runtime_lib/company-enrichment.mjs";
-import { buildExistingIndex, createEmptyIndex, isDuplicate, normalizeName, rememberCandidate } from "./runtime_lib/dedupe.mjs";
+import { buildExistingIndex, createEmptyIndex, isDuplicate, normalizeDomain, normalizeName, rememberCandidate } from "./runtime_lib/dedupe.mjs";
 import { enrichFromWebsite } from "./runtime_lib/enrich.mjs";
 import { DEFAULT_INDUSTRY_IDS, inferIndustryLabel } from "./runtime_lib/industries.mjs";
 import { normalizeSavedLeadRecord } from "./runtime_lib/lead-records.mjs";
@@ -89,6 +89,7 @@ export async function runFinder(rawOptions = {}, hooks = {}) {
   const options = normalizeOptions(rawOptions);
   const log = hooks.logger || ((message) => console.log(message));
   const crmSync = await createCrmSync(options);
+  const skipCache = crmSync ? await createFinderSkipCache(options).catch(() => null) : null;
   const crmExistingRecords = crmSync ? await crmSync.loadExistingRecords() : [];
   const existingRecords = options.existing ? await loadExistingRecords(options.existing) : [];
   const existingIndex = buildExistingIndex([...existingRecords, ...crmExistingRecords]);
@@ -115,6 +116,9 @@ export async function runFinder(rawOptions = {}, hooks = {}) {
   if (crmSync) {
     log(`Loaded ${crmExistingRecords.length} existing CRM manufacturer(s) from ${crmSync.config.label}.`);
   }
+  if (skipCache) {
+    log(`Loaded ${skipCache.size} previously rejected lead finder candidate(s).`);
+  }
 
   for (const city of cities) {
     const queries = buildCityQueries(city, options.province, options.industries);
@@ -139,6 +143,11 @@ export async function runFinder(rawOptions = {}, hooks = {}) {
         searchSeen.add(siteKey);
 
         const companyLabel = cleanText(hit.companyName || hit.title || hit.url);
+        const precheckKeys = buildFinderSkipCacheKeys({ hit, company: companyLabel, city });
+        if (skipCache?.hasAny(precheckKeys)) {
+          log(`  Skipped cached reject: ${companyLabel}`);
+          continue;
+        }
         log(`  Deep qualifying: ${companyLabel}`);
 
         try {
@@ -147,7 +156,8 @@ export async function runFinder(rawOptions = {}, hooks = {}) {
             city,
             query,
             options,
-            log
+            log,
+            skipCache
           });
 
           if (!processed) {
@@ -157,6 +167,18 @@ export async function runFinder(rawOptions = {}, hooks = {}) {
           const { intelligence, record } = processed;
           if (!passesStrictPlantVerifierGuard(record)) {
             log(`  Skipped: ${record.company} | failed strict plant verifier guard`);
+            skipCache?.remember(buildFinderSkipCacheKeys({
+              hit,
+              company: record.company,
+              city,
+              websiteUrl: intelligence.website || hit.websiteUrl || hit.url
+            }), {
+              company: record.company,
+              reason: "failed strict plant verifier guard",
+              city,
+              source: intelligence.website || hit.websiteUrl || hit.url
+            });
+            await skipCache?.flush().catch(() => null);
             continue;
           }
 
@@ -232,6 +254,9 @@ export async function runFinder(rawOptions = {}, hooks = {}) {
   if (options.progressOut) {
     await writeOutputCsv(options.progressOut, rows);
   }
+  if (skipCache) {
+    await skipCache.flush({ force: true }).catch(() => null);
+  }
 
   log(`Finished. ${rows.length} kept prospect(s).`);
   return rows;
@@ -281,7 +306,7 @@ async function enrichLeadBeforeCrmInsert({ record, intelligence, options, log })
   }
 }
 
-async function processHit({ hit, city, query, options, log }) {
+async function processHit({ hit, city, query, options, log, skipCache }) {
   const websiteUrl = toCanonicalWebsiteUrl(hit.websiteUrl || hit.url || "");
   const profile = websiteUrl
     ? await enrichFromWebsite(websiteUrl, {
@@ -297,6 +322,17 @@ async function processHit({ hit, city, query, options, log }) {
     websiteUrl,
     profile
   });
+  const skipCacheKeys = buildFinderSkipCacheKeys({
+    hit,
+    company: verifierPacket.company || profile?.companyName || hit.companyName || hit.title,
+    city,
+    websiteUrl
+  });
+  if (skipCache?.hasAny(skipCacheKeys)) {
+    const companyName = cleanText(verifierPacket.company || profile?.companyName || hit.companyName || hit.title || hit.url);
+    log(`  Skipped cached reject: ${companyName}`);
+    return null;
+  }
 
   let verifierResult;
   let enrichmentResult = null;
@@ -319,6 +355,13 @@ async function processHit({ hit, city, query, options, log }) {
 
   if (!verifierResult.qualified) {
     log(`  Skipped: ${companyName} | ${verifierResult.reject_reason || "failed plant verifier"}`);
+    skipCache?.remember(skipCacheKeys, {
+      company: companyName,
+      reason: verifierResult.reject_reason || "failed plant verifier",
+      city,
+      source: cleanText(websiteUrl || hit.url)
+    });
+    await skipCache?.flush().catch(() => null);
     return null;
   }
 
@@ -890,6 +933,38 @@ function dedupeByUrl(results) {
     unique.push(result);
   }
   return unique;
+}
+
+function buildFinderSkipCacheKeys({ hit, company, city, websiteUrl }) {
+  const keys = [];
+  const domain = normalizeDomain(websiteUrl || hit?.websiteUrl || hit?.url || "");
+  if (isCacheableSkipDomain(domain)) {
+    keys.push(`domain:${domain}`);
+  }
+
+  const name = normalizeName(company || hit?.companyName || hit?.title || "");
+  const cityKey = normalizeName(city);
+  if (isCacheableSkipName(name) && cityKey) {
+    keys.push(`name-city:${name}::${cityKey}`);
+  }
+
+  return uniqueOrdered(keys);
+}
+
+function isCacheableSkipDomain(domain) {
+  const value = cleanText(domain).toLowerCase();
+  if (!value) return false;
+  return !/(?:yellowpages|pagesjaunes|canpages|411|google|bing|yahoo|linkedin|facebook|instagram|youtube|indeed|glassdoor|workopolis|jobbank|monster|ziprecruiter|simplyhired|eluta)\./i.test(value);
+}
+
+function isCacheableSkipName(name) {
+  const value = cleanText(name).toLowerCase();
+  if (value.length < 5) return false;
+  if (/^(home|about|contact|contacts|locations?|products?|services?|careers?|jobs?|menu|shop|shop online|opening|website|phone number|view map)$/i.test(value)) {
+    return false;
+  }
+  const tokens = value.split(/\s+/).filter(Boolean);
+  return tokens.some((token) => token.length >= 5 && !/^(canada|ontario|limited|ltd|inc|corp|company|group|products|services)$/.test(token));
 }
 
 function normalizeHostname(value) {
