@@ -100,7 +100,8 @@ const TARGET_TITLE_TERMS = [
   "general manager"
 ];
 const TARGET_TITLE_PATTERN = new RegExp(`\\b(?:${TARGET_TITLE_TERMS.join("|")})\\b`, "i");
-const NON_PERSON_NAME_PATTERN = /\b(facility|facilities|plant|products?|services?|operations|manufacturing|company|team|careers?|contact|locations?|site|shop|home|office|virtual|tour|website|auto parts|food|water|healthcare|technology|aggregates?|construction|solutions|equipment)\b/i;
+const NON_PERSON_NAME_PATTERN = /\b(facility|facilities|plant|products?|services?|operations|manufacturing|company|team|careers?|contact|locations?|site|shop|home|office|virtual|tour|website|auto parts|food|water|healthcare|technology|aggregates?|construction|solutions|equipment|family)\b/i;
+const NON_PERSON_NAME_START_PATTERN = /^(?:the|what|recently|entrepreneurial|canadian|american|ontario|new|old)\b/i;
 const DIRECTORY_DOMAIN_PATTERN = /(?:yellowpages|pagesjaunes|canada411|facebook|instagram|x\.com|twitter|yelp|zoominfo|dnb|opencorporates|glassdoor)\./i;
 const PEOPLE_DIRECTORY_DOMAINS = ["wiza.co", "signalhire.com", "clodura.ai", "adapt.io", "contactout.com", "rocketreach.co", "zoominfo.com", "apollo.io", "lusha.com", "theorg.com"];
 const PEOPLE_DIRECTORY_PRIORITY_DOMAINS = ["wiza.co", "rocketreach.co", "signalhire.com", "zoominfo.com", "apollo.io"];
@@ -228,7 +229,8 @@ export async function runCompanyEnrichment({
   websitePageLimit = 3,
   dryRun = false,
   includeSignals = true,
-  allowContactUpdates = true
+  allowContactUpdates = true,
+  useOpenAi = true
 } = {}) {
   const root = repoRoot || path.resolve(__dirname, "..", "..");
   await loadLocalEnv({ cwd: root });
@@ -246,11 +248,11 @@ export async function runCompanyEnrichment({
   });
 
   const evidence = await buildCompanyEvidence(manufacturer, { websitePageLimit });
-  const contacts = await findOperationsContacts(evidence, { model, existingContacts });
+  const contacts = await findOperationsContacts(evidence, { model, existingContacts, useOpenAi });
   let signals = [];
   if (includeSignals) {
     try {
-      signals = await findHiringExpansionSignals(evidence);
+      signals = await findHiringExpansionSignals(evidence, { useOpenAi });
     } catch {
       signals = [];
     }
@@ -318,6 +320,7 @@ export async function runCompanyEnrichment({
     tags: nextTags,
     signalsText: nextSignals,
     dryRun,
+    enrichmentMode: useOpenAi ? "ai-assisted" : "public-only",
     ...(dryRun && process.env.DEBUG_ENRICHMENT ? {
       debug: {
         companyHints: evidence.companyHints,
@@ -338,7 +341,8 @@ export async function runCompanyPreInsertEnrichment({
   tags = [],
   repoRoot,
   model = DEFAULT_CONTACT_EXTRACT_MODEL,
-  websitePageLimit = 3
+  websitePageLimit = 3,
+  useOpenAi = true
 } = {}) {
   const root = repoRoot || path.resolve(__dirname, "..", "..");
   await loadLocalEnv({ cwd: root });
@@ -354,10 +358,10 @@ export async function runCompanyPreInsertEnrichment({
   }
 
   const evidence = await buildCompanyEvidence(manufacturer, { websitePageLimit });
-  const contacts = await findOperationsContacts(evidence, { model, existingContacts: [] });
+  const contacts = await findOperationsContacts(evidence, { model, existingContacts: [], useOpenAi });
   let signalsFound = [];
   try {
-    signalsFound = await findHiringExpansionSignals(evidence);
+    signalsFound = await findHiringExpansionSignals(evidence, { useOpenAi });
   } catch {
     signalsFound = [];
   }
@@ -375,7 +379,8 @@ export async function runCompanyPreInsertEnrichment({
     recentSignalsFound: signalsFound.length,
     recentSignals: signalsFound,
     tags: nextTags,
-    signalsText: nextSignals
+    signalsText: nextSignals,
+    enrichmentMode: useOpenAi ? "ai-assisted" : "public-only"
   };
 }
 
@@ -494,8 +499,9 @@ function filterPeopleResultsByCompany(results, companyHints, { city } = {}) {
   );
 }
 
-async function findOperationsContacts(evidence, { model = DEFAULT_CONTACT_EXTRACT_MODEL, existingContacts = [] }) {
+async function findOperationsContacts(evidence, { model = DEFAULT_CONTACT_EXTRACT_MODEL, existingContacts = [], useOpenAi = true }) {
   const nanoModel = resolveNanoOnlyModel(model, DEFAULT_CONTACT_EXTRACT_MODEL);
+  const canUseNano = Boolean(useOpenAi && NANO_CONTACT_EXTRACT_ENABLED && process.env.OPENAI_API_KEY);
   const existingUsefulContacts = normalizeExistingCrmContacts(existingContacts);
   let heuristicContacts = extractHeuristicOperationContacts(evidence);
   let contactCandidates = extractContactNameCandidates(evidence);
@@ -539,7 +545,7 @@ async function findOperationsContacts(evidence, { model = DEFAULT_CONTACT_EXTRAC
   }
 
   let nanoContacts = [];
-  if (NANO_CONTACT_EXTRACT_ENABLED && process.env.OPENAI_API_KEY && !hasEnoughTargetContacts(contacts)) {
+  if (canUseNano && !hasEnoughTargetContacts(contacts)) {
     try {
       nanoContacts = await extractContactsWithNanoBatches(evidence, {
         existingContacts,
@@ -553,7 +559,7 @@ async function findOperationsContacts(evidence, { model = DEFAULT_CONTACT_EXTRAC
     }
   }
 
-  if (NANO_CONTACT_EXTRACT_ENABLED && process.env.OPENAI_API_KEY) {
+  if (canUseNano) {
     try {
       const reviewedContacts = await reviewContactsWithNano(evidence, {
         candidateContacts: dedupeContacts([...seedContacts, ...nanoContacts]),
@@ -924,7 +930,7 @@ function roleTitleAppearsInText(title, text) {
   return synonyms.some(([rolePattern, textPattern]) => rolePattern.test(role) && textPattern.test(text));
 }
 
-async function findHiringExpansionSignals(evidence) {
+async function findHiringExpansionSignals(evidence, { useOpenAi = true } = {}) {
   const queries = buildRecentSignalQueries(evidence);
   const collected = [];
 
@@ -965,7 +971,7 @@ async function findHiringExpansionSignals(evidence) {
     signals = normalizeSignalResults(collected, evidence);
   }
 
-  if (NANO_SIGNAL_EXTRACT_ENABLED && process.env.OPENAI_API_KEY && signals.length < 2 && collected.length) {
+  if (useOpenAi && NANO_SIGNAL_EXTRACT_ENABLED && process.env.OPENAI_API_KEY && signals.length < 2 && collected.length) {
     try {
       const nanoSignals = await extractSignalsWithNano(evidence, collected, {
         seedSignals: signals,
@@ -1846,6 +1852,9 @@ function extractLinkedInContacts(results, companyHints) {
       if (!url || !matchesCompanyContext({ titleText, snippet, companyPhrases: phrases, companyTokenSets: tokens })) {
         return null;
       }
+      if (!isRelevantLinkedInMarket(url, `${titleText} ${snippet}`)) {
+        return null;
+      }
       const name = parseLinkedInName(titleText);
       const title = parseLinkedInRole(titleText, snippet, result, companyHints);
       if (isPastRoleSnippet(snippet)) {
@@ -1877,7 +1886,12 @@ function extractContactNameCandidates(evidence) {
       const titleText = cleanText(result?.title);
       const snippet = cleanText(result?.snippet);
       const url = normalizeLinkedInUrl(result?.url);
-      if (!url || isPastRoleSnippet(snippet) || !matchesCompanyContext({ titleText, snippet, companyPhrases: phrases, companyTokenSets: tokens })) {
+      if (
+        !url ||
+        !isRelevantLinkedInMarket(url, `${titleText} ${snippet}`) ||
+        isPastRoleSnippet(snippet) ||
+        !matchesCompanyContext({ titleText, snippet, companyPhrases: phrases, companyTokenSets: tokens })
+      ) {
         return null;
       }
       const name = parseLinkedInName(titleText);
@@ -2097,6 +2111,17 @@ function buildParsedContact(nameValue, titleValue) {
   return { name, title };
 }
 
+function isRelevantLinkedInMarket(url, text = "") {
+  const host = normalizeHostname(url);
+  if (host === "ca.linkedin.com") {
+    return true;
+  }
+  if (host === "linkedin.com" || host === "www.linkedin.com") {
+    return /\b(?:Canada|Canadian|Ontario|ON|Greater Toronto|GTA|Toronto|Mississauga|Brampton|Hamilton|Kitchener|Waterloo|Burlington|Oakville|Vaughan|Markham|Guelph|Cambridge|Niagara)\b/i.test(text);
+  }
+  return false;
+}
+
 function lastNameWords(value, count = 2) {
   const words = cleanText(value).split(/\s+/).filter(Boolean);
   return words.slice(Math.max(0, words.length - count)).join(" ");
@@ -2187,6 +2212,9 @@ function isUsefulContactTitle(title) {
 function looksLikePersonName(value) {
   const text = cleanText(value);
   if (!/^[A-Z][A-Za-z'`.-]+(?:\s+[A-Z][A-Za-z'`.-]+){1,4}$/.test(text)) {
+    return false;
+  }
+  if (NON_PERSON_NAME_START_PATTERN.test(text)) {
     return false;
   }
   return !NON_PERSON_NAME_PATTERN.test(text);
@@ -2288,6 +2316,7 @@ function cleanRoleText(value) {
     .replace(/\s+-\s+(?:Wiza|RocketReach|ZoomInfo).*$/i, "")
     .replace(/\s+[Â·|].*$/, "")
     .replace(/^experience:\s*/i, "")
+    .replace(/^as\s+/i, "")
     .replace(/\s+\.{3,}.*$/, "")
     .replace(/\s+at\s+.*$/i, "")
     .replace(/\s+(?:and|&)\s*$/i, "")

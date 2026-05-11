@@ -177,7 +177,9 @@ createServer(async (req, res) => {
     if (requestUrl.pathname === "/api/enrich-company" && req.method === "POST") {
       const body = await readJsonBody(req);
       const companyLabel = String(body.company || body.companyName || body.id || "").trim();
-      pushLog(`Manual contacts/signals search started for ${companyLabel || "selected company"}.`);
+      const useOpenAi = !(body.freeMode || body.publicOnly || body.useOpenAi === false);
+      const modeLabel = useOpenAi ? "AI-assisted" : "public-only/free";
+      pushLog(`Manual contacts/signals search started for ${companyLabel || "selected company"} (${modeLabel}).`);
       const result = await runCompanyEnrichment({
         manufacturerId: body.id || body.manufacturerId,
         company: body.company || body.companyName,
@@ -185,9 +187,10 @@ createServer(async (req, res) => {
         repoRoot,
         model: process.env.OPENAI_CONTACT_EXTRACT_MODEL || "gpt-5-nano",
         websitePageLimit: Number(body.websitePageLimit || settings.websitePageLimit || 3),
-        dryRun: Boolean(body.dryRun)
+        dryRun: Boolean(body.dryRun),
+        useOpenAi
       });
-      pushLog(`Manual contacts/signals search finished for ${result.company}: ${result.contactsFound} contact(s), ${result.recentSignalsFound} signal(s).`);
+      pushLog(`Manual contacts/signals search finished for ${result.company} (${modeLabel}): ${result.contactsFound} contact(s), ${result.recentSignalsFound} signal(s).`);
       return sendJson(res, 200, result);
     }
 

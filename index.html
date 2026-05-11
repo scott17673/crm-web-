@@ -2496,14 +2496,16 @@ function App(){
     }catch(e){ toast2("Command error: "+e.message); }
   };
 
-  const runCompanyEnrichment = async record => {
+  const runCompanyEnrichment = async (record, options={}) => {
     if(!record || record.type!=="manufacturer") return;
+    const freeMode = !!options.freeMode;
+    const modeLabel = freeMode ? "Free public search" : "AI-assisted search";
     setCompanyEnrichmentBusy(current => ({...current, [record.id]: true}));
     try{
       const r=await fetch(FINDER_URL+"/api/enrich-company",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({id:record.id,company:record.company})
+        body:JSON.stringify({id:record.id,company:record.company,freeMode})
       });
       const data=await readJsonResponse(r);
       if(!r.ok) throw new Error(data.error||"Search failed");
@@ -2519,7 +2521,7 @@ function App(){
         setContactsDraft(contactsTextFromRecord({...record,contacts:nextContacts}));
         if(data.signalsText) setNotesDraft(data.signalsText);
       }
-      toast2(`Search complete: ${data.contactsFound || 0} contact${(data.contactsFound || 0)===1?"":"s"}, ${data.recentSignalsFound || 0} signal${(data.recentSignalsFound || 0)===1?"":"s"}.`);
+      toast2(`${modeLabel} complete: ${data.contactsFound || 0} contact${(data.contactsFound || 0)===1?"":"s"}, ${data.recentSignalsFound || 0} signal${(data.recentSignalsFound || 0)===1?"":"s"}.`);
       await hydrate();
     }catch(e){
       toast2(`Search error via ${FINDER_URL}: `+(e.message||String(e)));
@@ -4815,6 +4817,13 @@ const taskActivityFromTask = task => ({
                   style={{padding:"10px 14px",border:"1px solid #1e3a8a",borderRadius:4,background:companyEnrichmentBusy[selected.id]?"#e2e8f0":"#eff6ff",color:companyEnrichmentBusy[selected.id]?"#94a3b8":"#1e3a8a",fontWeight:800,cursor:companyEnrichmentBusy[selected.id]?"default":"pointer",fontSize:12,letterSpacing:".04em"}}
                 >
                   {companyEnrichmentBusy[selected.id] ? "SEARCHING..." : "FIND CONTACTS + SIGNALS"}
+                </button>}
+                {selected.type==="manufacturer" && <button
+                  onClick={()=>runCompanyEnrichment(selected,{freeMode:true})}
+                  disabled={!!companyEnrichmentBusy[selected.id]}
+                  style={{padding:"10px 14px",border:"1px solid #64748b",borderRadius:4,background:companyEnrichmentBusy[selected.id]?"#e2e8f0":"#f8fafc",color:companyEnrichmentBusy[selected.id]?"#94a3b8":"#334155",fontWeight:800,cursor:companyEnrichmentBusy[selected.id]?"default":"pointer",fontSize:12,letterSpacing:".04em"}}
+                >
+                  {companyEnrichmentBusy[selected.id] ? "SEARCHING..." : "FREE FIND"}
                 </button>}
                 <button onClick={()=>deleteRecord(selected)} style={{padding:"10px 18px",border:"none",borderRadius:4,background:"#ef4444",color:"#fff",fontWeight:800,cursor:"pointer",fontSize:12,letterSpacing:".05em"}}>DELETE</button>
                 <button onClick={()=>setSelected(null)} style={{width:30,height:30,border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",cursor:"pointer",color:"#94a3b8"}}>×</button>
