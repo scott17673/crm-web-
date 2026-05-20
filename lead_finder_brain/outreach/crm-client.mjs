@@ -50,17 +50,37 @@ async function loadConfigFile(resolvedPath) {
 export function createCrmClient({ supabaseUrl, apiKey }) {
   const baseUrl = `${supabaseUrl}/rest/v1`;
   const auth = { apikey: apiKey, Authorization: `Bearer ${apiKey}` };
+  const buildSelectUrl = (table, { select = "*", filters = {}, order = null, limit = 1000 } = {}) => {
+    const url = new URL(`${baseUrl}/${table}`);
+    url.searchParams.set("select", select);
+    if (limit !== null && limit !== undefined) url.searchParams.set("limit", String(limit));
+    if (order?.column) url.searchParams.set("order", `${order.column}.${order.ascending === false ? "desc" : "asc"}`);
+    for (const [k, v] of Object.entries(filters)) {
+      if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+    }
+    return url;
+  };
 
   return {
-    async select(table, { select = "*", filters = {}, order = null, limit = 1000 } = {}) {
-      const url = new URL(`${baseUrl}/${table}`);
-      url.searchParams.set("select", select);
-      if (limit) url.searchParams.set("limit", String(limit));
-      if (order?.column) url.searchParams.set("order", `${order.column}.${order.ascending === false ? "desc" : "asc"}`);
-      for (const [k, v] of Object.entries(filters)) {
-        if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+    async select(table, options = {}) {
+      const url = buildSelectUrl(table, options);
+      const headers = { ...auth, Accept: "application/json" };
+      if (options.range) headers.Range = `${options.range.from}-${options.range.to}`;
+      return requestJson(url, { method: "GET", headers });
+    },
+    async selectAll(table, options = {}) {
+      const pageSize = Number(options.pageSize || 1000);
+      const rows = [];
+      for (let from = 0; ; from += pageSize) {
+        const batch = await this.select(table, {
+          ...options,
+          limit: null,
+          range: { from, to: from + pageSize - 1 }
+        });
+        rows.push(...(Array.isArray(batch) ? batch : []));
+        if (!Array.isArray(batch) || batch.length < pageSize) break;
       }
-      return requestJson(url, { method: "GET", headers: { ...auth, Accept: "application/json" } });
+      return rows;
     },
     async insert(table, rows, { select = "" } = {}) {
       const url = new URL(`${baseUrl}/${table}`);
@@ -69,6 +89,23 @@ export function createCrmClient({ supabaseUrl, apiKey }) {
         method: "POST",
         headers: { ...auth, Accept: "application/json", "Content-Type": "application/json", Prefer: "return=representation" },
         body: JSON.stringify(rows)
+      });
+    },
+    async patch(table, filters, values, { select = "" } = {}) {
+      const url = new URL(`${baseUrl}/${table}`);
+      if (select) url.searchParams.set("select", select);
+      for (const [k, v] of Object.entries(filters || {})) {
+        if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+      }
+      return requestJson(url, {
+        method: "PATCH",
+        headers: {
+          ...auth,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          Prefer: select ? "return=representation" : "return=minimal"
+        },
+        body: JSON.stringify(values)
       });
     }
   };

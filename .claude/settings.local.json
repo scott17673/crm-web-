@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --check mailer.mjs)",
+      "Bash(node -e ' *)",
+      "Bash(cp .env.example .env)",
+      "Bash(npm install *)",
+      "Bash(npm audit *)",
+      "Bash(rm -f package-lock.json)",
+      "Bash(rm -rf node_modules)",
+      "Bash(curl -s -m 5 http://127.0.0.1:8781/api/status)",
+      "PowerShell($startup = [Environment]::GetFolderPath\\('Startup'\\); $shortcutPath = Join-Path $startup 'ED Outreach Server.lnk'; $target = 'C:\\\\Users\\\\scott\\\\Downloads\\\\edi crm\\\\lead_finder_brain\\\\outreach\\\\start-hidden.vbs'; $wshell = New-Object -ComObject WScript.Shell; $sc = $wshell.CreateShortcut\\($shortcutPath\\); $sc.TargetPath = 'wscript.exe'; $sc.Arguments = '\"' + $target + '\"'; $sc.WorkingDirectory = 'C:\\\\Users\\\\scott\\\\Downloads\\\\edi crm\\\\lead_finder_brain\\\\outreach'; $sc.Description = 'Starts the local ED Industrial outreach server in the background.'; $sc.Save\\(\\); \"Created: $shortcutPath\")",
+      "PowerShell(wscript.exe \"C:\\\\Users\\\\scott\\\\Downloads\\\\edi crm\\\\lead_finder_brain\\\\outreach\\\\start-hidden.vbs\"; Start-Sleep -Seconds 4; try { \\(Invoke-WebRequest -Uri 'http://127.0.0.1:8781/api/status' -UseBasicParsing -TimeoutSec 5\\).Content } catch { \"Probe failed: $\\($_.Exception.Message\\)\" })"
+    ]
+  }
+}

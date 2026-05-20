@@ -2,7 +2,7 @@ import { appendFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { extractDomainFromText, generatePersonalCandidates, searchDomainViaDuckDuckGo } from "./email-finder.mjs";
+import { extractDomainForCompany, generatePersonalCandidates, searchDomainViaDuckDuckGo } from "./email-finder.mjs";
 import { renderTemplate } from "./template-loader.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -22,15 +22,18 @@ export async function runOutreach({ contactId, template, crm, mailer, env, emit 
   if (!contact) {
     return finish({ ok: false, error: "Contact not found." });
   }
+  if (!isUsableOutreachContact(contact)) {
+    return finish({ ok: false, error: "Contact looks stale or unusable for outreach. Pick a current named operations/contact row first." });
+  }
 
-  log(`Contact: ${contact.name} — ${contact.company}`);
+  log(`Contact: ${contact.name} - ${contact.company}`);
 
-  if (await contactAlreadyContacted(crm, contactId)) {
-    return finish({ ok: false, error: "This contact already has a 'Result: sent' outreach activity. Skipping to avoid duplicates." });
+  if (await contactAlreadyContacted(crm, contact)) {
+    return finish({ ok: false, error: "This company/contact already has a 'Result: sent' outreach activity. Skipping to avoid duplicates." });
   }
 
   log("Resolving company domain from notes...");
-  let domain = extractDomainFromText(contact.signals, contact.endProduct);
+  let domain = extractDomainForCompany(contact.company, contact.signals, contact.endProduct);
   if (!domain && contact.company) {
     log(`No domain in notes; searching DuckDuckGo for "${contact.company}"...`);
     domain = await searchDomainViaDuckDuckGo(contact.company);
@@ -73,14 +76,14 @@ export async function runOutreach({ contactId, template, crm, mailer, env, emit 
     const address = candidates[i];
 
     if (sendsRemaining <= 0) {
-      log(`Daily send limit (${dailyLimit}) reached — skipping remaining candidates.`);
+      log(`Daily send limit (${dailyLimit}) reached - skipping remaining candidates.`);
       results.push({ address, status: "skipped-limit" });
       for (let j = i + 1; j < candidates.length; j++) results.push({ address: candidates[j], status: "skipped-limit" });
       break;
     }
 
     const tag = `${runId}:${i + 1}`;
-    log(`→ Sending to ${address}...`);
+    log(`Sending to ${address}...`);
     let sentAt;
     try {
       const info = await mailer.send({ to: address, subject: rendered.subject, text: rendered.body, tag });
@@ -88,12 +91,12 @@ export async function runOutreach({ contactId, template, crm, mailer, env, emit 
     } catch (err) {
       log(`SMTP error sending to ${address}: ${err.message || err}`);
       results.push({ address, status: "failed" });
-      await appendLog({ contact_id: contactId, company: contact.company, address, result: "failed", reason: "smtp-error" });
+      await appendLog({ contact_id: contactId, manufacturer_id: contact.manufacturerId, company: contact.company, address, result: "failed", reason: "smtp-error" });
       continue;
     }
 
     sendsRemaining -= 1;
-    await appendLog({ contact_id: contactId, company: contact.company, address, result: "sent-pending-bounce" });
+    await appendLog({ contact_id: contactId, manufacturer_id: contact.manufacturerId, company: contact.company, address, result: "sent-pending-bounce" });
 
     log("Waiting 45s for a bounce...");
     await sleep(45_000);
@@ -109,11 +112,11 @@ export async function runOutreach({ contactId, template, crm, mailer, env, emit 
     if (bounceResult.bounced) {
       log(`Bounce detected for ${address}.`);
       results.push({ address, status: "failed" });
-      await appendLog({ contact_id: contactId, company: contact.company, address, result: "bounced" });
+      await appendLog({ contact_id: contactId, manufacturer_id: contact.manufacturerId, company: contact.company, address, result: "bounced" });
     } else {
-      log(`No bounce within 45s for ${address} — seemed to go through.`);
+      log(`No bounce within 45s for ${address} - seemed to go through.`);
       results.push({ address, status: "seemed-sent" });
-      await appendLog({ contact_id: contactId, company: contact.company, address, result: "seemed-sent" });
+      await appendLog({ contact_id: contactId, manufacturer_id: contact.manufacturerId, company: contact.company, address, result: "seemed-sent" });
     }
 
     const isLast = i === candidates.length - 1;
@@ -125,6 +128,7 @@ export async function runOutreach({ contactId, template, crm, mailer, env, emit 
   }
 
   const summary = buildSummary({
+    contact,
     template,
     results,
     candidatesAttempted: results.filter((r) => r.status !== "skipped-limit").map((r) => r.address)
@@ -133,13 +137,16 @@ export async function runOutreach({ contactId, template, crm, mailer, env, emit 
   log("Writing summary to CRM...");
   try {
     await crm.insert("activities", [{
-      contact_id: contactId,
+      contact_id: contact.manufacturerId,
       contact_type: "manufacturer",
       type: "Email",
       date: todayDateString(),
       created_by: senderName || env.SMTP_USER || null,
       note: summary.note
     }]);
+    if (summary.candidatesAttempted.length && crm.patch) {
+      await crm.patch("manufacturers", { id: `eq.${contact.manufacturerId}` }, { last_contact: todayDateString() });
+    }
   } catch (err) {
     log(`CRM activity insert failed: ${err.message || err}`);
     return finish({ ok: false, error: `Run completed but CRM write failed: ${err.message || err}`, summary });
@@ -180,22 +187,29 @@ async function loadContact(crm, contactId) {
   };
 }
 
-async function contactAlreadyContacted(crm, contactId) {
-  const rows = await crm.select("activities", {
+async function contactAlreadyContacted(crm, contact) {
+  const rows = await crm.selectAll("activities", {
     select: "id,note",
-    filters: { contact_id: `eq.${contactId}`, contact_type: "eq.manufacturer", type: "eq.Email" },
-    limit: 100
+    filters: { contact_id: `eq.${contact.manufacturerId}`, contact_type: "eq.manufacturer", type: "eq.Email" }
   });
-  return (rows || []).some((row) => String(row.note || "").includes(SENT_MARKER));
+  if ((rows || []).some((row) => String(row.note || "").includes(SENT_MARKER))) return true;
+
+  const legacyRows = await crm.selectAll("activities", {
+    select: "id,note",
+    filters: { contact_id: `eq.${contact.id}`, contact_type: "eq.manufacturer", type: "eq.Email" }
+  });
+  return (legacyRows || []).some((row) => String(row.note || "").includes(SENT_MARKER));
 }
 
-function buildSummary({ template, results, candidatesAttempted }) {
+function buildSummary({ contact, template, results, candidatesAttempted }) {
   const seemed = results.filter((r) => r.status === "seemed-sent").map((r) => r.address);
   const failed = results.filter((r) => r.status === "failed").map((r) => r.address);
 
   const lines = [];
   lines.push(formatStamp(new Date()));
   lines.push(`Template: ${template.name}`);
+  if (contact?.name) lines.push(`Contact: ${contact.name}${contact.title ? `, ${contact.title}` : ""}`);
+  if (contact?.id) lines.push(`Contact row: manufacturer_contacts #${contact.id}`);
 
   if (seemed.length) {
     lines.push("Result: sent");
@@ -234,6 +248,18 @@ function splitName(fullName) {
   return { firstName: parts[0], lastName: parts[parts.length - 1] };
 }
 
+function cleanText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function isUsableOutreachContact(contact) {
+  const name = cleanText(contact?.name);
+  const title = cleanText(contact?.title);
+  if (!/^[A-Z][A-Za-z'`.-]+(?:\s+[A-Z][A-Za-z'`.-]+){1,4}$/.test(name)) return false;
+  if (/\b(?:team|department|office|staff|contact|info|sales|support|company|inc|ltd|limited|corp|corporation|operations|plant|facility|personnel|public|provided|products?|services?)\b/i.test(name)) return false;
+  return !/\b(?:former|retired|deceased|left|past role|not current|not verified|unverified|unknown|title not public)\b/i.test(title);
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -266,8 +292,7 @@ async function countSendsToday() {
     try { entry = JSON.parse(raw); } catch { continue; }
     if (!entry?.ts) continue;
     if (!String(entry.ts).startsWith(today)) continue;
-    if (entry.result === "smtp-error") continue;
-    count += 1;
+    if (entry.result === "sent-pending-bounce") count += 1;
   }
   return count;
 }

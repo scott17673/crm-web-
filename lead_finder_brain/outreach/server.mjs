@@ -160,28 +160,77 @@ async function handleSend(req, res) {
 
 async function loadEligibleContacts(crm) {
   const [contacts, manufacturers, activities] = await Promise.all([
-    crm.select("manufacturer_contacts", { select: "id,manufacturer_id,name,title,linkedin", limit: 5000 }),
-    crm.select("manufacturers", { select: "id,company", limit: 5000 }),
-    crm.select("activities", { select: "contact_id,contact_type,type,note", filters: { contact_type: "eq.manufacturer", type: "eq.Email" }, limit: 20000 })
+    crm.selectAll("manufacturer_contacts", { select: "id,manufacturer_id,name,title,linkedin", order: { column: "id", ascending: true } }),
+    crm.selectAll("manufacturers", { select: "id,company,stage", order: { column: "id", ascending: true } }),
+    crm.selectAll("activities", { select: "contact_id,contact_type,type,note", filters: { contact_type: "eq.manufacturer", type: "eq.Email" }, order: { column: "id", ascending: false } })
   ]);
 
-  const companyById = new Map((manufacturers || []).map((m) => [m.id, m.company || ""]));
-  const sentByContactId = new Set();
+  const manufacturerById = new Map((manufacturers || []).map((m) => [Number(m.id), m]));
+  const contactById = new Map((contacts || []).map((c) => [Number(c.id), c]));
+  const sentByManufacturerId = new Set();
+  const sentByLegacyContactId = new Set();
   for (const row of (activities || [])) {
-    if (String(row.note || "").includes("Result: sent")) sentByContactId.add(row.contact_id);
+    if (!String(row.note || "").includes("Result: sent")) continue;
+    const id = Number(row.contact_id);
+    if (manufacturerById.has(id)) sentByManufacturerId.add(id);
+    if (contactById.has(id)) sentByLegacyContactId.add(id);
   }
 
   return (contacts || [])
-    .filter((c) => c.name && c.manufacturer_id)
-    .filter((c) => !sentByContactId.has(c.id))
+    .filter((c) => c.manufacturer_id && isUsableOutreachContact(c))
+    .filter((c) => manufacturerById.has(Number(c.manufacturer_id)))
+    .filter((c) => isRealCompanyName(manufacturerById.get(Number(c.manufacturer_id))?.company))
+    .filter((c) => !isClosedStage(manufacturerById.get(Number(c.manufacturer_id))?.stage))
+    .filter((c) => !sentByManufacturerId.has(Number(c.manufacturer_id)))
+    .filter((c) => !sentByLegacyContactId.has(Number(c.id)))
     .map((c) => ({
       id: c.id,
-      name: c.name,
+      name: cleanText(c.name),
       title: c.title || "",
       manufacturer_id: c.manufacturer_id,
-      company: companyById.get(c.manufacturer_id) || ""
+      company: manufacturerById.get(Number(c.manufacturer_id))?.company || "",
+      priority: contactPriority(c)
     }))
-    .sort((a, b) => (a.company || "").localeCompare(b.company || "") || (a.name || "").localeCompare(b.name || ""));
+    .sort((a, b) => (a.company || "").localeCompare(b.company || "") || b.priority - a.priority || (a.name || "").localeCompare(b.name || ""))
+    .map(({ priority, ...contact }) => contact);
+}
+
+function cleanText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function looksLikePersonName(value) {
+  const text = cleanText(value);
+  if (!/^[A-Z][A-Za-z'`.-]+(?:\s+[A-Z][A-Za-z'`.-]+){1,4}$/.test(text)) return false;
+  return !/\b(?:team|department|office|staff|contact|info|sales|support|company|inc|ltd|limited|corp|corporation|operations|plant|facility|personnel|public|provided|products?|services?)\b/i.test(text);
+}
+
+function isUsableOutreachContact(contact) {
+  const title = cleanText(contact?.title);
+  return looksLikePersonName(contact?.name) &&
+    !/\b(?:former|retired|deceased|left|past role|not current|not verified|unverified|unknown|title not public)\b/i.test(title);
+}
+
+function contactPriority(contact) {
+  const title = cleanText(contact?.title);
+  let score = 0;
+  if (/\b(?:plant|maintenance|production|operations?|manufacturing|facility|quality|qa\b|engineering|warehouse|logistics|supply chain|procurement|purchasing|buyer|head brewer|brewer|head roaster|roaster|general manager|owner|founder|president|vice president|vp|coo)\b/i.test(title)) score += 20;
+  if (/\b(?:manager|supervisor|director|lead|chief|head)\b/i.test(title)) score += 5;
+  if (/\b(?:sales|marketing|human resources|hr\b|finance|accounting|customer service|front office|general inquiries?)\b/i.test(title)) score -= 20;
+  if (contact?.linkedin) score += 2;
+  return score;
+}
+
+function isClosedStage(stage) {
+  return /\b(?:closed|lost|unqualified|do not|duplicate)\b/i.test(cleanText(stage));
+}
+
+function isRealCompanyName(value) {
+  const text = cleanText(value);
+  if (!text || text.length < 2) return false;
+  if (/^[-\s]+/.test(text)) return false;
+  if (/^(?:about|home|homepage|contact|contact us|products?|services?|locations?|careers?|shop|store)\b/i.test(text)) return false;
+  return true;
 }
 
 async function readJsonBody(req) {

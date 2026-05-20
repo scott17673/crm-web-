@@ -12,6 +12,34 @@ export function extractDomainFromText(...texts) {
   return "";
 }
 
+export function extractDomainForCompany(companyName, ...texts) {
+  const companyTokens = companyDomainTokens(companyName);
+  if (!companyTokens.length) return "";
+
+  const joined = texts.filter(Boolean).join("\n");
+  const matches = joined.match(URL_RE) || [];
+  const seen = new Set();
+  const candidates = [];
+
+  for (const raw of matches) {
+    const host = hostnameOf(raw);
+    if (!host || seen.has(host) || SOCIAL_HOST_RE.test(host)) continue;
+    seen.add(host);
+
+    const hostKey = host.replace(/\.(?:com|ca|net|org|co|us|io)$/i, "").replace(/[^a-z0-9]/gi, "");
+    let score = 0;
+    for (const token of companyTokens) {
+      if (hostKey.includes(token) || token.includes(hostKey)) score += token.length >= 6 ? 10 : 6;
+    }
+    if (/\b(?:news|magazine|directory|association|linkedin|facebook|instagram|indeed|glassdoor|zoominfo|rocketreach|signalhire|wiza|apollo|contactout|foodengineeringmag|jobbank|workopolis|yellowpages|canpages)\b/i.test(host)) score -= 20;
+    if (/\b(?:careers|jobs|hiring)\b/i.test(String(raw))) score -= 5;
+    if (score > 0) candidates.push({ host, score });
+  }
+
+  candidates.sort((a, b) => b.score - a.score || a.host.length - b.host.length);
+  return candidates[0]?.host || "";
+}
+
 export function hostnameOf(raw) {
   let candidate = String(raw || "").trim().replace(/[),.;]+$/, "");
   if (!candidate) return "";
@@ -108,4 +136,14 @@ export function generatePersonalCandidates(contactName, domain) {
 
 function sanitizeLocal(value) {
   return String(value || "").replace(/[^a-z0-9]/g, "");
+}
+
+function companyDomainTokens(companyName) {
+  return String(companyName || "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .split(/[^a-z0-9]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 4)
+    .filter((token) => !/^(?:the|and|food|foods|beverage|beverages|inc|ltd|limited|corp|corporation|company|co|canada|ontario|manufacturing|manufacturer|plant|about|home|products|services|natural|local|wholesome)$/.test(token));
 }

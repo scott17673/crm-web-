@@ -1,0 +1,56 @@
+{
+  "createdAt": 1778866901150,
+  "query": "\"Local Dairy\" \"production manager\" \"Scarborough\"",
+  "results": [
+    {
+      "title": "Breaking News - Top Local Stories - CityNews Ottawa",
+      "url": "https://ottawa.citynews.ca/",
+      "snippet": ""
+    },
+    {
+      "title": "Ottawa : Local News, Weather & Traffic Updates",
+      "url": "https://www.ctvnews.ca/ottawa/",
+      "snippet": ""
+    },
+    {
+      "title": "Local News Stories, Updates and Headlines | Ottawa Citizen",
+      "url": "https://ottawacitizen.com/category/news/local-news/",
+      "snippet": ""
+    },
+    {
+      "title": "Ottawa - CBC News",
+      "url": "https://www.cbc.ca/news/canada/ottawa",
+      "snippet": ""
+    },
+    {
+      "title": "Home | Ottawa Lookout",
+      "url": "https://www.ottawalookout.com/",
+      "snippet": ""
+    },
+    {
+      "title": "HOME - Capital Current",
+      "url": "https://capitalcurrent.ca/",
+      "snippet": ""
+    },
+    {
+      "title": "Ottawa , ON – Local News, Weather & Community | Local .ca",
+      "url": "https://www.local.ca/on/ottawa/home",
+      "snippet": ""
+    },
+    {
+      "title": "Ottawa News | Weather & Traffic - Latest Sports | Breaking News",
+      "url": "https://globalnews.ca/ottawa/",
+      "snippet": ""
+    },
+    {
+      "title": "Breaking News, Headlines and Stories | Ottawa Citizen",
+      "url": "https://ottawacitizen.com/category/news/",
+      "snippet": ""
+    },
+    {
+      "title": "Ontario News | Get The Latest Provincial News | Ottawa Sun",
+      "url": "https://ottawasun.com/category/news/provincial/",
+      "snippet": ""
+    }
+  ]
+}

@@ -5,7 +5,8 @@
   "type": "module",
   "main": "server.mjs",
   "scripts": {
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "preview": "node campaign-planner.mjs"
   },
   "dependencies": {
     "imapflow": "^1.0.171",

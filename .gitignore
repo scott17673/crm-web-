@@ -10,3 +10,5 @@ logs_*.json
 ed_industrial_food_manufacturers_master_*.csv
 model_split_since_*/
 lead_finder_brain/test-output/
+lead_finder_brain/outreach/log.jsonl
+lead_finder_brain/outreach/node_modules/
