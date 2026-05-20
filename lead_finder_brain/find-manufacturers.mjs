@@ -9,7 +9,7 @@ import { parseCsv, stringifyCsv } from "./runtime_lib/csv.mjs";
 import { runCompanyPreInsertEnrichment } from "./runtime_lib/company-enrichment.mjs";
 import { buildExistingIndex, createEmptyIndex, isDuplicate, normalizeDomain, normalizeName, rememberCandidate } from "./runtime_lib/dedupe.mjs";
 import { enrichFromWebsite } from "./runtime_lib/enrich.mjs";
-import { DEFAULT_INDUSTRY_IDS, inferIndustryLabel } from "./runtime_lib/industries.mjs";
+import { DEFAULT_INDUSTRY_IDS, inferIndustryLabel, normalizeIndustryId } from "./runtime_lib/industries.mjs";
 import { normalizeSavedLeadRecord } from "./runtime_lib/lead-records.mjs";
 import { NEARBY_CITIES } from "./runtime_lib/nearby-cities.mjs";
 import { buildCityQueries, normalizeSiteKey, searchWeb, searchYellowPagesListings, toCanonicalWebsiteUrl } from "./runtime_lib/web-search.mjs";
@@ -1039,6 +1039,7 @@ async function writeOutputCsv(filePath, records) {
 }
 
 function normalizeOptions(rawOptions = {}) {
+  const industries = normalizeIndustryIds(parseDelimitedList(rawOptions.industries));
   return {
     province: cleanText(rawOptions.province) || DEFAULTS.province,
     cityLimit: toNumber(rawOptions.cityLimit, DEFAULTS.cityLimit),
@@ -1047,7 +1048,7 @@ function normalizeOptions(rawOptions = {}) {
     searchDelayMs: toNumber(rawOptions.searchDelayMs, DEFAULTS.searchDelayMs),
     out: cleanText(rawOptions.out) || DEFAULTS.out,
     progressOut: cleanText(rawOptions.progressOut),
-    industries: parseDelimitedList(rawOptions.industries).length ? parseDelimitedList(rawOptions.industries) : [...DEFAULTS.industries],
+    industries: industries.length ? industries : [...DEFAULTS.industries],
     minEmployees: toNumber(rawOptions.minEmployees, DEFAULTS.minEmployees),
     existing: cleanText(rawOptions.existing),
     crmConfigPath: cleanText(rawOptions.crmConfigPath),
@@ -1067,6 +1068,13 @@ function parseDelimitedList(value) {
     .split("|")
     .map((entry) => cleanText(entry))
     .filter(Boolean);
+}
+
+function normalizeIndustryIds(values) {
+  const seen = new Set();
+  return values
+    .map((value) => normalizeIndustryId(value))
+    .filter((value) => value && !seen.has(value) && seen.add(value));
 }
 
 function resolveOutputPath(filePath) {

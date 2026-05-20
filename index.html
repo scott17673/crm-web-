@@ -59,9 +59,10 @@ const sb = createClient(CRM_CONFIG.supabaseUrl, CRM_CONFIG.supabaseAnonKey);
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
 const STAGES = ["Unqualified","Prospect","Outreach","Not Interested","Qualified","Proposal","Negotiation","Closed Won","Closed Lost"];
 const LOST_REASONS = ["Price","Competitor","No Budget","No Decision","Bad Fit","Timing","Other"];
-const INDUSTRIES = ["Food and Beverage","Concrete","Metal Refineries","Recycling","Mining/Aggregate","Asphalt Plants","Building Products"];
+const INDUSTRIES = ["Food and Beverage","Concrete","Metal Refineries","Recycling","Aggregate / Asphalt","Packaging","Building Products"];
 const OTHER_INDUSTRY_LABEL = "Others";
 const INDUSTRY_OPTIONS = [...INDUSTRIES, OTHER_INDUSTRY_LABEL];
+const INDUSTRY_ALIASES = {"Mining/Aggregate":"Aggregate / Asphalt","Mining / Aggregate":"Aggregate / Asphalt","Asphalt Plants":"Aggregate / Asphalt"};
 const TASK_ACTIVITY_TYPE = "__task__";
 const TASK_ACTIVITY_DB_TYPE = "Note";
 const TASK_OPEN_META = "__task_open__";
@@ -83,8 +84,8 @@ const FINDER_CONTACT_FIX_CUTOFF = "2026-05-08T12:09:00.000Z";
 const ACTIVITY_TYPES = ["Call","Email","Meeting","Note"];
 const ACTIVITY_COLORS = {Call:"#1e3a8a",Email:"#ef4444",Meeting:"#16a34a",Note:"#f97316",All:"#475569"};
 const PERSON_COLORS = {Scott:"#1e3a8a",Jeff:"#16a34a"};
-const IND_COLORS = {"Food and Beverage":"#f97316","Concrete":"#78716c","Metal Refineries":"#64748b","Recycling":"#22c55e","Mining/Aggregate":"#a16207","Asphalt Plants":"#334155","Building Products":"#1d4ed8","Others":"#475569"};
-const IND_ICONS = {"Food and Beverage":"◍","Concrete":"▦","Metal Refineries":"◉","Recycling":"↻","Mining/Aggregate":"⛏","Asphalt Plants":"▣","Building Products":"▥","Others":"◧"};
+const IND_COLORS = {"Food and Beverage":"#f97316","Concrete":"#78716c","Metal Refineries":"#64748b","Recycling":"#22c55e","Aggregate / Asphalt":"#a16207","Packaging":"#0891b2","Building Products":"#1d4ed8","Others":"#475569"};
+const IND_ICONS = {"Food and Beverage":"◍","Concrete":"▦","Metal Refineries":"◉","Recycling":"↻","Aggregate / Asphalt":"▣","Packaging":"▤","Building Products":"▥","Others":"◧"};
 const TYPE_CFG = {
   manufacturer: { label: "Manufacturers", color: "#1e3a8a", icon: "⬡" },
   vendor: { label: "Vendors", color: "#ef4444", icon: "◈" },
@@ -341,6 +342,7 @@ const normalizeLeadFinderIndustries = values => {
   const seen = new Set();
   return list
     .map(value => String(value || "").trim())
+    .map(value => INDUSTRY_ALIASES[value] || value)
     .filter(value => INDUSTRY_OPTIONS.includes(value) && !seen.has(value) && seen.add(value));
 };
 const normalizeLeadFinderCities = raw => {
@@ -693,8 +695,8 @@ const leadFinderIndustrySearchTerm = industry => {
   if(industry==="Concrete") return "\"concrete plant\" OR precast OR cement";
   if(industry==="Metal Refineries") return "\"metal fabrication\" OR foundry OR refinery OR smelter";
   if(industry==="Recycling") return "\"recycling plant\" OR \"materials recovery facility\"";
-  if(industry==="Mining/Aggregate") return "\"aggregate plant\" OR quarry OR crushing OR screening";
-  if(industry==="Asphalt Plants") return "\"asphalt plant\" OR asphalt";
+  if(industry==="Aggregate / Asphalt") return "\"aggregate plant\" OR quarry OR crushing OR screening OR \"asphalt plant\" OR asphalt OR \"hot mix asphalt\"";
+  if(industry==="Packaging") return "\"packaging manufacturer\" OR \"corrugated packaging\" OR \"flexible packaging\" OR \"label manufacturer\" OR \"folding carton\" OR \"box plant\" OR converting";
   if(industry==="Building Products") return "\"building products\" manufacturer OR insulation OR gypsum OR glass";
   return "manufacturer";
 };
@@ -774,7 +776,10 @@ const csvValue = v => { const s=String(v ?? ""); return /[",\n]/.test(s) ? `"${s
 const downloadCsv = (rows, name) => { if(!rows.length) return; const keys=Object.keys(rows[0]); const lines=[keys.join(","),...rows.map(row=>keys.map(k=>csvValue(row[k])).join(","))]; const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([lines.join("\n")],{type:"text/csv"})); a.download=name; a.click(); };
 const fmtEmail = (name, domain, fmt) => { const parts=(name||"").trim().split(/\s+/); const first=(parts[0]||"").toLowerCase(); const last=(parts[parts.length-1]||"").toLowerCase(); const f=first[0]||""; return fmt.replace("{first}",first).replace("{last}",last).replace("{f}",f)+"@"+domain; };
 const firstFilled = (...vals) => vals.find(v => String(v ?? "").trim()) || "";
-const normalizeIndustry = value => String(value || "").trim();
+const normalizeIndustry = value => {
+  const normalized = String(value || "").trim();
+  return INDUSTRY_ALIASES[normalized] || normalized;
+};
 const isKnownIndustry = value => INDUSTRIES.includes(normalizeIndustry(value));
 const getIndustryBucket = value => isKnownIndustry(value) ? normalizeIndustry(value) : OTHER_INDUSTRY_LABEL;
 const matchesIndustryFilter = (value, filter) => filter==="All" || (filter===OTHER_INDUSTRY_LABEL ? !isKnownIndustry(value) : normalizeIndustry(value)===filter);
@@ -2195,8 +2200,8 @@ const FINDER_DEFAULT_PRESETS = [
   {id:"concrete",label:"Concrete"},
   {id:"metal_refineries",label:"Metal Refineries"},
   {id:"recycling",label:"Recycling"},
-  {id:"mining_aggregate",label:"Mining / Aggregate"},
-  {id:"asphalt_plants",label:"Asphalt Plants"},
+  {id:"aggregate_asphalt",label:"Aggregate / Asphalt"},
+  {id:"packaging",label:"Packaging"},
   {id:"building_products",label:"Building Products"},
   {id:"others",label:"Others"}
 ];

@@ -15,8 +15,8 @@
     "concrete",
     "metal_refineries",
     "recycling",
-    "mining_aggregate",
-    "asphalt_plants",
+    "aggregate_asphalt",
+    "packaging",
     "building_products",
     "others"
   ],

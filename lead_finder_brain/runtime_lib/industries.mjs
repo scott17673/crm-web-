@@ -43,21 +43,27 @@ export const INDUSTRY_PRESETS = [
     ]
   },
   {
-    id: "mining_aggregate",
-    label: "Mining/Aggregate",
+    id: "aggregate_asphalt",
+    label: "Aggregate / Asphalt",
     queries: [
       "aggregate plant",
       "sand and gravel plant",
-      "quarry processing plant"
-    ]
-  },
-  {
-    id: "asphalt_plants",
-    label: "Asphalt Plants",
-    queries: [
+      "quarry processing plant",
       "asphalt plant",
       "asphalt producer",
       "hot mix asphalt plant"
+    ]
+  },
+  {
+    id: "packaging",
+    label: "Packaging",
+    queries: [
+      "packaging manufacturer",
+      "corrugated packaging manufacturer",
+      "flexible packaging manufacturer",
+      "label manufacturer",
+      "folding carton manufacturer",
+      "box plant"
     ]
   },
   {
@@ -85,14 +91,25 @@ export const DEFAULT_INDUSTRY_IDS = [
   "concrete",
   "metal_refineries",
   "recycling",
-  "mining_aggregate",
-  "asphalt_plants",
+  "aggregate_asphalt",
+  "packaging",
   "building_products",
   "others"
 ];
 
+const INDUSTRY_ID_ALIASES = {
+  mining_aggregate: "aggregate_asphalt",
+  asphalt_plants: "aggregate_asphalt"
+};
+
+export function normalizeIndustryId(id) {
+  const normalized = String(id || "").trim();
+  return INDUSTRY_ID_ALIASES[normalized] || normalized;
+}
+
 export function getIndustryPreset(id) {
-  return INDUSTRY_PRESETS.find((preset) => preset.id === id) || null;
+  const normalized = normalizeIndustryId(id);
+  return INDUSTRY_PRESETS.find((preset) => preset.id === normalized) || null;
 }
 
 export function inferIndustryLabel(query) {

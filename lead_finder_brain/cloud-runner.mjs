@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { OUTPUT_COLUMNS } from "./find-manufacturers.mjs";
 import { loadLocalEnv } from "./plant-verifier.mjs";
 import { parseCsv } from "./runtime_lib/csv.mjs";
-import { DEFAULT_INDUSTRY_IDS, INDUSTRY_PRESETS } from "./runtime_lib/industries.mjs";
+import { DEFAULT_INDUSTRY_IDS, INDUSTRY_PRESETS, normalizeIndustryId } from "./runtime_lib/industries.mjs";
 import { NEARBY_CITIES } from "./runtime_lib/nearby-cities.mjs";
 
 const REMOTE_STATE_COMMAND_ID = "00000000-0000-4000-8000-000000000879";
@@ -38,7 +38,7 @@ const settings = {
   searchDelayMs: toNumber(getSetting("search-delay-ms", "250"), 250),
   minEmployees: toNumber(getSetting("min-employees", "10"), 10),
   citiesText: activeCities.join("\n"),
-  industries: parseDelimited(getSetting("industries", DEFAULT_INDUSTRY_IDS.join("|"))),
+  industries: normalizeIndustryIds(parseDelimited(getSetting("industries", DEFAULT_INDUSTRY_IDS.join("|")))),
   outputName: path.basename(outputPath),
   progressName: path.basename(progressPath),
   verifierModel: getSetting("verifier-model", process.env.PLANT_VERIFIER_MODEL || "gpt-5-nano"),
@@ -453,6 +453,13 @@ function parseDelimited(value) {
     .split(/[|\n,]+/)
     .map((entry) => cleanText(entry))
     .filter(Boolean);
+}
+
+function normalizeIndustryIds(values) {
+  const seen = new Set();
+  return values
+    .map((value) => normalizeIndustryId(value))
+    .filter((value) => value && !seen.has(value) && seen.add(value));
 }
 
 function cleanText(value) {

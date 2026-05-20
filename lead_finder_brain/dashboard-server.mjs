@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import { parseCsv } from "./runtime_lib/csv.mjs";
 import { runCompanyEnrichment } from "./runtime_lib/company-enrichment.mjs";
-import { DEFAULT_INDUSTRY_IDS, INDUSTRY_PRESETS } from "./runtime_lib/industries.mjs";
+import { DEFAULT_INDUSTRY_IDS, INDUSTRY_PRESETS, normalizeIndustryId } from "./runtime_lib/industries.mjs";
 import { normalizeSavedLeadRecord } from "./runtime_lib/lead-records.mjs";
 import { NEARBY_CITIES } from "./runtime_lib/nearby-cities.mjs";
 
@@ -377,7 +377,9 @@ async function saveSettings(value) {
 
 function normalizeSettings(value = {}) {
   const selectedIndustries = Array.isArray(value.industries)
-    ? value.industries.filter((item) => INDUSTRY_PRESETS.some((preset) => preset.id === item))
+    ? value.industries
+        .map((item) => normalizeIndustryId(item))
+        .filter((item, index, list) => INDUSTRY_PRESETS.some((preset) => preset.id === item) && list.indexOf(item) === index)
     : [...DEFAULT_INDUSTRY_IDS];
   const industries = selectedIndustries.length ? selectedIndustries : [...DEFAULT_INDUSTRY_IDS];
 
