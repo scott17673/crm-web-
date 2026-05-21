@@ -3284,7 +3284,7 @@ const taskActivityFromTask = task => ({
   const soFacilities = activeMfrs.filter(m=>m.has_so_facilities).length;
   const preferredVendors = vendors.filter(v=>(v.tags||[]).includes("Preferred")).length;
   const industryStats = INDUSTRY_OPTIONS.map(industry => ({ industry, count: activeMfrs.filter(m=>getIndustryBucket(m.industry)===industry).length }));
-  const stageStats = STAGES.map(stage => ({ stage, count: mfrs.filter(m=>normalizeStage(m.stage)===stage).length }));
+  const stageStats = STAGES.map(stage => ({ stage, count: activeMfrs.filter(m=>normalizeStage(m.stage)===stage).length }));
   const maxIndustryCount = Math.max(1, ...industryStats.map(item => item.count));
   const maxStageCount = Math.max(1, ...stageStats.map(item => item.count));
   const earliestWeeklyActivityDate = [...acts].map(activity => String(activity.date || "").trim()).filter(Boolean).sort()[0] || "";
