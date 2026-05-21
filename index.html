@@ -86,10 +86,13 @@ const IND_COLORS = {"Food and Beverage":"#f97316","Concrete":"#78716c","Metal Re
 const IND_ICONS = {"Food and Beverage":"◍","Concrete":"▦","Metal Refineries":"◉","Recycling":"↻","Aggregate / Asphalt":"▣","Packaging":"▤","Building Products":"▥","Others":"◧"};
 const TYPE_CFG = {
   manufacturer: { label: "Manufacturers", color: "#1e3a8a", icon: "⬡" },
+  hidden: { label: "Hidden", color: "#64748b", icon: "!" },
   vendor: { label: "Vendors", color: "#ef4444", icon: "◈" },
   lost: { label: "Lost", color: "#94a3b8", icon: "✕" },
 };
 const STAGE_COLORS = {Unqualified:"#64748b",Prospect:"#94a3b8",Outreach:"#1e40af","Not Interested":"#b45309",Qualified:"#1e3a8a",Proposal:"#ef4444",Negotiation:"#f97316","Closed Won":"#22c55e","Closed Lost":"#64748b"};
+const HIDDEN_MANUFACTURER_STAGES = ["Unqualified","Not Interested","Closed Lost"];
+const isHiddenManufacturerRecord = record => !!record && (record.tags?.includes(FINDER_SKIP_TAG) || HIDDEN_MANUFACTURER_STAGES.includes(record.stage));
 const LEAD_FINDER_STATE_KEY = "ed_lead_finder_state";
 const LEAD_FINDER_CONFIG_KEY = "ed_lead_finder_config";
 const LEAD_FINDER_OPENAI_URL = "https://api.openai.com/v1/responses";
@@ -2196,7 +2199,7 @@ const taskActivityFromTask = task => ({
     if(!record) return toast2("Company not found");
     setShowTasksModal(false);
     setView("contacts");
-    setTab(record.type);
+    setTab(record.type==="manufacturer" && isHiddenManufacturerRecord(record) ? "hidden" : record.type);
     openRecord(record);
   },[resolveTaskRecord]);
   const openWeeklyActivityRecord = useCallback(activity => {
@@ -2204,7 +2207,7 @@ const taskActivityFromTask = task => ({
     if(!record) return toast2("Company not found");
     setShowWeeklyActivityModal(false);
     setView("contacts");
-    setTab(record.type);
+    setTab(record.type==="manufacturer" && isHiddenManufacturerRecord(record) ? "hidden" : record.type);
     openRecord(record);
   },[resolveActivityRecord]);
   const activitySearchByRecord = useMemo(()=>{
@@ -2261,7 +2264,12 @@ const taskActivityFromTask = task => ({
   },[activitySearchByRecord, taskSearchByRecord]);
   const filteredMfrs = useMemo(()=>{
     const q=search.trim().toLowerCase();
-    const base=mfrs.filter(m=>!m.tags?.includes(FINDER_SKIP_TAG)&&matchesManufacturerSearch(m, q)&&(stageF==="All"||m.stage===stageF)&&matchesIndustryFilter(m.industry, indF)&&matchesActivityDate(m.lastContact, activityDate, activityMode));
+    const base=mfrs.filter(m=>!isHiddenManufacturerRecord(m)&&matchesManufacturerSearch(m, q)&&(stageF==="All"||m.stage===stageF)&&matchesIndustryFilter(m.industry, indF)&&matchesActivityDate(m.lastContact, activityDate, activityMode));
+    return sortRecordsByActivity(base, sortBy);
+  },[mfrs,search,stageF,indF,sortBy,activityDate,activityMode,matchesManufacturerSearch]);
+  const filteredHiddenMfrs = useMemo(()=>{
+    const q=search.trim().toLowerCase();
+    const base=mfrs.filter(m=>isHiddenManufacturerRecord(m)&&matchesManufacturerSearch(m, q)&&(stageF==="All"||m.stage===stageF)&&matchesIndustryFilter(m.industry, indF)&&matchesActivityDate(m.lastContact, activityDate, activityMode));
     return sortRecordsByActivity(base, sortBy);
   },[mfrs,search,stageF,indF,sortBy,activityDate,activityMode,matchesManufacturerSearch]);
   const filteredOthers = useMemo(()=>{
@@ -3105,7 +3113,15 @@ const taskActivityFromTask = task => ({
     setSaving(false);
   };
 
-  const list = tab==="manufacturer" ? filteredMfrs : filteredOthers;
+  const isManufacturerTab = tab==="manufacturer" || tab==="hidden";
+  const effectiveTab = tab==="hidden" ? "manufacturer" : tab;
+  const list = tab==="manufacturer" ? filteredMfrs : tab==="hidden" ? filteredHiddenMfrs : filteredOthers;
+  const tabCounts = {
+    manufacturer: mfrs.filter(record => !isHiddenManufacturerRecord(record)).length,
+    hidden: mfrs.filter(isHiddenManufacturerRecord).length,
+    vendor: vendors.length,
+    lost: lost.length
+  };
   const importPreviewRows = (importRows || []).map(normalizeImportRow);
   const validImportRows = importPreviewRows.filter(row => isLikelyCompanyName(row.company));
   const importRowsByKey = buildMergedImportRowsByKey(importRows || []);
@@ -3129,6 +3145,7 @@ const taskActivityFromTask = task => ({
   const allVisibleSelected = visibleKeys.length>0 && visibleKeys.every(key => selectedKeys.includes(key));
   const exportRecords = selectedVisibleRecords.length ? selectedVisibleRecords : list;
   const exportFileName = `${tab}${selectedVisibleRecords.length ? "-selected" : ""}.csv`;
+  const canDeleteSelected = tab!=="hidden" && !!selectedVisibleRecords.length;
   const syncDetailPanelHeight = useCallback(() => {
     const measure = element => {
       if(!element) return 0;
@@ -3259,12 +3276,14 @@ const taskActivityFromTask = task => ({
     setWeeklyActivityFilter(type || "All");
     setShowWeeklyActivityModal(true);
   };
-  const pipe = mfrs.filter(m=>!["Closed Won","Closed Lost"].includes(m.stage)).length;
-  const hot = mfrs.filter(m=>(m.tags||[]).includes("Hot")).length;
+  const activeMfrs = mfrs.filter(record => !isHiddenManufacturerRecord(record));
+  const hiddenMfrs = mfrs.filter(isHiddenManufacturerRecord);
+  const pipe = activeMfrs.filter(m=>m.stage!=="Closed Won").length;
+  const hot = activeMfrs.filter(m=>(m.tags||[]).includes("Hot")).length;
   const lostValue = lost.reduce((sum,r)=>sum+(r.value||0),0);
-  const soFacilities = mfrs.filter(m=>m.has_so_facilities).length;
+  const soFacilities = activeMfrs.filter(m=>m.has_so_facilities).length;
   const preferredVendors = vendors.filter(v=>(v.tags||[]).includes("Preferred")).length;
-  const industryStats = INDUSTRY_OPTIONS.map(industry => ({ industry, count: mfrs.filter(m=>getIndustryBucket(m.industry)===industry).length }));
+  const industryStats = INDUSTRY_OPTIONS.map(industry => ({ industry, count: activeMfrs.filter(m=>getIndustryBucket(m.industry)===industry).length }));
   const stageStats = STAGES.map(stage => ({ stage, count: mfrs.filter(m=>normalizeStage(m.stage)===stage).length }));
   const maxIndustryCount = Math.max(1, ...industryStats.map(item => item.count));
   const maxStageCount = Math.max(1, ...stageStats.map(item => item.count));
@@ -3300,8 +3319,8 @@ const taskActivityFromTask = task => ({
     : weeklyActivities.filter(activity => activity.type===weeklyActivityFilter);
   const weeklyOwnerStats = PEOPLE.map(owner => ({owner,count:weeklyActivities.filter(activity => displayOwner(activity.created_by)===owner).length}));
   const stagePriority = {Negotiation:0,Proposal:1,Qualified:2,"Not Interested":3,Outreach:4,Prospect:5,Unqualified:6};
-  const hotProspects = [...mfrs]
-    .filter(m=>!["Closed Won","Closed Lost"].includes(m.stage))
+  const hotProspects = [...activeMfrs]
+    .filter(m=>m.stage!=="Closed Won")
     .sort((a,b)=>{
       const stageDiff = (stagePriority[a.stage] ?? 99) - (stagePriority[b.stage] ?? 99);
       if(stageDiff!==0) return stageDiff;
@@ -3316,7 +3335,7 @@ const taskActivityFromTask = task => ({
         <div style={{display:"flex",gap:6}}>
           {[["dashboard","Dashboard"],["contacts","Contacts"],["finder","Lead Finder"]].map(([value,label])=><button key={value} onClick={()=>setView(value)} style={{padding:"7px 16px",border:"none",borderRadius:3,background:view===value?"#1e3a8a":"transparent",color:view===value?"#fff":"#64748b",cursor:"pointer"}}>{label}</button>)}
         </div>
-        <button onClick={()=>openForm(tab)} style={{padding:"8px 18px",border:"none",borderRadius:3,background:"#ef4444",color:"#fff",fontWeight:700,cursor:"pointer"}}>+ Add Company</button>
+        <button onClick={()=>openForm(effectiveTab)} style={{padding:"8px 18px",border:"none",borderRadius:3,background:"#ef4444",color:"#fff",fontWeight:700,cursor:"pointer"}}>+ Add Company</button>
       </header>
 
       <main style={{flex:1,padding:28}}>
@@ -3324,7 +3343,7 @@ const taskActivityFromTask = task => ({
           <div className="fade" style={{display:"grid",gap:20}}>
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:16}}>
               {[
-                ["Manufacturers",mfrs.length,"","#1e3a8a","◌"],
+                ["Manufacturers",activeMfrs.length,hiddenMfrs.length+" hidden","#1e3a8a","◌"],
                 ["In Pipeline",pipe,"","#ef4444","◈"],
                 ["Vendors",vendors.length,preferredVendors+" preferred","#1d4ed8","◉"],
                 ["Lost Value","$"+(lostValue/1000).toFixed(0)+"k",lost.length+" lost contacts","#94a3b8","✕"],
@@ -3365,7 +3384,7 @@ const taskActivityFromTask = task => ({
                 <div className="mono" style={{padding:"14px 18px",fontSize:11,letterSpacing:".16em",color:"#6f84a6",textTransform:"uppercase",borderBottom:"1px solid #d8e2ef",background:"#f8fbff"}}>Pipeline by Stage</div>
                 <div style={{padding:"16px 18px",display:"grid",gap:10}}>
                   {stageStats.map(item=>(
-                    <div key={item.stage} onClick={()=>{setView("contacts"); setTab("manufacturer"); setStageF(item.stage); setIndF("All");}} style={{cursor:"pointer"}}>
+                    <div key={item.stage} onClick={()=>{setView("contacts"); setTab(HIDDEN_MANUFACTURER_STAGES.includes(item.stage) ? "hidden" : "manufacturer"); setStageF(item.stage); setIndF("All");}} style={{cursor:"pointer"}}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
                         <span className="condensed" style={{fontSize:12,fontWeight:700,letterSpacing:".04em",color:STAGE_COLORS[item.stage]||"#64748b",textTransform:"uppercase"}}>{item.stage}</span>
                         <span className="mono" style={{fontSize:11,color:"#8ea0bd"}}>{item.count}</span>
@@ -3679,14 +3698,14 @@ const taskActivityFromTask = task => ({
           <div className="fade" style={{display:"grid",gap:14}}>
             <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",position:"relative",top:"auto"}}>
               {Object.entries(TYPE_CFG).map(([key,cfg])=>(
-                <button key={key} onClick={()=>{setTab(key);setSearch("");setStageF("All");setReasonF("All");}} style={{padding:"7px 14px",borderRadius:3,border:"2px solid "+(tab===key?cfg.color:"#e2e8f0"),background:tab===key?cfg.color+"15":"#fff",color:tab===key?cfg.color:"#64748b",fontWeight:700,cursor:"pointer"}}>
-                  {cfg.icon} {cfg.label}
+                <button key={key} onClick={()=>{setTab(key);setSearch("");setStageF("All");setReasonF("All");}} style={{padding:"7px 14px",borderRadius:3,border:"2px solid "+(tab===key?cfg.color:"#e2e8f0"),background:tab===key?cfg.color+"15":"#fff",color:tab===key?cfg.color:"#64748b",fontWeight:700,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6}}>
+                  <span>{cfg.icon} {cfg.label}</span><span className="mono" style={{fontSize:10,color:tab===key?cfg.color:"#94a3b8"}}>{tabCounts[key] || 0}</span>
                 </button>
               ))}
               <input className="field" style={{maxWidth:260}} value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search company, contacts, notes..." />
-              {tab==="manufacturer" && <>
+              {isManufacturerTab && <>
                 <select className="field" style={{maxWidth:150}} value={stageF} onChange={e=>setStageF(e.target.value)}><option value="All">All Stages</option>{STAGES.map(s=><option key={s}>{s}</option>)}</select>
-                <select className="field" style={{maxWidth:180}} value={indF} onChange={async e=>{ const v=e.target.value; if(tab==="manufacturer" && selectedVisibleRecords.length && v!=="All"){ const ok = await bulkSetSelectedIndustry(v); if(ok) setIndF(v); } else setIndF(v); }}><option value="All">All Industries</option>{INDUSTRY_OPTIONS.map(i=><option key={i}>{i}</option>)}</select>
+                <select className="field" style={{maxWidth:180}} value={indF} onChange={async e=>{ const v=e.target.value; if(isManufacturerTab && selectedVisibleRecords.length && v!=="All"){ const ok = await bulkSetSelectedIndustry(v); if(ok) setIndF(v); } else setIndF(v); }}><option value="All">All Industries</option>{INDUSTRY_OPTIONS.map(i=><option key={i}>{i}</option>)}</select>
               </>}
               {tab==="lost" && <select className="field" style={{maxWidth:160}} value={reasonF} onChange={e=>setReasonF(e.target.value)}><option value="All">All Reasons</option>{LOST_REASONS.map(r=><option key={r}>{r}</option>)}</select>}
               <select className="field" style={{maxWidth:165}} value={sortBy} onChange={e=>setSortBy(e.target.value)}><option value="default">Sort: Default</option><option value="activity_asc">Oldest Activity</option><option value="activity_desc">Newest Activity</option></select>
@@ -3699,9 +3718,9 @@ const taskActivityFromTask = task => ({
               {activityDate && <button onClick={()=>setActivityDate("")} style={{padding:"8px 12px",border:"1px solid #cbd5e1",borderRadius:4,background:"#fff",color:"#64748b",cursor:"pointer"}}>Clear Date</button>}
               <div style={{flex:1}} />
               <button onClick={toggleSelectAllVisible} disabled={!list.length} style={{padding:"8px 14px",border:"1px solid #cbd5e1",borderRadius:4,background:list.length?"#fff":"#f8fafc",color:list.length?"#334155":"#94a3b8",cursor:list.length?"pointer":"not-allowed"}}>{allVisibleSelected ? "Clear Visible" : "Select All Visible"}</button>
-              <button onClick={bulkDeleteSelected} disabled={!selectedVisibleRecords.length} style={{padding:"8px 14px",border:"none",borderRadius:4,background:selectedVisibleRecords.length?"#ef4444":"#e2e8f0",color:"#fff",cursor:selectedVisibleRecords.length?"pointer":"not-allowed"}}>Delete Selected ({selectedVisibleRecords.length})</button>
-              {tab==="manufacturer" && !!selectedVisibleRecords.length && <div className="mono" style={{fontSize:10,color:"#8ea0bd"}}>Industry dropdown updates selected</div>}
-              <button onClick={()=>downloadCsv(exportRecordRows(exportRecords, tab, acts, tasks), exportFileName)} disabled={!exportRecords.length} style={{padding:"8px 14px",border:"1px solid #1e3a8a",borderRadius:4,background:exportRecords.length?"#eff6ff":"#f8fafc",color:exportRecords.length?"#1e3a8a":"#94a3b8",cursor:exportRecords.length?"pointer":"not-allowed"}}>{selectedVisibleRecords.length ? `Export Selected (${selectedVisibleRecords.length})` : "Export CSV"}</button>
+              <button onClick={bulkDeleteSelected} disabled={!canDeleteSelected} style={{padding:"8px 14px",border:"none",borderRadius:4,background:canDeleteSelected?"#ef4444":"#e2e8f0",color:"#fff",cursor:canDeleteSelected?"pointer":"not-allowed"}}>Delete Selected ({selectedVisibleRecords.length})</button>
+              {isManufacturerTab && !!selectedVisibleRecords.length && <div className="mono" style={{fontSize:10,color:"#8ea0bd"}}>Industry dropdown updates selected</div>}
+              <button onClick={()=>downloadCsv(exportRecordRows(exportRecords, effectiveTab, acts, tasks), exportFileName)} disabled={!exportRecords.length} style={{padding:"8px 14px",border:"1px solid #1e3a8a",borderRadius:4,background:exportRecords.length?"#eff6ff":"#f8fafc",color:exportRecords.length?"#1e3a8a":"#94a3b8",cursor:exportRecords.length?"pointer":"not-allowed"}}>{selectedVisibleRecords.length ? `Export Selected (${selectedVisibleRecords.length})` : "Export CSV"}</button>
               {tab==="manufacturer" && <label style={{padding:"8px 14px",border:"1px solid #22c55e",borderRadius:4,background:"#f0fdf4",color:"#15803d",cursor:"pointer"}}>Import CSV<input type="file" accept=".csv" style={{display:"none"}} onChange={e=>e.target.files?.[0]&&handleImport(e.target.files[0])} /></label>}
               {tab==="manufacturer" && !!importBatches.length && <>
                 <select className="field" style={{maxWidth:220}} value={selectedImportBatch?.id || ""} onChange={e=>setSelectedImportBatchId(e.target.value)}>
@@ -3718,7 +3737,7 @@ const taskActivityFromTask = task => ({
                   <th style={{padding:"10px 14px",borderBottom:"2px solid #e2e8f0",width:44}}>
                     <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAllVisible} disabled={!list.length} />
                   </th>
-                  {["Company",tab==="manufacturer"?"Industry":"Contact",tab==="manufacturer"?"Contacts":"Title",tab==="lost"?"Loss":"Stage","Last Activity"].map(h=><th key={h} className="mono" style={{padding:"10px 14px",fontSize:10,color:"#94a3b8",textAlign:"left",letterSpacing:".08em",borderBottom:"2px solid #e2e8f0"}}>{h}</th>)}
+                  {["Company",isManufacturerTab?"Industry":"Contact",isManufacturerTab?"Contacts":"Title",tab==="lost"?"Loss":"Stage","Last Activity"].map(h=><th key={h} className="mono" style={{padding:"10px 14px",fontSize:10,color:"#94a3b8",textAlign:"left",letterSpacing:".08em",borderBottom:"2px solid #e2e8f0"}}>{h}</th>)}
                 </tr></thead>
                 <tbody>
                   {!list.length && <tr><td colSpan="6" style={{padding:40,textAlign:"center",color:"#cbd5e1"}}>No records found</td></tr>}
@@ -3728,8 +3747,8 @@ const taskActivityFromTask = task => ({
                         <input type="checkbox" checked={selectedKeys.includes(recordKey(rec))} onChange={()=>toggleSelectRecord(rec)} />
                       </td>
                       <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9",fontWeight:700,color:"#0f172a"}}>{rec.company}</td>
-                      <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9",fontSize:12,color:"#64748b"}}>{tab==="manufacturer"?(isKnownIndustry(rec.industry) ? rec.industry : (rec.industry || OTHER_INDUSTRY_LABEL)):(rec.name||"—")}</td>
-                      <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9",fontSize:12,color:"#64748b"}}>{tab==="manufacturer"?((rec.contacts||[]).map(c=>c.name).filter(Boolean).slice(0,2).join(", ")||"—"):(rec.title||"—")}</td>
+                      <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9",fontSize:12,color:"#64748b"}}>{isManufacturerTab?(isKnownIndustry(rec.industry) ? rec.industry : (rec.industry || OTHER_INDUSTRY_LABEL)):(rec.name||"—")}</td>
+                      <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9",fontSize:12,color:"#64748b"}}>{isManufacturerTab?((rec.contacts||[]).map(c=>c.name).filter(Boolean).slice(0,2).join(", ")||"—"):(rec.title||"—")}</td>
                       <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9"}}>{tab==="lost"?<Tag label={rec.lostReason||"—"} color="#ef4444" />:<Pill label={rec.stage||"—"} color={STAGE_COLORS[rec.stage]||"#64748b"} />}</td>
                       <td className="mono" style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9",fontSize:11,color:rec.lastContact?"#64748b":"#cbd5e1"}}>{rec.lastContact||"—"}</td>
                     </tr>
