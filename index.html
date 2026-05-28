@@ -86,7 +86,6 @@ const IND_COLORS = {"Food and Beverage":"#f97316","Concrete":"#78716c","Metal Re
 const IND_ICONS = {"Food and Beverage":"◍","Concrete":"▦","Metal Refineries":"◉","Recycling":"↻","Aggregate / Asphalt":"▣","Packaging":"▤","Building Products":"▥","Others":"◧"};
 const TYPE_CFG = {
   manufacturer: { label: "Manufacturers", color: "#1e3a8a", icon: "⬡" },
-  hidden: { label: "Hidden", color: "#64748b", icon: "!" },
   vendor: { label: "Vendors", color: "#ef4444", icon: "◈" },
   lost: { label: "Lost", color: "#94a3b8", icon: "✕" },
 };
@@ -2199,7 +2198,7 @@ const taskActivityFromTask = task => ({
     if(!record) return toast2("Company not found");
     setShowTasksModal(false);
     setView("contacts");
-    setTab(record.type==="manufacturer" && isHiddenManufacturerRecord(record) ? "hidden" : record.type);
+    setTab(record.type);
     openRecord(record);
   },[resolveTaskRecord]);
   const openWeeklyActivityRecord = useCallback(activity => {
@@ -2207,7 +2206,7 @@ const taskActivityFromTask = task => ({
     if(!record) return toast2("Company not found");
     setShowWeeklyActivityModal(false);
     setView("contacts");
-    setTab(record.type==="manufacturer" && isHiddenManufacturerRecord(record) ? "hidden" : record.type);
+    setTab(record.type);
     openRecord(record);
   },[resolveActivityRecord]);
   const activitySearchByRecord = useMemo(()=>{
@@ -2264,12 +2263,7 @@ const taskActivityFromTask = task => ({
   },[activitySearchByRecord, taskSearchByRecord]);
   const filteredMfrs = useMemo(()=>{
     const q=search.trim().toLowerCase();
-    const base=mfrs.filter(m=>!isHiddenManufacturerRecord(m)&&matchesManufacturerSearch(m, q)&&(stageF==="All"||m.stage===stageF)&&matchesIndustryFilter(m.industry, indF)&&matchesActivityDate(m.lastContact, activityDate, activityMode));
-    return sortRecordsByActivity(base, sortBy);
-  },[mfrs,search,stageF,indF,sortBy,activityDate,activityMode,matchesManufacturerSearch]);
-  const filteredHiddenMfrs = useMemo(()=>{
-    const q=search.trim().toLowerCase();
-    const base=mfrs.filter(m=>isHiddenManufacturerRecord(m)&&matchesManufacturerSearch(m, q)&&(stageF==="All"||m.stage===stageF)&&matchesIndustryFilter(m.industry, indF)&&matchesActivityDate(m.lastContact, activityDate, activityMode));
+    const base=mfrs.filter(m=>matchesManufacturerSearch(m, q)&&(stageF==="All"||m.stage===stageF)&&matchesIndustryFilter(m.industry, indF)&&matchesActivityDate(m.lastContact, activityDate, activityMode));
     return sortRecordsByActivity(base, sortBy);
   },[mfrs,search,stageF,indF,sortBy,activityDate,activityMode,matchesManufacturerSearch]);
   const filteredOthers = useMemo(()=>{
@@ -3113,12 +3107,11 @@ const taskActivityFromTask = task => ({
     setSaving(false);
   };
 
-  const isManufacturerTab = tab==="manufacturer" || tab==="hidden";
-  const effectiveTab = tab==="hidden" ? "manufacturer" : tab;
-  const list = tab==="manufacturer" ? filteredMfrs : tab==="hidden" ? filteredHiddenMfrs : filteredOthers;
+  const isManufacturerTab = tab==="manufacturer";
+  const effectiveTab = tab;
+  const list = tab==="manufacturer" ? filteredMfrs : filteredOthers;
   const tabCounts = {
-    manufacturer: mfrs.filter(record => !isHiddenManufacturerRecord(record)).length,
-    hidden: mfrs.filter(isHiddenManufacturerRecord).length,
+    manufacturer: mfrs.length,
     vendor: vendors.length,
     lost: lost.length
   };
@@ -3145,7 +3138,7 @@ const taskActivityFromTask = task => ({
   const allVisibleSelected = visibleKeys.length>0 && visibleKeys.every(key => selectedKeys.includes(key));
   const exportRecords = selectedVisibleRecords.length ? selectedVisibleRecords : list;
   const exportFileName = `${tab}${selectedVisibleRecords.length ? "-selected" : ""}.csv`;
-  const canDeleteSelected = tab!=="hidden" && !!selectedVisibleRecords.length;
+  const canDeleteSelected = !!selectedVisibleRecords.length;
   const syncDetailPanelHeight = useCallback(() => {
     const measure = element => {
       if(!element) return 0;
@@ -3277,14 +3270,13 @@ const taskActivityFromTask = task => ({
     setShowWeeklyActivityModal(true);
   };
   const activeMfrs = mfrs.filter(record => !isHiddenManufacturerRecord(record));
-  const hiddenMfrs = mfrs.filter(isHiddenManufacturerRecord);
   const pipe = activeMfrs.filter(m=>m.stage!=="Closed Won").length;
   const hot = activeMfrs.filter(m=>(m.tags||[]).includes("Hot")).length;
   const lostValue = lost.reduce((sum,r)=>sum+(r.value||0),0);
   const soFacilities = activeMfrs.filter(m=>m.has_so_facilities).length;
   const preferredVendors = vendors.filter(v=>(v.tags||[]).includes("Preferred")).length;
-  const industryStats = INDUSTRY_OPTIONS.map(industry => ({ industry, count: activeMfrs.filter(m=>getIndustryBucket(m.industry)===industry).length }));
-  const stageStats = STAGES.map(stage => ({ stage, count: activeMfrs.filter(m=>normalizeStage(m.stage)===stage).length }));
+  const industryStats = INDUSTRY_OPTIONS.map(industry => ({ industry, count: mfrs.filter(m=>getIndustryBucket(m.industry)===industry).length }));
+  const stageStats = STAGES.map(stage => ({ stage, count: mfrs.filter(m=>normalizeStage(m.stage)===stage).length }));
   const maxIndustryCount = Math.max(1, ...industryStats.map(item => item.count));
   const maxStageCount = Math.max(1, ...stageStats.map(item => item.count));
   const earliestWeeklyActivityDate = [...acts].map(activity => String(activity.date || "").trim()).filter(Boolean).sort()[0] || "";
@@ -3343,7 +3335,7 @@ const taskActivityFromTask = task => ({
           <div className="fade" style={{display:"grid",gap:20}}>
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:16}}>
               {[
-                ["Manufacturers",activeMfrs.length,hiddenMfrs.length+" hidden","#1e3a8a","◌"],
+                ["Manufacturers",mfrs.length,"","#1e3a8a","◌"],
                 ["In Pipeline",pipe,"","#ef4444","◈"],
                 ["Vendors",vendors.length,preferredVendors+" preferred","#1d4ed8","◉"],
                 ["Lost Value","$"+(lostValue/1000).toFixed(0)+"k",lost.length+" lost contacts","#94a3b8","✕"],
@@ -3384,7 +3376,7 @@ const taskActivityFromTask = task => ({
                 <div className="mono" style={{padding:"14px 18px",fontSize:11,letterSpacing:".16em",color:"#6f84a6",textTransform:"uppercase",borderBottom:"1px solid #d8e2ef",background:"#f8fbff"}}>Pipeline by Stage</div>
                 <div style={{padding:"16px 18px",display:"grid",gap:10}}>
                   {stageStats.map(item=>(
-                    <div key={item.stage} onClick={()=>{setView("contacts"); setTab(HIDDEN_MANUFACTURER_STAGES.includes(item.stage) ? "hidden" : "manufacturer"); setStageF(item.stage); setIndF("All");}} style={{cursor:"pointer"}}>
+                    <div key={item.stage} onClick={()=>{setView("contacts"); setTab("manufacturer"); setStageF(item.stage); setIndF("All");}} style={{cursor:"pointer"}}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
                         <span className="condensed" style={{fontSize:12,fontWeight:700,letterSpacing:".04em",color:STAGE_COLORS[item.stage]||"#64748b",textTransform:"uppercase"}}>{item.stage}</span>
                         <span className="mono" style={{fontSize:11,color:"#8ea0bd"}}>{item.count}</span>
