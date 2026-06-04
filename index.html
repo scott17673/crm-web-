@@ -1659,7 +1659,11 @@ const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onAut
         if(!url) return;
         e.preventDefault();
         e.stopPropagation();
-        window.open(url, "_blank", "noopener,noreferrer");
+        if(url.startsWith("data:image/")){
+          window.dispatchEvent(new CustomEvent("note-image-click", {detail:{src:url}}));
+        } else {
+          window.open(url, "_blank", "noopener,noreferrer");
+        }
       }}
       onClick={e=>{
         const url = clickedExternalUrl(e, innerRef.current);
@@ -1692,6 +1696,17 @@ function App(){
   const [vendors,setVendors] = useState([]);
   const [lost,setLost] = useState([]);
   const [acts,setActs] = useState([]);
+  const [noteImagePreview,setNoteImagePreview] = useState(null);
+  useEffect(()=>{
+    const onClick = e => setNoteImagePreview(e.detail?.src || null);
+    const onKey = e => { if(e.key === "Escape") setNoteImagePreview(null); };
+    window.addEventListener("note-image-click", onClick);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("note-image-click", onClick);
+      window.removeEventListener("keydown", onKey);
+    };
+  },[]);
   const [loading,setLoading] = useState(true);
   const [saving,setSaving] = useState(false);
   const [toast,setToast] = useState("");
@@ -4541,6 +4556,12 @@ const taskActivityFromTask = task => ({
 
       {toast && <div style={{position:"fixed",left:"50%",bottom:24,transform:"translateX(-50%)",background:"#0f172a",color:"#f8fafc",padding:"10px 20px",borderRadius:6,boxShadow:"0 4px 20px rgba(0,0,0,.25)",zIndex:120}}>{toast}</div>}
       {saving && <div className="mono" style={{position:"fixed",right:24,bottom:24,background:"#1e3a8a",color:"#fff",padding:"8px 14px",borderRadius:6,zIndex:121}}>Saving...</div>}
+      {noteImagePreview && (
+        <div onClick={()=>setNoteImagePreview(null)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,.85)",display:"grid",placeItems:"center",padding:24,zIndex:130,cursor:"zoom-out"}}>
+          <img src={noteImagePreview} alt="" style={{maxWidth:"100%",maxHeight:"100%",boxShadow:"0 24px 60px rgba(0,0,0,.5)",borderRadius:4}} onClick={e=>e.stopPropagation()} />
+          <button onClick={()=>setNoteImagePreview(null)} style={{position:"absolute",top:18,right:24,width:36,height:36,border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",cursor:"pointer",color:"#475569",fontSize:18,fontWeight:700}}>×</button>
+        </div>
+      )}
     </div>
   );
 }
