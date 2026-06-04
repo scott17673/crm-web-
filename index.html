@@ -1364,6 +1364,53 @@ const linkifiedHtml = text => String(text || "").split(EXTERNAL_LINK_RE).map(par
   : escapeHtml(part)
 ).join("");
 const editableTextFromElement = element => String(element?.innerText || "").replace(/\u00A0/g," ").replace(/\r/g,"").replace(/\n$/, "");
+const NOTE_IMAGE_RAW_CAP = 1.5 * 1024 * 1024;
+const NOTE_IMAGE_DATA_URL_CAP = Math.ceil(NOTE_IMAGE_RAW_CAP * 4 / 3) + 1024;
+const NOTE_IMAGE_MAX_DIM = 1600;
+const NOTE_IMAGE_JPEG_QUALITY = 0.85;
+const NOTE_IMAGE_STYLE = "max-width:100%;max-height:280px;display:block;margin:6px 0;border-radius:4px;border:1px solid #d7dfeb;cursor:zoom-in";
+const isAllowedNoteImageSrc = src => typeof src === "string" && src.startsWith("data:image/") && src.length <= NOTE_IMAGE_DATA_URL_CAP;
+const readFileAsDataUrl = file => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result || ""));
+  reader.onerror = () => reject(reader.error || new Error("read failed"));
+  reader.readAsDataURL(file);
+});
+const downscaleNoteImage = file => new Promise((resolve, reject) => {
+  const objectUrl = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    try {
+      const longest = Math.max(img.naturalWidth, img.naturalHeight);
+      const scale = longest > NOTE_IMAGE_MAX_DIM ? NOTE_IMAGE_MAX_DIM / longest : 1;
+      const width = Math.max(1, Math.round(img.naturalWidth * scale));
+      const height = Math.max(1, Math.round(img.naturalHeight * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL("image/jpeg", NOTE_IMAGE_JPEG_QUALITY);
+      URL.revokeObjectURL(objectUrl);
+      resolve(dataUrl.length <= NOTE_IMAGE_DATA_URL_CAP ? dataUrl : null);
+    } catch(err) {
+      URL.revokeObjectURL(objectUrl);
+      reject(err);
+    }
+  };
+  img.onerror = () => {
+    URL.revokeObjectURL(objectUrl);
+    reject(new Error("image decode failed"));
+  };
+  img.src = objectUrl;
+});
+const readImageFileForNote = async file => {
+  if(file.size <= NOTE_IMAGE_RAW_CAP){
+    const dataUrl = await readFileAsDataUrl(file);
+    if(dataUrl.length <= NOTE_IMAGE_DATA_URL_CAP) return dataUrl;
+  }
+  return downscaleNoteImage(file);
+};
 const cleanupRichNotesHtml = html => String(html || "")
   .replace(/(?:\s*<br>\s*){3,}/gi, "<br><br>")
   .replace(/^(?:\s*<br>\s*)+|(?:\s*<br>\s*)+$/gi, "");
@@ -1383,6 +1430,7 @@ const richNotesPlainText = raw => {
     if(node.nodeType!==1) return "";
     const tag = node.tagName.toLowerCase();
     if(tag==="br") return "\n";
+    if(tag==="img") return "[image]";
     const inner = walk(node.childNodes);
     if(["div","p","li"].includes(tag)) return `${inner}\n`;
     return inner;
@@ -1394,6 +1442,10 @@ const serializeRichNotesNode = node => {
   if(node.nodeType!==1) return "";
   const tag = node.tagName.toLowerCase();
   if(tag==="br") return "<br>";
+  if(tag==="img"){
+    const src = String(node.getAttribute("src") || "");
+    return isAllowedNoteImageSrc(src) ? `<img src="${escapeHtml(src)}" data-note-image>` : "";
+  }
   if(tag==="a"){
     const text = (node.textContent || "").trim();
     const href = String(node.getAttribute("href") || "").trim();
@@ -1421,6 +1473,12 @@ const renderRichNotesHtml = raw => {
     if(node.nodeType!==1) return "";
     const tag = node.tagName.toLowerCase();
     if(tag==="br") return "<br>";
+    if(tag==="img"){
+      const src = String(node.getAttribute("src") || "");
+      if(!isAllowedNoteImageSrc(src)) return "";
+      const safeSrc = escapeHtml(src);
+      return `<img src="${safeSrc}" data-note-image data-note-image-src="${safeSrc}" style="${NOTE_IMAGE_STYLE}">`;
+    }
     if(isBoldRichNode(node)){
       const inner = walk(node.childNodes);
       return inner ? `<strong>${inner}</strong>` : "";
@@ -1460,6 +1518,8 @@ const clickedExternalUrl = (event, root) => {
   const node = event.target && (event.target.nodeType === 1 ? event.target : event.target.parentElement);
   const tagged = node?.closest?.("[data-external-url]");
   if(tagged) return tagged.getAttribute("data-external-url") || "";
+  const image = node?.closest?.("[data-note-image-src]");
+  if(image) return image.getAttribute("data-note-image-src") || "";
   return "";
 };
 const LinkifiedText = ({ text, style }) => {
@@ -1528,6 +1588,46 @@ const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onAut
         onMeasure?.();
       }}
       onPaste={e=>{
+        if(richText){
+          const items = Array.from(e.clipboardData?.items || []);
+          const imageItems = items.filter(item => item.kind === "file" && item.type.startsWith("image/"));
+          if(imageItems.length){
+            e.preventDefault();
+            const selection = window.getSelection();
+            const savedRange = selection?.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
+            const editor = innerRef.current;
+            const restoreSelection = () => {
+              if(!editor) return;
+              editor.focus();
+              if(!savedRange) return;
+              const sel = window.getSelection();
+              sel?.removeAllRanges();
+              sel.addRange(savedRange);
+            };
+            const insertImage = dataUrl => {
+              restoreSelection();
+              insertHtmlAtSelection(`<img src="${escapeHtml(dataUrl)}" data-note-image>`);
+              window.requestAnimationFrame(()=>{
+                const nextValue = richNotesFromElement(editor);
+                onChange(nextValue);
+                scheduleAutoSave(nextValue);
+                onMeasure?.();
+              });
+            };
+            imageItems.forEach(item => {
+              const file = item.getAsFile();
+              if(!file) return;
+              readImageFileForNote(file).then(dataUrl => {
+                if(dataUrl) insertImage(dataUrl);
+                else window.alert("Image too large to paste — please attach a smaller copy.");
+              }).catch(err => {
+                console.error("note image paste failed", err);
+                window.alert("Couldn't read pasted image.");
+              });
+            });
+            return;
+          }
+        }
         e.preventDefault();
         const html = richText
           ? renderRichNotesHtml(
@@ -4020,7 +4120,7 @@ const taskActivityFromTask = task => ({
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>NOTES</div>
                   <EditableLinkField
                     ref={notesBoxRef}
-                    richText={selected.type==="manufacturer"}
+                    richText={true}
                     height={detailPanelHeight}
                     placeholder="Internal notes, follow-up reminders..."
                     value={notesDraft}
