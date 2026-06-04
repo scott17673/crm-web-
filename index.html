@@ -34,6 +34,10 @@ window.CRM_CONFIG = {
   .editablebox{width:100%;padding:8px 10px;border:1px solid #dbe2ea;border-radius:4px;background:#fff;white-space:pre-wrap;word-break:break-word;line-height:1.7;font-size:13px;color:#475569;cursor:text;overflow:hidden}
   .editablebox:empty:before{content:attr(data-placeholder);color:#94a3b8}
   .editablebox div,.editablebox p{margin:0}
+  .note-image-wrap{position:relative;display:block;width:max-content;max-width:100%;margin:6px 0}
+  .note-image-wrap .note-image-delete-btn{position:absolute;top:6px;right:6px;width:24px;height:24px;border-radius:12px;border:none;background:rgba(15,23,42,.78);color:#fff;font-size:14px;font-weight:700;line-height:1;cursor:pointer;opacity:0;transition:opacity .12s;display:flex;align-items:center;justify-content:center;padding:0}
+  .note-image-wrap:hover .note-image-delete-btn{opacity:1}
+  .note-image-wrap .note-image-delete-btn:hover{background:#ef4444}
   @keyframes fade{from{opacity:0}to{opacity:1}}
   @keyframes slide{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
   @keyframes spin{to{transform:rotate(360deg)}}
@@ -1368,7 +1372,7 @@ const NOTE_IMAGE_RAW_CAP = 1.5 * 1024 * 1024;
 const NOTE_IMAGE_DATA_URL_CAP = Math.ceil(NOTE_IMAGE_RAW_CAP * 4 / 3) + 1024;
 const NOTE_IMAGE_MAX_DIM = 1600;
 const NOTE_IMAGE_JPEG_QUALITY = 0.85;
-const NOTE_IMAGE_STYLE = "max-width:100%;max-height:280px;display:block;margin:6px 0;border-radius:4px;border:1px solid #d7dfeb;cursor:zoom-in";
+const NOTE_IMAGE_STYLE = "display:block;max-width:100%;max-height:280px;border-radius:4px;border:1px solid #d7dfeb;cursor:zoom-in";
 const isAllowedNoteImageSrc = src => typeof src === "string" && src.startsWith("data:image/") && src.length <= NOTE_IMAGE_DATA_URL_CAP;
 const readFileAsDataUrl = file => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -1442,6 +1446,7 @@ const serializeRichNotesNode = node => {
   if(node.nodeType!==1) return "";
   const tag = node.tagName.toLowerCase();
   if(tag==="br") return "<br>";
+  if(tag==="button") return "";
   if(tag==="img"){
     const src = String(node.getAttribute("src") || "");
     return isAllowedNoteImageSrc(src) ? `<img src="${escapeHtml(src)}" data-note-image>` : "";
@@ -1477,7 +1482,7 @@ const renderRichNotesHtml = raw => {
       const src = String(node.getAttribute("src") || "");
       if(!isAllowedNoteImageSrc(src)) return "";
       const safeSrc = escapeHtml(src);
-      return `<img src="${safeSrc}" data-note-image data-note-image-src="${safeSrc}" style="${NOTE_IMAGE_STYLE}">`;
+      return `<span class="note-image-wrap" contenteditable="false"><img src="${safeSrc}" data-note-image data-note-image-src="${safeSrc}" style="${NOTE_IMAGE_STYLE}"><button type="button" class="note-image-delete-btn" aria-label="Delete image">×</button></span>`;
     }
     if(isBoldRichNode(node)){
       const inner = walk(node.childNodes);
@@ -1655,6 +1660,21 @@ const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onAut
         onBlurSave?.(nextValue);
       }}
       onPointerDown={e=>{
+        const node = e.target.nodeType === 1 ? e.target : e.target.parentElement;
+        const deleteBtn = node?.closest?.(".note-image-delete-btn");
+        if(deleteBtn){
+          e.preventDefault();
+          e.stopPropagation();
+          const wrap = deleteBtn.closest(".note-image-wrap");
+          if(wrap && innerRef.current?.contains(wrap)){
+            wrap.remove();
+            const nextValue = richNotesFromElement(innerRef.current);
+            onChange(nextValue);
+            scheduleAutoSave(nextValue);
+            onMeasure?.();
+          }
+          return;
+        }
         const url = clickedExternalUrl(e, innerRef.current);
         if(!url) return;
         e.preventDefault();
@@ -1666,6 +1686,12 @@ const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onAut
         }
       }}
       onClick={e=>{
+        const node = e.target.nodeType === 1 ? e.target : e.target.parentElement;
+        if(node?.closest?.(".note-image-delete-btn")){
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
         const url = clickedExternalUrl(e, innerRef.current);
         if(!url) return;
         e.preventDefault();
