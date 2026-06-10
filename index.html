@@ -80,6 +80,7 @@ const DEFAULT_OWNER = PEOPLE[0];
 const INTERNAL_TAG_PREFIX = "__";
 const IMPORT_BATCH_NEW_PREFIX = "__import_batch_new:";
 const FINDER_SKIP_TAG = "__finder_skip";
+const DELETED_TAG = "__deleted";
 const FINDER_SYNC_TAG = "__finder_sync";
 const FINDER_CONTACTS_V2_TAG = "__finder_contacts_v2";
 const FINDER_CONTACT_FIX_CUTOFF = "2026-05-08T12:09:00.000Z";
@@ -96,6 +97,7 @@ const TYPE_CFG = {
 const STAGE_COLORS = {Unqualified:"#64748b",Prospect:"#94a3b8",Outreach:"#1e40af","Not Interested":"#b45309",Qualified:"#1e3a8a",Proposal:"#ef4444",Negotiation:"#f97316","Closed Won":"#22c55e","Closed Lost":"#64748b"};
 const HIDDEN_MANUFACTURER_STAGES = ["Unqualified","Not Interested","Closed Lost"];
 const isHiddenManufacturerRecord = record => !!record && (record.tags?.includes(FINDER_SKIP_TAG) || HIDDEN_MANUFACTURER_STAGES.includes(record.stage));
+const isDeletedRecord = record => !!record && !!record.tags?.includes(DELETED_TAG);
 const LEAD_FINDER_STATE_KEY = "ed_lead_finder_state";
 const LEAD_FINDER_CONFIG_KEY = "ed_lead_finder_config";
 const LEAD_FINDER_OPENAI_URL = "https://api.openai.com/v1/responses";
@@ -2313,7 +2315,8 @@ const taskActivityFromTask = task => ({
   },[]);
 
   const all = useMemo(() => [...mfrs,...vendors,...lost], [mfrs,vendors,lost]);
-  const importBatches = useMemo(() => buildImportBatchSummaries(all), [all]);
+  const visibleMfrs = useMemo(() => mfrs.filter(record => !isDeletedRecord(record)), [mfrs]);
+  const importBatches = useMemo(() => buildImportBatchSummaries(all.filter(record => !isDeletedRecord(record))), [all]);
   const selectedImportBatch = importBatches.find(batch => batch.id===selectedImportBatchId) || importBatches[0] || null;
   useEffect(()=>{
     setSelectedImportBatchId(current => importBatches.some(batch => batch.id===current) ? current : (importBatches[0]?.id || ""));
@@ -2404,9 +2407,9 @@ const taskActivityFromTask = task => ({
   },[activitySearchByRecord, taskSearchByRecord]);
   const filteredMfrs = useMemo(()=>{
     const q=search.trim().toLowerCase();
-    const base=mfrs.filter(m=>matchesManufacturerSearch(m, q)&&(stageF==="All"||m.stage===stageF)&&matchesIndustryFilter(m.industry, indF)&&matchesActivityDate(m.lastContact, activityDate, activityMode));
+    const base=visibleMfrs.filter(m=>matchesManufacturerSearch(m, q)&&(stageF==="All"||m.stage===stageF)&&matchesIndustryFilter(m.industry, indF)&&matchesActivityDate(m.lastContact, activityDate, activityMode));
     return sortRecordsByActivity(base, sortBy);
-  },[mfrs,search,stageF,indF,sortBy,activityDate,activityMode,matchesManufacturerSearch]);
+  },[visibleMfrs,search,stageF,indF,sortBy,activityDate,activityMode,matchesManufacturerSearch]);
   const filteredOthers = useMemo(()=>{
     const q=search.trim().toLowerCase();
     const base=(tab==="vendor"?vendors:lost).filter(r=>matchesOtherSearch(r, q)&&(tab!=="lost"?(stageF==="All"||r.stage===stageF):(reasonF==="All"||r.lostReason===reasonF))&&matchesActivityDate(r.lastContact, activityDate, activityMode));
@@ -2969,7 +2972,7 @@ const taskActivityFromTask = task => ({
         const { error } = await query;
         if(error) throw error;
       };
-      // Soft-delete manufacturers — tag with __finder_skip so the finder never re-imports them
+      // Soft-delete manufacturers — tag with __deleted (hidden from the CRM UI) + __finder_skip so the finder never re-imports them
       const manufacturerRecords = records.filter(r=>r.type==="manufacturer");
       const vendorIds = records.filter(r=>r.type==="vendor").map(r=>r.id);
       const lostIds = records.filter(r=>r.type==="lost").map(r=>r.id);
@@ -2977,7 +2980,7 @@ const taskActivityFromTask = task => ({
       if(manufacturerRecords.length){
         for(const mfr of manufacturerRecords){
           const tags = Array.isArray(mfr.tags) ? mfr.tags : [];
-          const newTags = tags.includes(FINDER_SKIP_TAG) ? tags : [...tags, FINDER_SKIP_TAG];
+          const newTags = [...tags, ...[FINDER_SKIP_TAG, DELETED_TAG].filter(tag => !tags.includes(tag))];
           await run(sb.from("manufacturers").update({tags: newTags, stage: "Closed Lost"}).eq("id", mfr.id));
         }
       }
@@ -3011,7 +3014,7 @@ const taskActivityFromTask = task => ({
     const normalizedBatchId = String(batchId || "").trim();
     if(!normalizedBatchId) return;
     const batchTag = `${IMPORT_BATCH_NEW_PREFIX}${normalizedBatchId}`;
-    const records = all.filter(record => uniqueTags(record.tags).includes(batchTag));
+    const records = all.filter(record => uniqueTags(record.tags).includes(batchTag) && !isDeletedRecord(record));
     if(!records.length) return toast2("No tracked companies are left in that batch.");
     if(!window.confirm(`Delete ${records.length} record${records.length===1?"":"s"} from import batch ${formatImportBatchId(normalizedBatchId)}?`)) return;
     await deleteRecords(records);
@@ -3252,7 +3255,7 @@ const taskActivityFromTask = task => ({
   const effectiveTab = tab;
   const list = tab==="manufacturer" ? filteredMfrs : filteredOthers;
   const tabCounts = {
-    manufacturer: mfrs.length,
+    manufacturer: visibleMfrs.length,
     vendor: vendors.length,
     lost: lost.length
   };
@@ -3410,14 +3413,14 @@ const taskActivityFromTask = task => ({
     setWeeklyActivityFilter(type || "All");
     setShowWeeklyActivityModal(true);
   };
-  const activeMfrs = mfrs.filter(record => !isHiddenManufacturerRecord(record));
+  const activeMfrs = visibleMfrs.filter(record => !isHiddenManufacturerRecord(record));
   const pipe = activeMfrs.filter(m=>m.stage!=="Closed Won").length;
   const hot = activeMfrs.filter(m=>(m.tags||[]).includes("Hot")).length;
   const lostValue = lost.reduce((sum,r)=>sum+(r.value||0),0);
   const soFacilities = activeMfrs.filter(m=>m.has_so_facilities).length;
   const preferredVendors = vendors.filter(v=>(v.tags||[]).includes("Preferred")).length;
-  const industryStats = INDUSTRY_OPTIONS.map(industry => ({ industry, count: mfrs.filter(m=>getIndustryBucket(m.industry)===industry).length }));
-  const stageStats = STAGES.map(stage => ({ stage, count: mfrs.filter(m=>normalizeStage(m.stage)===stage).length }));
+  const industryStats = INDUSTRY_OPTIONS.map(industry => ({ industry, count: visibleMfrs.filter(m=>getIndustryBucket(m.industry)===industry).length }));
+  const stageStats = STAGES.map(stage => ({ stage, count: visibleMfrs.filter(m=>normalizeStage(m.stage)===stage).length }));
   const maxIndustryCount = Math.max(1, ...industryStats.map(item => item.count));
   const maxStageCount = Math.max(1, ...stageStats.map(item => item.count));
   const earliestWeeklyActivityDate = [...acts].map(activity => String(activity.date || "").trim()).filter(Boolean).sort()[0] || "";
@@ -3476,7 +3479,7 @@ const taskActivityFromTask = task => ({
           <div className="fade" style={{display:"grid",gap:20}}>
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:16}}>
               {[
-                ["Manufacturers",mfrs.length,"","#1e3a8a","◌"],
+                ["Manufacturers",visibleMfrs.length,"","#1e3a8a","◌"],
                 ["In Pipeline",pipe,"","#ef4444","◈"],
                 ["Vendors",vendors.length,preferredVendors+" preferred","#1d4ed8","◉"],
                 ["Lost Value","$"+(lostValue/1000).toFixed(0)+"k",lost.length+" lost contacts","#94a3b8","✕"],
