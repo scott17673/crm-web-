@@ -1157,7 +1157,7 @@ const buildMergedImportRowsByKey = rows => {
 const exportActivitiesForRecord = (record, acts=[]) => [...(acts || [])]
   .filter(act => `${act.contact_type || "manufacturer"}:${act.contactId}`===recordKey(record))
   .sort((a,b) => String(b.date || "").localeCompare(String(a.date || "")))
-  .map(act => [act.date || "", act.type || "", act.created_by || "", act.note || ""].filter(Boolean).join(" | "))
+  .map(act => [act.date || "", act.type || "", act.created_by || "", richNotesPlainText(act.note || "")].filter(Boolean).join(" | "))
   .join(" ;; ");
 const exportTasksForRecord = (record, tasks=[]) => sortTasksByNearest((tasks || []).filter(task => taskMatchesRecord(task, record)))
   .map(task => [task.due_date || "No due date", task.done ? "Done" : "Open", task.owner || "", task.title || ""].filter(Boolean).join(" | "))
@@ -1472,7 +1472,8 @@ const richNotesFromHtml = rawHtml => {
   return cleanupRichNotesHtml(Array.from(template.content.childNodes || []).map(serializeRichNotesNode).join(""));
 };
 const richNotesFromElement = element => richNotesFromHtml(element?.innerHTML || "");
-const renderRichNotesHtml = raw => {
+const renderRichNotesHtml = (raw, options) => {
+  const readOnly = !!(options && options.readOnly);
   const template = document.createElement("template");
   template.innerHTML = String(raw || "");
   const walk = nodes => Array.from(nodes || []).map(node => {
@@ -1484,6 +1485,9 @@ const renderRichNotesHtml = raw => {
       const src = String(node.getAttribute("src") || "");
       if(!isAllowedNoteImageSrc(src)) return "";
       const safeSrc = escapeHtml(src);
+      if(readOnly){
+        return `<img src="${safeSrc}" data-note-image-src="${safeSrc}" style="${NOTE_IMAGE_STYLE}">`;
+      }
       return `<span class="note-image-wrap" contenteditable="false"><img src="${safeSrc}" data-note-image data-note-image-src="${safeSrc}" style="${NOTE_IMAGE_STYLE}"><button type="button" class="note-image-delete-btn" aria-label="Delete image">×</button></span>`;
     }
     if(isBoldRichNode(node)){
@@ -1529,6 +1533,29 @@ const clickedExternalUrl = (event, root) => {
   if(image) return image.getAttribute("data-note-image-src") || "";
   return "";
 };
+const RichNotesView = ({ html, style }) => {
+  const ref = useRef(null);
+  const handleClick = e => {
+    const url = clickedExternalUrl(e, ref.current);
+    if(!url) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if(url.startsWith("data:image/")){
+      window.dispatchEvent(new CustomEvent("note-image-click", {detail:{src:url}}));
+    } else {
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+  };
+  return (
+    <div
+      ref={ref}
+      style={{whiteSpace:"pre-wrap",wordBreak:"break-word",...style}}
+      dangerouslySetInnerHTML={{__html: renderRichNotesHtml(html || "", {readOnly:true})}}
+      onPointerDown={handleClick}
+      onClick={handleClick}
+    />
+  );
+};
 const LinkifiedText = ({ text, style }) => {
   const parts = String(text || "").split(EXTERNAL_LINK_RE);
   return (
@@ -1541,7 +1568,7 @@ const LinkifiedText = ({ text, style }) => {
   );
 };
 
-const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onAutoSave, onMeasure, placeholder, height, style, richText=false }, forwardedRef) => {
+const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onAutoSave, onMeasure, onKeyDown, placeholder, height, style, richText=false, autoFocus=false }, forwardedRef) => {
   const innerRef = useRef(null);
   const latestValueRef = useRef(value || "");
   const saveTimerRef = useRef(null);
@@ -1558,7 +1585,9 @@ const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onAut
 
   useEffect(()=>{
     const element = innerRef.current;
-    if(!element || document.activeElement===element) return;
+    if(!element) return;
+    const focused = document.activeElement===element;
+    if(focused && (value || "")) return;
     const html = richText ? renderRichNotesHtml(value) : linkifiedHtml(value);
     if(element.innerHTML !== html) element.innerHTML = html;
   },[value, richText]);
@@ -1580,6 +1609,19 @@ const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onAut
     }
   },[onAutoSave]);
 
+  useEffect(()=>{
+    if(autoFocus && innerRef.current){
+      const element = innerRef.current;
+      element.focus();
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      range.collapse(false);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    }
+  },[]);
+
   return (
     <div
       ref={innerRef}
@@ -1588,6 +1630,7 @@ const EditableLinkField = React.forwardRef(({ value, onChange, onBlurSave, onAut
       suppressContentEditableWarning
       data-placeholder={placeholder}
       style={{height,minHeight:height,border:"1px solid #eef2f7",background:"#fff",...style}}
+      onKeyDown={onKeyDown}
       onInput={e=>{
         const nextValue = richText ? richNotesFromElement(e.currentTarget) : editableTextFromElement(e.currentTarget);
         onChange(nextValue);
@@ -2357,7 +2400,7 @@ const taskActivityFromTask = task => ({
     const map = new Map();
     acts.forEach(act => {
       const key = `${act.contact_type || "manufacturer"}:${act.contactId}`;
-      const chunk = [act.type, act.note, act.date, act.created_by].filter(Boolean).join(" ");
+      const chunk = [act.type, richNotesPlainText(act.note || ""), act.date, act.created_by].filter(Boolean).join(" ");
       map.set(key, `${map.get(key) || ""} ${chunk}`.trim());
     });
     return map;
@@ -2915,8 +2958,8 @@ const taskActivityFromTask = task => ({
     setEditingActDraft({type:activity.type || "Call",note:activity.note || "",created_by:normalizeOwner(activity.created_by)});
   };
   const saveActivityEdit = async id => {
-    const note = String(editingActDraft.note || "").trim();
-    if(!note){
+    const note = String(editingActDraft.note || "");
+    if(!richNotesPlainText(note).trim()){
       setEditingActId(null);
       setEditingActDraft(createEmptyActivityEditDraft());
       return;
@@ -2933,7 +2976,7 @@ const taskActivityFromTask = task => ({
   };
 
   const logActivity = async () => {
-    if(!selected || !newAct.note.trim()) return;
+    if(!selected || !richNotesPlainText(newAct.note).trim()) return;
     setSaving(true);
     const activityDate = newAct.date || today();
     const payload={contact_id:selected.id,contact_type:selected.type,type:newAct.type,note:newAct.note,date:activityDate,created_by:normalizeOwner(newAct.created_by)};
@@ -4241,8 +4284,15 @@ const taskActivityFromTask = task => ({
                 <div style={{paddingTop:18,borderTop:"1px solid #e8eef6"}}>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:10}}>LOG ACTIVITY</div>
                   <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>{["Call","Email","Meeting","Note"].map(t=><button key={t} onClick={()=>{ const next = {...newAct,type:t}; setNewAct(next); syncActivityDraft(selected,next); }} style={{padding:"6px 14px",borderRadius:3,border:"2px solid "+(newAct.type===t?"#1e3a8a":"#d7dfeb"),background:newAct.type===t?"#eef4ff":"#fff",color:newAct.type===t?"#1e3a8a":"#8ea0bd",cursor:"pointer",fontWeight:800,fontSize:12,letterSpacing:".05em"}}>{t.toUpperCase()}</button>)}</div>
-                  <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 136px 120px 64px",gap:8,marginBottom:10}}>
-                    <input className="field" value={newAct.note} onChange={e=>{ const next = {...newAct,note:e.target.value}; setNewAct(next); syncActivityDraft(selected,next); }} placeholder="Add a note..." style={{background:"#fbfcfe"}} onKeyDown={e=>e.key==="Enter"&&logActivity()} />
+                  <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 136px 120px 64px",gap:8,marginBottom:10,alignItems:"start"}}>
+                    <EditableLinkField
+                      richText
+                      value={newAct.note}
+                      onChange={v=>{ const next = {...newAct,note:v}; setNewAct(next); syncActivityDraft(selected,next); }}
+                      placeholder="Add a note..."
+                      style={{background:"#fbfcfe",minHeight:38,padding:"8px 11px"}}
+                      onKeyDown={e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); logActivity(); } }}
+                    />
                     <input className="field mono" type="date" value={newAct.date} onChange={e=>{ const next = {...newAct,date:e.target.value}; setNewAct(next); syncActivityDraft(selected,next); }} />
                     <select className="field mono" value={normalizeOwner(newAct.created_by)} onChange={e=>{ const next = {...newAct,created_by:normalizeOwner(e.target.value)}; setNewAct(next); syncActivityDraft(selected,next); }}>
                       {PEOPLE.map(person=><option key={person}>{person}</option>)}
@@ -4267,11 +4317,18 @@ const taskActivityFromTask = task => ({
                               </select>
                               <div className="mono" style={{fontSize:10,color:"#94a3b8"}}>{a.date}</div>
                             </div>
-                            <textarea className="fieldbox" autoFocus style={{minHeight:82,resize:"vertical"}} value={editingActDraft.note} onChange={e=>setEditingActDraft(cur=>({...cur,note:e.target.value}))} onKeyDown={e=>{ if(e.key==="Escape"){ setEditingActId(null); setEditingActDraft(createEmptyActivityEditDraft()); } if((e.ctrlKey||e.metaKey)&&e.key==="Enter") saveActivityEdit(a.id); }} />
+                            <EditableLinkField
+                              richText
+                              autoFocus
+                              value={editingActDraft.note}
+                              onChange={v=>setEditingActDraft(cur=>({...cur,note:v}))}
+                              style={{minHeight:82,background:"#fff"}}
+                              onKeyDown={e=>{ if(e.key==="Escape"){ e.preventDefault(); setEditingActId(null); setEditingActDraft(createEmptyActivityEditDraft()); } if((e.ctrlKey||e.metaKey)&&e.key==="Enter"){ e.preventDefault(); saveActivityEdit(a.id); } }}
+                            />
                           </div>
                         : <div onClick={e=>{ if(isLinkTarget(e.target)) return; startActivityEdit(a); }} style={{cursor:"text"}}>
                             <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:4}}><span className="condensed" style={{fontSize:12,fontWeight:700,color:"#1e3a8a",textTransform:"uppercase"}}>{a.type}</span><span className="mono" style={{fontSize:10,color:"#94a3b8"}}>{a.date}</span><OwnerTag owner={a.created_by} /></div>
-                            <LinkifiedText text={a.note} style={{fontSize:13,color:"#475569",lineHeight:1.6}} />
+                            <RichNotesView html={a.note} style={{fontSize:13,color:"#475569",lineHeight:1.6}} />
                           </div>}
                     </div>
                   ))}
@@ -4407,7 +4464,9 @@ const taskActivityFromTask = task => ({
                               ? <button onClick={()=>openWeeklyActivityRecord(activity)} style={{fontSize:12,color:"#1e3a8a",border:"none",background:"transparent",padding:0,cursor:"pointer",fontWeight:700,textDecoration:"underline",textAlign:"left"}}>{linkedRecord.company}</button>
                               : <div style={{fontSize:12,color:"#64748b",fontWeight:700}}>{activity.company || "Unknown company"}</div>}
                           </div>
-                          <div style={{fontSize:13,color:"#334155",lineHeight:1.6,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{activity.note || "—"}</div>
+                          {activity.note
+                            ? <RichNotesView html={activity.note} style={{fontSize:13,color:"#334155",lineHeight:1.6}} />
+                            : <div style={{fontSize:13,color:"#334155"}}>—</div>}
                         </div>
                       );
                     })}
