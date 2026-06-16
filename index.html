@@ -4245,8 +4245,8 @@ const taskActivityFromTask = task => ({
                 <div style={{paddingTop:18,borderTop:"1px solid #e8eef6"}}>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:10}}>TASKS</div>
                   <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 130px 120px 70px",gap:8,marginBottom:10}}>
-                    <input className="field" value={taskTitle} onChange={e=>{ const value = e.target.value; setTaskTitle(value); syncTaskDraft(selected,{title:value}); }} placeholder="Add a task..." style={{background:"#fbfcfe"}} />
-                    <input className="field mono" style={{background:"#fff"}} type="date" value={taskDate} onChange={e=>{ const value = e.target.value; setTaskDate(value); syncTaskDraft(selected,{due_date:value}); }} />
+                    <input className="field" value={taskTitle} onChange={e=>{ const value = e.target.value; setTaskTitle(value); syncTaskDraft(selected,{title:value}); }} onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); addTask(); } }} placeholder="Add a task..." style={{background:"#fbfcfe"}} />
+                    <input className="field mono" style={{background:"#fff"}} type="date" value={taskDate} onChange={e=>{ const value = e.target.value; setTaskDate(value); syncTaskDraft(selected,{due_date:value}); }} onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); addTask(); } }} />
                     <select className="field mono" value={taskOwner} onChange={e=>{ const value = normalizeOwner(e.target.value); setTaskOwner(value); syncTaskDraft(selected,{owner:value}); }}>
                       {PEOPLE.map(person=><option key={person}>{person}</option>)}
                     </select>
