@@ -2957,11 +2957,26 @@ const taskActivityFromTask = task => ({
     setEditingActId(activity.id);
     setEditingActDraft({type:activity.type || "Call",note:activity.note || "",created_by:normalizeOwner(activity.created_by)});
   };
+  const deleteActivity = async activityOrId => {
+    const id = typeof activityOrId==="object" ? activityOrId?.id : activityOrId;
+    if(!id) return false;
+    try{
+      ensureOk(await sb.from("activities").delete().eq("id",id));
+      setActs(list => list.filter(activity => activity.id!==id));
+      if(editingActId===id){
+        setEditingActId(null);
+        setEditingActDraft(createEmptyActivityEditDraft());
+      }
+      return true;
+    }catch(err){
+      toast2("Delete error: "+err.message);
+      return false;
+    }
+  };
   const saveActivityEdit = async id => {
     const note = String(editingActDraft.note || "");
     if(!richNotesPlainText(note).trim()){
-      setEditingActId(null);
-      setEditingActDraft(createEmptyActivityEditDraft());
+      await deleteActivity(id);
       return;
     }
     const payload = {type:editingActDraft.type || "Call",note,created_by:normalizeOwner(editingActDraft.created_by)};
@@ -4308,7 +4323,7 @@ const taskActivityFromTask = task => ({
                     >
                       {editingActId===a.id
                         ? <div style={{display:"grid",gap:8}}>
-                            <div style={{display:"grid",gridTemplateColumns:"150px 120px minmax(0,1fr)",gap:8,alignItems:"center"}}>
+                            <div style={{display:"grid",gridTemplateColumns:"150px 120px minmax(0,1fr) 76px",gap:8,alignItems:"center"}}>
                               <select className="field mono" value={editingActDraft.type} onChange={e=>setEditingActDraft(cur=>({...cur,type:e.target.value}))}>
                                 {["Call","Email","Meeting","Note"].map(type=><option key={type}>{type}</option>)}
                               </select>
@@ -4316,6 +4331,7 @@ const taskActivityFromTask = task => ({
                                 {PEOPLE.map(person=><option key={person}>{person}</option>)}
                               </select>
                               <div className="mono" style={{fontSize:10,color:"#94a3b8"}}>{a.date}</div>
+                              <button type="button" onClick={e=>{ e.stopPropagation(); deleteActivity(a); }} style={{height:34,border:"1px solid #fecaca",borderRadius:4,background:"#fef2f2",color:"#ef4444",cursor:"pointer",fontWeight:800,fontSize:11,letterSpacing:".04em"}}>DELETE</button>
                             </div>
                             <EditableLinkField
                               richText
@@ -4327,7 +4343,10 @@ const taskActivityFromTask = task => ({
                             />
                           </div>
                         : <div onClick={e=>{ if(isLinkTarget(e.target)) return; startActivityEdit(a); }} style={{cursor:"text"}}>
-                            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:4}}><span className="condensed" style={{fontSize:12,fontWeight:700,color:"#1e3a8a",textTransform:"uppercase"}}>{a.type}</span><span className="mono" style={{fontSize:10,color:"#94a3b8"}}>{a.date}</span><OwnerTag owner={a.created_by} /></div>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,marginBottom:4}}>
+                              <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}><span className="condensed" style={{fontSize:12,fontWeight:700,color:"#1e3a8a",textTransform:"uppercase"}}>{a.type}</span><span className="mono" style={{fontSize:10,color:"#94a3b8"}}>{a.date}</span><OwnerTag owner={a.created_by} /></div>
+                              <button type="button" aria-label="Delete activity note" title="Delete activity note" onClick={e=>{ e.stopPropagation(); deleteActivity(a); }} style={{border:"none",background:"transparent",color:"#cbd5e1",fontSize:16,lineHeight:1,cursor:"pointer",padding:"0 2px"}}>&times;</button>
+                            </div>
                             <RichNotesView html={a.note} style={{fontSize:13,color:"#475569",lineHeight:1.6}} />
                           </div>}
                     </div>
@@ -4460,9 +4479,12 @@ const taskActivityFromTask = task => ({
                               <div className="mono" style={{fontSize:11,color:"#64748b"}}>{activity.date || "No date"}</div>
                               <OwnerTag owner={activity.created_by} />
                             </div>
-                            {linkedRecord
-                              ? <button onClick={()=>openWeeklyActivityRecord(activity)} style={{fontSize:12,color:"#1e3a8a",border:"none",background:"transparent",padding:0,cursor:"pointer",fontWeight:700,textDecoration:"underline",textAlign:"left"}}>{linkedRecord.company}</button>
-                              : <div style={{fontSize:12,color:"#64748b",fontWeight:700}}>{activity.company || "Unknown company"}</div>}
+                            <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",justifyContent:"flex-end"}}>
+                              {linkedRecord
+                                ? <button onClick={()=>openWeeklyActivityRecord(activity)} style={{fontSize:12,color:"#1e3a8a",border:"none",background:"transparent",padding:0,cursor:"pointer",fontWeight:700,textDecoration:"underline",textAlign:"left"}}>{linkedRecord.company}</button>
+                                : <div style={{fontSize:12,color:"#64748b",fontWeight:700}}>{activity.company || "Unknown company"}</div>}
+                              <button type="button" aria-label="Delete activity note" title="Delete activity note" onClick={()=>deleteActivity(activity)} style={{border:"none",background:"transparent",color:"#cbd5e1",fontSize:16,lineHeight:1,cursor:"pointer",padding:"0 2px"}}>&times;</button>
+                            </div>
                           </div>
                           {activity.note
                             ? <RichNotesView html={activity.note} style={{fontSize:13,color:"#334155",lineHeight:1.6}} />
