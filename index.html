@@ -38,6 +38,25 @@ window.CRM_CONFIG = {
   .note-image-wrap .note-image-delete-btn{position:absolute;top:6px;right:6px;width:24px;height:24px;border-radius:12px;border:none;background:rgba(15,23,42,.78);color:#fff;font-size:14px;font-weight:700;line-height:1;cursor:pointer;opacity:0;transition:opacity .12s;display:flex;align-items:center;justify-content:center;padding:0}
   .note-image-wrap:hover .note-image-delete-btn{opacity:1}
   .note-image-wrap .note-image-delete-btn:hover{background:#ef4444}
+  @media (hover:none){
+    .note-image-wrap .note-image-delete-btn{opacity:1}
+  }
+  /* Mobile layout: m-* classes collapse desktop grids/tables on small screens */
+  @media (max-width:700px){
+    .m-hide{display:none !important}
+    .m-grid-1{grid-template-columns:1fr !important}
+    .m-grid-2{grid-template-columns:1fr 1fr !important}
+    .m-wrap{flex-wrap:wrap !important}
+    .m-pad{padding:14px !important}
+    .m-header{height:auto !important;padding:10px 12px !important;flex-wrap:wrap;row-gap:8px}
+    .m-main{padding:12px !important}
+    .field,.fieldbox,.editablebox{font-size:16px !important}
+    table.m-cards,table.m-cards tbody,table.m-cards tr,table.m-cards td{display:block !important;width:100% !important}
+    table.m-cards thead{display:none !important}
+    table.m-cards tr{padding:10px 14px;border-bottom:1px solid #e2e8f0}
+    table.m-cards td{padding:2px 0 !important;border:none !important;max-width:none !important;white-space:normal !important;overflow:visible !important}
+    table.m-cards td.m-hide{display:none !important}
+  }
   @keyframes fade{from{opacity:0}to{opacity:1}}
   @keyframes slide{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
   @keyframes spin{to{transform:rotate(360deg)}}
@@ -3524,7 +3543,7 @@ const taskActivityFromTask = task => ({
 
   return (
     <div style={{minHeight:"100vh",display:"flex",flexDirection:"column"}}>
-      <header style={{height:58,padding:"0 28px",display:"flex",alignItems:"center",justifyContent:"space-between",background:"#fff",borderBottom:"3px solid #ef4444",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
+      <header className="m-header" style={{height:58,padding:"0 28px",display:"flex",alignItems:"center",justifyContent:"space-between",background:"#fff",borderBottom:"3px solid #ef4444",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
         <div className="condensed" style={{fontSize:22,fontWeight:800,letterSpacing:".04em"}}><span style={{color:"#ef4444"}}>ED</span> <span style={{color:"#1e3a8a"}}>INDUSTRIAL</span><span style={{fontSize:14,color:"#94a3b8",marginLeft:8,letterSpacing:".12em"}}>CRM</span></div>
         <div style={{display:"flex",gap:6}}>
           {[["dashboard","Dashboard"],["contacts","Contacts"],["finder","Lead Finder"]].map(([value,label])=><button key={value} onClick={()=>setView(value)} style={{padding:"7px 16px",border:"none",borderRadius:3,background:view===value?"#1e3a8a":"transparent",color:view===value?"#fff":"#64748b",cursor:"pointer"}}>{label}</button>)}
@@ -3532,10 +3551,10 @@ const taskActivityFromTask = task => ({
         <button onClick={()=>openForm(effectiveTab)} style={{padding:"8px 18px",border:"none",borderRadius:3,background:"#ef4444",color:"#fff",fontWeight:700,cursor:"pointer"}}>+ Add Company</button>
       </header>
 
-      <main style={{flex:1,padding:28}}>
+      <main className="m-main" style={{flex:1,padding:28}}>
         {view==="dashboard" && (
           <div className="fade" style={{display:"grid",gap:20}}>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:16}}>
+            <div className="m-grid-2" style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:16}}>
               {[
                 ["Manufacturers",visibleMfrs.length,"","#1e3a8a","◌"],
                 ["In Pipeline",pipe,"","#ef4444","◈"],
@@ -3553,7 +3572,7 @@ const taskActivityFromTask = task => ({
               ))}
             </div>
 
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1.4fr 1fr",gap:20,alignItems:"stretch"}}>
+            <div className="m-grid-1" style={{display:"grid",gridTemplateColumns:"1fr 1fr 1.4fr 1fr",gap:20,alignItems:"stretch"}}>
               <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
                 <div className="mono" style={{padding:"14px 18px",fontSize:11,letterSpacing:".16em",color:"#6f84a6",textTransform:"uppercase",borderBottom:"1px solid #d8e2ef",background:"#f8fbff"}}>By Industry</div>
                 <div style={{padding:"16px 18px",display:"grid",gap:10}}>
@@ -3688,7 +3707,7 @@ const taskActivityFromTask = task => ({
                 <div className="mono" style={{fontSize:10,color:"#8ea0bd"}}>Active pipeline · sorted by oldest activity</div>
               </div>
               <div style={{overflowX:"auto"}}>
-                <table style={{width:"100%",borderCollapse:"collapse"}}>
+                <table className="m-cards" style={{width:"100%",borderCollapse:"collapse"}}>
                   <thead>
                     <tr style={{background:"#fbfdff"}}>
                       {["Company","Stage","Industry","Contacts","Last Activity","Notes"].map((label,index)=><th key={label} className="mono" style={{padding:"10px 16px",fontSize:10,letterSpacing:".12em",textAlign:"left",color:index===4?"#ef4444":"#8ea0bd",borderBottom:"2px solid #d8e2ef",textTransform:"uppercase"}}>{label}</th>)}
@@ -3926,7 +3945,7 @@ const taskActivityFromTask = task => ({
             </div>
 
             <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:6,overflow:"hidden"}}>
-              <table style={{width:"100%",borderCollapse:"collapse"}}>
+              <table className="m-cards" style={{width:"100%",borderCollapse:"collapse"}}>
                 <thead><tr style={{background:"#f8fafc"}}>
                   <th style={{padding:"10px 14px",borderBottom:"2px solid #e2e8f0",width:44}}>
                     <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAllVisible} disabled={!list.length} />
@@ -3937,7 +3956,7 @@ const taskActivityFromTask = task => ({
                   {!list.length && <tr><td colSpan="6" style={{padding:40,textAlign:"center",color:"#cbd5e1"}}>No records found</td></tr>}
                   {list.map(rec=>(
                     <tr key={rec.id} className="row" onClick={()=>openRecord(rec)}>
-                      <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9"}} onClick={e=>e.stopPropagation()}>
+                      <td className="m-hide" style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9"}} onClick={e=>e.stopPropagation()}>
                         <input type="checkbox" checked={selectedKeys.includes(recordKey(rec))} onChange={()=>toggleSelectRecord(rec)} />
                       </td>
                       <td style={{padding:"12px 14px",borderBottom:"1px solid #f1f5f9",fontWeight:700,color:"#0f172a"}}>{rec.company}</td>
@@ -4022,7 +4041,7 @@ const taskActivityFromTask = task => ({
             </div>
 
             {/* Industries + Cities side by side */}
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+            <div className="m-grid-1" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
 
               {/* Industry Picker */}
               <div style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
@@ -4128,7 +4147,7 @@ const taskActivityFromTask = task => ({
                 {historyDays.slice(0,18).map(day=><button key={day.date} onClick={()=>{setFinderLeadDate(day.date);setFinderExpandedRow(null);}} style={{fontSize:11,padding:"4px 9px",borderRadius:3,border:"1px solid "+(day.date===selectedLeadDate?"#1e3a8a":"#e2e8f0"),background:day.date===selectedLeadDate?"#eef4ff":"#f8fafc",color:day.date===selectedLeadDate?"#1e3a8a":"#64748b",cursor:"pointer",fontWeight:day.date===selectedLeadDate?700:500}}>{day.date} ({day.count})</button>)}
               </div>}
               <div style={{maxHeight:500,overflow:"auto"}}>
-                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                <table className="m-cards" style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                   <thead>
                     <tr style={{background:"#f8fafc",position:"sticky",top:0,zIndex:1}}>
                       {["Company","Stage","Industry","Products","Time"].map(h=><th key={h} className="mono" style={{padding:"10px 14px",fontSize:10,color:"#94a3b8",textAlign:"left",letterSpacing:".08em",borderBottom:"2px solid #e2e8f0"}}>{h}</th>)}
@@ -4147,7 +4166,7 @@ const taskActivityFromTask = task => ({
                           <td className="mono" style={{padding:"10px 14px",borderBottom:"1px solid #f1f5f9",color:"#94a3b8",fontSize:11}}>{time}</td>
                         </tr>
                         {expanded && <tr><td colSpan={5} style={{padding:0,borderBottom:"2px solid #1e3a8a"}}>
-                          <div style={{padding:"16px 20px",background:"#f8fbff",display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+                          <div className="m-grid-1" style={{padding:"16px 20px",background:"#f8fbff",display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
                             <div style={{gridColumn:"1 / -1"}}>
                               <div className="mono" style={{fontSize:10,color:"#94a3b8",letterSpacing:".1em",textTransform:"uppercase",marginBottom:4}}>Notes</div>
                               <div style={{fontSize:12,color:"#334155",lineHeight:1.7,whiteSpace:"pre-wrap",wordBreak:"break-word"}} dangerouslySetInnerHTML={{__html:renderInline(row.signals||"—")}} />
@@ -4169,7 +4188,7 @@ const taskActivityFromTask = task => ({
         <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.5)",display:"grid",placeItems:"center",padding:20,zIndex:100}} onClick={e=>e.target===e.currentTarget&&setSelected(null)}>
           <div className="slide" style={{width:"min(1380px,100%)",maxHeight:"94vh",overflow:"auto",background:"#fff",borderRadius:8,border:"1px solid #d7dfeb",boxShadow:"0 24px 60px rgba(0,0,0,.18)"}}>
             <div style={{borderTop:"3px solid #1e3a8a"}} />
-            <div style={{padding:"18px 28px",display:"flex",justifyContent:"space-between",gap:20,borderBottom:"1px solid #e8eef6",alignItems:"flex-start"}}>
+            <div className="m-wrap m-pad" style={{padding:"18px 28px",display:"flex",justifyContent:"space-between",gap:20,borderBottom:"1px solid #e8eef6",alignItems:"flex-start"}}>
               <div style={{flex:1}}>
                 <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap",marginBottom:8}}>
                   {selected.type==="manufacturer" || selected.type==="vendor"
@@ -4197,7 +4216,7 @@ const taskActivityFromTask = task => ({
                   </>}
                 </div>
               </div>
-              <div style={{display:"flex",gap:8}}>
+              <div className="m-wrap" style={{display:"flex",gap:8}}>
                 {selected.type==="manufacturer" && <button
                   onClick={()=>runCompanyEnrichment(selected)}
                   disabled={!!companyEnrichmentBusy[selected.id]}
@@ -4216,7 +4235,7 @@ const taskActivityFromTask = task => ({
                 <button onClick={()=>setSelected(null)} style={{width:30,height:30,border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",cursor:"pointer",color:"#94a3b8"}}>×</button>
               </div>
             </div>
-            <div style={{padding:"22px 28px 24px",display:"grid",gridTemplateColumns:["manufacturer","vendor"].includes(selected.type)?"minmax(0,1fr) minmax(360px,440px)":"1fr",gap:20,alignItems:"stretch"}}>
+            <div className="m-grid-1 m-pad" style={{padding:"22px 28px 24px",display:"grid",gridTemplateColumns:["manufacturer","vendor"].includes(selected.type)?"minmax(0,1fr) minmax(360px,440px)":"1fr",gap:20,alignItems:"stretch"}}>
               {["manufacturer","vendor"].includes(selected.type) ? <>
                 <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>NOTES</div>
@@ -4249,7 +4268,7 @@ const taskActivityFromTask = task => ({
                   </div>
                 </div>
               </> : (
-                <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:16,display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14}}>
+                <div className="m-grid-1" style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:16,display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14}}>
                   {[["Name",selected.name],["Title",selected.title],["Email",selected.email],["Phone",selected.phone],["Industry",selected.industry],["Region",selected.region],selected.type==="lost"?["Loss Reason",selected.lostReason]:null].filter(Boolean).map(([k,v])=>(
                     <div key={k}><div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:5}}>{k}</div><div style={{fontSize:13,color:k==="Loss Reason"?"#ef4444":"#334155"}}>{v||"—"}</div></div>
                   ))}
@@ -4259,7 +4278,7 @@ const taskActivityFromTask = task => ({
               <div style={{gridColumn:"1 / -1",display:"grid",gap:18}}>
                 <div style={{paddingTop:18,borderTop:"1px solid #e8eef6"}}>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:10}}>TASKS</div>
-                  <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 130px 120px 70px",gap:8,marginBottom:10}}>
+                  <div className="m-grid-1" style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 130px 120px 70px",gap:8,marginBottom:10}}>
                     <input className="field" value={taskTitle} onChange={e=>{ const value = e.target.value; setTaskTitle(value); syncTaskDraft(selected,{title:value}); }} onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); addTask(); } }} placeholder="Add a task..." style={{background:"#fbfcfe"}} />
                     <input className="field mono" style={{background:"#fff"}} type="date" value={taskDate} onChange={e=>{ const value = e.target.value; setTaskDate(value); syncTaskDraft(selected,{due_date:value}); }} onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); addTask(); } }} />
                     <select className="field mono" value={taskOwner} onChange={e=>{ const value = normalizeOwner(e.target.value); setTaskOwner(value); syncTaskDraft(selected,{owner:value}); }}>
@@ -4277,7 +4296,7 @@ const taskActivityFromTask = task => ({
                         onBlur={e=>{ if(editingTaskId===t.id && !e.currentTarget.contains(e.relatedTarget)) saveTaskEdit(t.id); }}
                       >
                         {editingTaskId===t.id
-                          ? <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 130px 120px",gap:8}}>
+                          ? <div className="m-grid-1" style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 130px 120px",gap:8}}>
                               <input className="field" autoFocus value={editingTaskDraft.title} onChange={e=>setEditingTaskDraft(cur=>({...cur,title:e.target.value}))} onKeyDown={e=>{ if(e.key==="Enter") saveTaskEdit(t.id); if(e.key==="Escape"){ setEditingTaskId(null); setEditingTaskDraft(createEmptyTaskEditDraft()); } }} />
                               <input className="field mono" type="date" value={editingTaskDraft.due_date} onChange={e=>setEditingTaskDraft(cur=>({...cur,due_date:e.target.value}))} onKeyDown={e=>{ if(e.key==="Escape"){ setEditingTaskId(null); setEditingTaskDraft(createEmptyTaskEditDraft()); } }} />
                               <select className="field mono" value={editingTaskDraft.owner} onChange={e=>setEditingTaskDraft(cur=>({...cur,owner:normalizeOwner(e.target.value)}))} onKeyDown={e=>{ if(e.key==="Escape"){ setEditingTaskId(null); setEditingTaskDraft(createEmptyTaskEditDraft()); } }}>
@@ -4299,7 +4318,7 @@ const taskActivityFromTask = task => ({
                 <div style={{paddingTop:18,borderTop:"1px solid #e8eef6"}}>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:10}}>LOG ACTIVITY</div>
                   <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>{["Call","Email","Meeting","Note"].map(t=><button key={t} onClick={()=>{ const next = {...newAct,type:t}; setNewAct(next); syncActivityDraft(selected,next); }} style={{padding:"6px 14px",borderRadius:3,border:"2px solid "+(newAct.type===t?"#1e3a8a":"#d7dfeb"),background:newAct.type===t?"#eef4ff":"#fff",color:newAct.type===t?"#1e3a8a":"#8ea0bd",cursor:"pointer",fontWeight:800,fontSize:12,letterSpacing:".05em"}}>{t.toUpperCase()}</button>)}</div>
-                  <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 136px 120px 64px",gap:8,marginBottom:10,alignItems:"start"}}>
+                  <div className="m-grid-1" style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 136px 120px 64px",gap:8,marginBottom:10,alignItems:"start"}}>
                     <EditableLinkField
                       richText
                       value={newAct.note}
@@ -4323,7 +4342,7 @@ const taskActivityFromTask = task => ({
                     >
                       {editingActId===a.id
                         ? <div style={{display:"grid",gap:8}}>
-                            <div style={{display:"grid",gridTemplateColumns:"150px 120px minmax(0,1fr) 76px",gap:8,alignItems:"center"}}>
+                            <div className="m-grid-2" style={{display:"grid",gridTemplateColumns:"150px 120px minmax(0,1fr) 76px",gap:8,alignItems:"center"}}>
                               <select className="field mono" value={editingActDraft.type} onChange={e=>setEditingActDraft(cur=>({...cur,type:e.target.value}))}>
                                 {["Call","Email","Meeting","Note"].map(type=><option key={type}>{type}</option>)}
                               </select>
@@ -4375,7 +4394,7 @@ const taskActivityFromTask = task => ({
               <button onClick={()=>setLeadFinderSelected(null)} style={{width:30,height:30,border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",cursor:"pointer",color:"#94a3b8"}}>x</button>
             </div>
             <div style={{padding:"20px 24px",display:"grid",gap:18}}>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:12}}>
+              <div className="m-grid-2" style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:12}}>
                 {[
                   ["Products", leadFinderSelected.end_product || "-"],
                   ["City", leadFinderSelected.city || "-"],
@@ -4388,7 +4407,7 @@ const taskActivityFromTask = task => ({
                   </div>
                 ))}
               </div>
-              <div style={{display:"grid",gridTemplateColumns:"1.3fr .9fr",gap:18,alignItems:"start"}}>
+              <div className="m-grid-1" style={{display:"grid",gridTemplateColumns:"1.3fr .9fr",gap:18,alignItems:"start"}}>
                 <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,padding:14}}>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em",marginBottom:8}}>NOTES</div>
                   <LinkifiedText text={leadFinderSelected.notes || "-"} style={{fontSize:13,color:"#475569",lineHeight:1.7,whiteSpace:"pre-wrap",wordBreak:"break-word"}} />
@@ -4510,7 +4529,7 @@ const taskActivityFromTask = task => ({
               <button onClick={()=>setShowTasksModal(false)} style={{width:30,height:30,border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",cursor:"pointer",color:"#94a3b8"}}>×</button>
             </div>
             <div style={{padding:"18px 24px",display:"grid",gap:14}}>
-              <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 140px",gap:10}}>
+              <div className="m-grid-1" style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 140px",gap:10}}>
                 <input className="field" value={taskSearch} onChange={e=>setTaskSearch(e.target.value)} placeholder="Search by company, task, or owner..." />
                 <select className="field" value={allTasksOwnerFilter} onChange={e=>setAllTasksOwnerFilter(e.target.value)} style={{cursor:"pointer"}}>
                   <option value="All">All owners</option>
@@ -4518,7 +4537,7 @@ const taskActivityFromTask = task => ({
                 </select>
               </div>
               <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,overflow:"hidden"}}>
-                <div style={{display:"grid",gridTemplateColumns:"44px minmax(0,1fr) 170px 110px",gap:12,padding:"12px 16px",borderBottom:"1px solid #e8eef6",background:"#f8fbff"}}>
+                <div className="m-hide" style={{display:"grid",gridTemplateColumns:"44px minmax(0,1fr) 170px 110px",gap:12,padding:"12px 16px",borderBottom:"1px solid #e8eef6",background:"#f8fbff"}}>
                   <div />
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em"}}>TASK</div>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em"}}>COMPANY</div>
@@ -4528,7 +4547,7 @@ const taskActivityFromTask = task => ({
                 {filteredTaskList.map(task=>{
                   const linkedRecord = resolveTaskRecord(task);
                   return (
-                  <div key={task.id} style={{display:"grid",gridTemplateColumns:"44px minmax(0,1fr) 170px 110px",gap:12,alignItems:"start",padding:"12px 16px",borderBottom:"1px solid #eef3f9"}}>
+                  <div key={task.id} className="m-grid-1" style={{display:"grid",gridTemplateColumns:"44px minmax(0,1fr) 170px 110px",gap:12,alignItems:"start",padding:"12px 16px",borderBottom:"1px solid #eef3f9"}}>
                     <input type="checkbox" checked={task.done} onChange={()=>toggleTask(task.id)} style={{marginTop:2}} />
                     <div style={{minWidth:0}}>
                       <div style={{fontSize:13,fontWeight:700,color:task.done?"#94a3b8":"#18233a",textDecoration:task.done?"line-through":"none"}}>{task.title}</div>
@@ -4564,14 +4583,14 @@ const taskActivityFromTask = task => ({
               {!unmatchedLegacyTasks.length && <div className="mono" style={{fontSize:12,color:"#8ea0bd"}}>No unmatched legacy tasks right now.</div>}
               {!!unmatchedLegacyTasks.length && <div style={{background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:6,padding:"12px 14px",fontSize:12,color:"#9a3412"}}>These tasks are not lost. They are still sitting in this browser because the app could not confidently match them to a live company record yet.</div>}
               {!!unmatchedLegacyTasks.length && <div style={{background:"#fbfcfe",border:"1px solid #d7dfeb",borderRadius:6,overflow:"hidden"}}>
-                <div style={{display:"grid",gridTemplateColumns:"minmax(160px,220px) minmax(0,1fr) 110px 90px",gap:12,padding:"12px 16px",borderBottom:"1px solid #e8eef6",background:"#f8fbff"}}>
+                <div className="m-hide" style={{display:"grid",gridTemplateColumns:"minmax(160px,220px) minmax(0,1fr) 110px 90px",gap:12,padding:"12px 16px",borderBottom:"1px solid #e8eef6",background:"#f8fbff"}}>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em"}}>COMPANY</div>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em"}}>TASK</div>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em"}}>DUE DATE</div>
                   <div className="mono" style={{fontSize:10,color:"#8ea0bd",letterSpacing:".12em"}}>OWNER</div>
                 </div>
                 {unmatchedLegacyTasks.map((task, index)=>(
-                  <div key={`${task.company || "unknown"}|${task.title || "task"}|${task.due_date || ""}|${index}`} style={{display:"grid",gridTemplateColumns:"minmax(160px,220px) minmax(0,1fr) 110px 90px",gap:12,padding:"12px 16px",borderBottom:"1px solid #eef3f9",alignItems:"start"}}>
+                  <div key={`${task.company || "unknown"}|${task.title || "task"}|${task.due_date || ""}|${index}`} className="m-grid-1" style={{display:"grid",gridTemplateColumns:"minmax(160px,220px) minmax(0,1fr) 110px 90px",gap:12,padding:"12px 16px",borderBottom:"1px solid #eef3f9",alignItems:"start"}}>
                     <div style={{fontSize:12,fontWeight:700,color:"#18233a",wordBreak:"break-word"}}>{task.company || "No company name saved"}</div>
                     <div style={{fontSize:12,color:"#475569",wordBreak:"break-word"}}>{task.title || "Untitled task"}</div>
                     <div className="mono" style={{fontSize:11,color:"#64748b"}}>{task.due_date || "No date"}</div>
@@ -4592,7 +4611,7 @@ const taskActivityFromTask = task => ({
               <div className="condensed" style={{fontSize:20,fontWeight:800}}>{form.id?"Edit":"New"} {formType==="manufacturer"?"Company":formType==="vendor"?"Vendor":"Lost Contact"}</div>
               <button onClick={()=>setShowForm(false)} style={{width:30,height:30,border:"1px solid #e2e8f0",borderRadius:4,background:"#fff",cursor:"pointer"}}>×</button>
             </div>
-            <div style={{padding:24,display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+            <div className="m-grid-1" style={{padding:24,display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
               <input className="field" style={{gridColumn:"1 / -1"}} placeholder="Company" value={form.company||""} onChange={e=>setForm(cur=>({...cur,company:e.target.value}))} />
               {formType==="manufacturer" ? <>
                 <select className="field" value={form.stage||"Prospect"} onChange={e=>setForm(cur=>({...cur,stage:e.target.value}))}>{STAGES.map(s=><option key={s}>{s}</option>)}</select>
@@ -4641,7 +4660,7 @@ const taskActivityFromTask = task => ({
               {importMode==="replace" && <div style={{fontSize:12,color:"#ef4444"}}>Replace mode makes the `manufacturers` table match this CSV. Manufacturers not in the file, plus duplicate manufacturer rows, will be deleted along with their linked contacts and activities.</div>}
             </div>
             <div style={{maxHeight:"50vh",overflow:"auto"}}>
-              <table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#f8fafc"}}>{["Company","Industry","Stage","Status"].map(h=><th key={h} className="mono" style={{padding:"10px 14px",fontSize:10,color:"#94a3b8",textAlign:"left",letterSpacing:".08em",borderBottom:"2px solid #e2e8f0"}}>{h}</th>)}</tr></thead><tbody>{importPreviewRows.map((r,i)=>{const ok=isLikelyCompanyName(r.company); return <tr key={i}><td style={{padding:"10px 14px",borderBottom:"1px solid #f1f5f9",color:ok?"#0f172a":"#ef4444",fontWeight:600}}>{r.company||"SKIPPED"}</td><td style={{padding:"10px 14px",borderBottom:"1px solid #f1f5f9"}}>{r.industry||"—"}</td><td style={{padding:"10px 14px",borderBottom:"1px solid #f1f5f9"}}>{normalizeStage(r.stage)}</td><td style={{padding:"10px 14px",borderBottom:"1px solid #f1f5f9"}}><Tag label={ok?"READY":"SKIP"} color={ok?"#22c55e":"#ef4444"} /></td></tr>;})}</tbody></table>
+              <table className="m-cards" style={{width:"100%",borderCollapse:"collapse"}}><thead><tr style={{background:"#f8fafc"}}>{["Company","Industry","Stage","Status"].map(h=><th key={h} className="mono" style={{padding:"10px 14px",fontSize:10,color:"#94a3b8",textAlign:"left",letterSpacing:".08em",borderBottom:"2px solid #e2e8f0"}}>{h}</th>)}</tr></thead><tbody>{importPreviewRows.map((r,i)=>{const ok=isLikelyCompanyName(r.company); return <tr key={i}><td style={{padding:"10px 14px",borderBottom:"1px solid #f1f5f9",color:ok?"#0f172a":"#ef4444",fontWeight:600}}>{r.company||"SKIPPED"}</td><td style={{padding:"10px 14px",borderBottom:"1px solid #f1f5f9"}}>{r.industry||"—"}</td><td style={{padding:"10px 14px",borderBottom:"1px solid #f1f5f9"}}>{normalizeStage(r.stage)}</td><td style={{padding:"10px 14px",borderBottom:"1px solid #f1f5f9"}}><Tag label={ok?"READY":"SKIP"} color={ok?"#22c55e":"#ef4444"} /></td></tr>;})}</tbody></table>
             </div>
             <div style={{padding:"14px 24px",display:"flex",justifyContent:"flex-end",gap:10,borderTop:"1px solid #e2e8f0"}}>
               <button onClick={()=>setImportRows(null)} style={{padding:"8px 14px",border:"none",borderRadius:4,background:"#f1f5f9",color:"#64748b",cursor:"pointer"}}>Cancel</button>
