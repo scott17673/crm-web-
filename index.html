@@ -2348,6 +2348,29 @@ const taskActivityFromTask = task => ({
   useEffect(()=>{ hydrate(true); },[hydrate]);
 
   useEffect(()=>{
+    let refreshTimer = null;
+    const scheduleHydrate = () => {
+      if(refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(()=>hydrate(), 180);
+    };
+    const activityChanges = sb
+      .channel("crm-activities-sync")
+      .on("postgres_changes", {event:"*", schema:"public", table:"activities"}, scheduleHydrate)
+      .subscribe();
+    const refreshWhenVisible = () => {
+      if(document.visibilityState==="visible") scheduleHydrate();
+    };
+    window.addEventListener("focus", scheduleHydrate);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      if(refreshTimer) clearTimeout(refreshTimer);
+      window.removeEventListener("focus", scheduleHydrate);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      sb.removeChannel(activityChanges);
+    };
+  },[hydrate]);
+
+  useEffect(()=>{
     if(!selected) return;
     const key = recordKey(selected);
     const taskDraft = {...createEmptyTaskDraft(), ...(taskDrafts[key] || {})};
@@ -2895,15 +2918,13 @@ const taskActivityFromTask = task => ({
     if(!selected || !taskTitle.trim()) return;
     return (async () => {
       try{
-        const payload = {
-          contact_id: selected.id,
-          contact_type: selected.type,
-          type: TASK_ACTIVITY_DB_TYPE,
-          note: taskTitle.trim(),
-          date: taskDate || null,
-          created_by: taskActivityMeta(false, taskOwner),
-        };
-        const inserted = await sb.from("activities").insert(payload).select("*").single();
+        const inserted = await sb.rpc("create_crm_task", {
+          p_contact_id: selected.id,
+          p_contact_type: selected.type,
+          p_title: taskTitle.trim(),
+          p_due_date: taskDate || null,
+          p_owner: taskOwner,
+        }).single();
         ensureOk(inserted);
         const task = {
           id: inserted.data.id,
