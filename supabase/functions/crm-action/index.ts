@@ -57,6 +57,44 @@ function constantTimeEqual(left: string, right: string): boolean {
   return difference === 0;
 }
 
+async function resolveCrmCompanyId(
+  admin: ReturnType<typeof createClient>,
+  contactType: string,
+  suppliedId: number,
+): Promise<number> {
+  const tableByType: Record<string, string> = {
+    manufacturer: "manufacturers",
+    vendor: "vendors",
+    lost: "lost_contacts",
+  };
+  const table = tableByType[contactType];
+  if (!table) throw new Error("contact_type must be manufacturer, vendor, or lost");
+
+  const { data: company, error: companyError } = await admin
+    .from(table)
+    .select("id")
+    .eq("id", suppliedId)
+    .maybeSingle();
+  if (companyError) throw companyError;
+  if (company?.id) return Number(company.id);
+
+  // ChatGPT may resolve a named manufacturer contact immediately before
+  // creating an activity. The CRM UI groups activities by manufacturer ID,
+  // so translate that contact-row ID to its parent company instead of
+  // silently creating an activity that the company page cannot display.
+  if (contactType === "manufacturer") {
+    const { data: contact, error: contactError } = await admin
+      .from("manufacturer_contacts")
+      .select("manufacturer_id")
+      .eq("id", suppliedId)
+      .maybeSingle();
+    if (contactError) throw contactError;
+    if (contact?.manufacturer_id) return Number(contact.manufacturer_id);
+  }
+
+  throw new Error(`${contactType} company ${suppliedId} was not found`);
+}
+
 async function readBody(req: Request): Promise<Record<string, unknown>> {
   const contentLength = Number(req.headers.get("content-length") ?? "0");
   if (contentLength > 100_000) throw new Error("request body is too large");
@@ -134,15 +172,41 @@ Deno.serve(async req => {
         throw new Error("entity must be manufacturer, vendor, manufacturer_contact, activity, or task");
       }
     } else if (route === "update-activity-note") {
+      const activityId = positiveInteger(body.activity_id, "activity_id");
+      const { data: currentActivity, error: currentActivityError } = await admin
+        .from("activities")
+        .select("contact_id,contact_type")
+        .eq("id", activityId)
+        .maybeSingle();
+      if (currentActivityError) throw currentActivityError;
+      if (!currentActivity) throw new Error(`activity ${activityId} was not found`);
+      const normalizedCompanyId = await resolveCrmCompanyId(
+        admin,
+        String(currentActivity.contact_type ?? "manufacturer"),
+        positiveInteger(currentActivity.contact_id, "activity contact_id"),
+      );
+      if (normalizedCompanyId !== Number(currentActivity.contact_id)) {
+        const { error: relinkError } = await admin
+          .from("activities")
+          .update({ contact_id: normalizedCompanyId })
+          .eq("id", activityId);
+        if (relinkError) throw relinkError;
+      }
       ({ data, error } = await admin.rpc("update_crm_activity_note", {
-        p_activity_id: positiveInteger(body.activity_id, "activity_id"),
+        p_activity_id: activityId,
         p_note: requiredText(body.note, "note", 20_000),
         p_requested_by: requestedBy,
       }));
     } else if (route === "create-activity") {
+      const contactType = requiredText(body.contact_type, "contact_type", 30);
+      const companyId = await resolveCrmCompanyId(
+        admin,
+        contactType,
+        positiveInteger(body.contact_id, "contact_id"),
+      );
       ({ data, error } = await admin.rpc("create_crm_activity", {
-        p_contact_id: positiveInteger(body.contact_id, "contact_id"),
-        p_contact_type: requiredText(body.contact_type, "contact_type", 30),
+        p_contact_id: companyId,
+        p_contact_type: contactType,
         p_activity_type: requiredText(body.activity_type, "activity_type", 30),
         p_note: requiredText(body.note, "note", 20_000),
         p_date: optionalText(body.date, 10),
@@ -170,9 +234,15 @@ Deno.serve(async req => {
         p_requested_by: requestedBy,
       }));
     } else if (route === "create-task") {
+      const contactType = requiredText(body.contact_type, "contact_type", 30);
+      const companyId = await resolveCrmCompanyId(
+        admin,
+        contactType,
+        positiveInteger(body.contact_id, "contact_id"),
+      );
       ({ data, error } = await admin.rpc("create_crm_task", {
-        p_contact_id: positiveInteger(body.contact_id, "contact_id"),
-        p_contact_type: requiredText(body.contact_type, "contact_type", 30),
+        p_contact_id: companyId,
+        p_contact_type: contactType,
         p_title: requiredText(body.title, "title", 20_000),
         p_due_date: optionalText(body.due_date, 10),
         p_owner: optionalText(body.owner, 100) ?? "Scott",
