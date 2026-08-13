@@ -33,6 +33,7 @@ jobs:
         run: |
           mkdir site
           cp index.html site/index.html
+          cp privacy.html site/privacy.html
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

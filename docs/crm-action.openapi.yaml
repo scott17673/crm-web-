@@ -1,0 +1,259 @@
+openapi: 3.1.0
+info:
+  title: ED Industrial CRM Writer
+  version: 1.0.0
+  description: Bounded, authenticated actions for ordinary ED Industrial CRM writes. Use the Supabase app for reads and these actions for writes.
+servers:
+  - url: https://dqqitnvyuebqfvgplcba.supabase.co/functions/v1/crm-action
+security:
+  - CrmApiKey: []
+paths:
+  /lookup:
+    post:
+      operationId: findCrmRecords
+      summary: Find CRM manufacturers, vendors, contacts, activities, or tasks before making a bounded update.
+      description: Use this operation to resolve record IDs. Search manufacturers and vendors first, then pass their ID as parent_id to retrieve contacts, activities, or tasks.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [entity]
+              properties:
+                entity: { type: string, enum: [manufacturer, vendor, manufacturer_contact, activity, task] }
+                query: { type: [string, 'null'], maxLength: 300 }
+                record_id: { type: [integer, 'null'], minimum: 1 }
+                parent_id: { type: [integer, 'null'], minimum: 1, description: Manufacturer/vendor ID for related contacts, activities, or tasks. }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/Error' }
+  /update-activity-note:
+    post:
+      operationId: updateCrmActivityNote
+      summary: Replace the note text on one existing CRM activity.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateActivityNote'
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/Error' }
+  /create-activity:
+    post:
+      operationId: createCrmActivity
+      summary: Add one Call, Email, Meeting, or Note activity to an existing CRM company.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateActivity'
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/Error' }
+  /update-manufacturer:
+    post:
+      operationId: updateCrmManufacturer
+      summary: Update allowed fields on one existing manufacturer.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [manufacturer_id, patch]
+              properties:
+                manufacturer_id: { type: integer, minimum: 1 }
+                patch: { $ref: '#/components/schemas/ManufacturerPatch' }
+                requested_by: { type: string, maxLength: 100, default: Scott Dumont }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/Error' }
+  /update-vendor:
+    post:
+      operationId: updateCrmVendor
+      summary: Update allowed fields on one existing vendor.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [vendor_id, patch]
+              properties:
+                vendor_id: { type: integer, minimum: 1 }
+                patch: { $ref: '#/components/schemas/VendorPatch' }
+                requested_by: { type: string, maxLength: 100, default: Scott Dumont }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/Error' }
+  /upsert-manufacturer-contact:
+    post:
+      operationId: upsertCrmManufacturerContact
+      summary: Add a manufacturer contact or update one existing contact.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [manufacturer_id, name]
+              properties:
+                manufacturer_id: { type: integer, minimum: 1 }
+                contact_id: { type: [integer, 'null'], minimum: 1 }
+                name: { type: string, minLength: 1, maxLength: 300 }
+                title: { type: [string, 'null'], maxLength: 500 }
+                linkedin: { type: [string, 'null'], format: uri, maxLength: 2000 }
+                requested_by: { type: string, maxLength: 100, default: Scott Dumont }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/Error' }
+  /create-task:
+    post:
+      operationId: createCrmTask
+      summary: Create one follow-up task for an existing CRM company.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [contact_id, contact_type, title]
+              properties:
+                contact_id: { type: integer, minimum: 1 }
+                contact_type: { type: string, enum: [manufacturer, vendor, lost] }
+                title: { type: string, minLength: 1, maxLength: 20000 }
+                due_date: { type: [string, 'null'], format: date }
+                owner: { type: string, enum: [Scott, Jeff], default: Scott }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/Error' }
+  /update-task:
+    post:
+      operationId: updateCrmTask
+      summary: Update the title, due date, or owner of one CRM task.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [task_id, patch]
+              properties:
+                task_id: { type: integer, minimum: 1 }
+                patch: { $ref: '#/components/schemas/TaskPatch' }
+                requested_by: { type: string, maxLength: 100, default: Scott Dumont }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/Error' }
+  /complete-task:
+    post:
+      operationId: setCrmTaskCompleted
+      summary: Mark one CRM task complete or reopen it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [task_id]
+              properties:
+                task_id: { type: integer, minimum: 1 }
+                completed: { type: boolean, default: true }
+                requested_by: { type: string, maxLength: 100, default: Scott Dumont }
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '400': { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    CrmApiKey:
+      type: apiKey
+      in: header
+      name: x-edi-crm-key
+  schemas:
+    UpdateActivityNote:
+      type: object
+      additionalProperties: false
+      required: [activity_id, note]
+      properties:
+        activity_id: { type: integer, minimum: 1 }
+        note: { type: string, minLength: 1, maxLength: 20000 }
+        requested_by: { type: string, maxLength: 100, default: Scott Dumont }
+    CreateActivity:
+      type: object
+      additionalProperties: false
+      required: [contact_id, contact_type, activity_type, note]
+      properties:
+        contact_id: { type: integer, minimum: 1 }
+        contact_type: { type: string, enum: [manufacturer, vendor, lost] }
+        activity_type: { type: string, enum: [Call, Email, Meeting, Note] }
+        note: { type: string, minLength: 1, maxLength: 20000 }
+        date: { type: [string, 'null'], format: date }
+        created_by: { type: string, enum: [Scott, Jeff], default: Scott }
+    ManufacturerPatch:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        company: { type: string, minLength: 1, maxLength: 300 }
+        stage: { type: [string, 'null'], enum: [Unqualified, Prospect, Outreach, Not Interested, Qualified, Proposal, Negotiation, Closed Won, Closed Lost, null] }
+        does_manufacture: { type: [boolean, 'null'] }
+        has_so_facilities: { type: [boolean, 'null'] }
+        end_product: { type: [string, 'null'], maxLength: 20000 }
+        machines: { type: [string, 'null'], maxLength: 20000 }
+        maintenance_needed: { type: [string, 'null'], maxLength: 20000 }
+        signals: { type: [string, 'null'], maxLength: 50000 }
+        last_contact: { type: [string, 'null'], format: date }
+        industry: { type: [string, 'null'], maxLength: 500 }
+    VendorPatch:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        company: { type: string, minLength: 1, maxLength: 300 }
+        name: { type: [string, 'null'], maxLength: 300 }
+        title: { type: [string, 'null'], maxLength: 500 }
+        email: { type: [string, 'null'], maxLength: 320 }
+        phone: { type: [string, 'null'], maxLength: 100 }
+        industry: { type: [string, 'null'], maxLength: 500 }
+        region: { type: [string, 'null'], maxLength: 500 }
+        stage: { type: [string, 'null'], maxLength: 100 }
+        notes: { type: [string, 'null'], maxLength: 50000 }
+        last_contact: { type: [string, 'null'], format: date }
+    TaskPatch:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        title: { type: string, minLength: 1, maxLength: 20000 }
+        due_date: { type: [string, 'null'], format: date }
+        owner: { type: string, enum: [Scott, Jeff] }
+  responses:
+    Success:
+      description: The bounded CRM operation succeeded.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              ok: { type: boolean }
+              records: { type: array, items: { type: object, additionalProperties: true } }
+    Error:
+      description: The operation was rejected or failed validation.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              ok: { type: boolean }
+              error: { type: string }
