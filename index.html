@@ -1494,7 +1494,10 @@ const richNotesFromElement = element => richNotesFromHtml(element?.innerHTML || 
 const renderRichNotesHtml = (raw, options) => {
   const readOnly = !!(options && options.readOnly);
   const template = document.createElement("template");
-  template.innerHTML = String(raw || "");
+  const source = String(raw || "");
+  // Database and scheduled-task notes are often plain text. Preserve their
+  // line breaks instead of letting HTML collapse the whole brief into one row.
+  template.innerHTML = /<[a-z][\s\S]*>/i.test(source) ? source : richNotesFromPlainText(source);
   const walk = nodes => Array.from(nodes || []).map(node => {
     if(node.nodeType===3) return linkifiedHtml(node.textContent || "");
     if(node.nodeType!==1) return "";
@@ -1583,6 +1586,68 @@ const LinkifiedText = ({ text, style }) => {
         ? <a key={index} href={normalizeExternalUrl(part)} target="_blank" rel="noreferrer" onMouseDown={e=>e.stopPropagation()} onPointerDown={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} style={{color:"#1d4ed8",textDecoration:"underline",wordBreak:"break-all",cursor:"pointer"}}>{part}</a>
         : <React.Fragment key={index}>{part}</React.Fragment>
       )}
+    </div>
+  );
+};
+
+const TASK_BRIEF_HEADINGS = [
+  "CONFIRMED PUBLIC FACTS",
+  "CONFIRMED",
+  "INFERRED LINE / INTERFACES",
+  "INFERRED LINE UPGRADE",
+  "LIKELY LINE / INTERFACES",
+  "E.D. CORE FIT",
+  "WHERE E.D. INDUSTRIAL FITS",
+  "ADJACENT / SECOND-NATURE WORK",
+  "ADJACENT / SECOND-NATURE OPPORTUNITIES",
+  "WHO TO CONTACT",
+  "CONTACT ORDER",
+  "QUICK OUTREACH SCRIPT",
+  "QUICK SCRIPT",
+  "NEXT ACTION",
+  "BEST NEXT ACTION",
+  "EVIDENCE"
+];
+const isStructuredResearchTask = text => {
+  const upper = String(text || "").toUpperCase();
+  return upper.includes("SCHEDULED RESEARCH KEY:") ||
+    TASK_BRIEF_HEADINGS.filter(heading => upper.includes(heading)).length >= 2;
+};
+const taskBriefHeading = line => {
+  const upper = String(line || "").trim().replace(/:$/, "").toUpperCase();
+  return TASK_BRIEF_HEADINGS.find(heading => upper===heading) || "";
+};
+const StructuredTaskBrief = ({ text }) => {
+  const lines = String(text || "").replace(/\r/g, "").split("\n");
+  return (
+    <div style={{display:"grid",gap:5,fontSize:12,color:"#334155",lineHeight:1.55}}>
+      {lines.map((rawLine,index)=>{
+        const line = rawLine.trim();
+        if(!line) return <div key={index} style={{height:3}} />;
+        const heading = taskBriefHeading(line);
+        if(heading) return <div key={index} className="condensed" style={{marginTop:index?8:0,fontSize:12,fontWeight:800,color:"#1e3a8a",letterSpacing:".045em"}}>{line}</div>;
+        const numbered = line.match(/^(\d+)\.\s*(.*)$/);
+        if(numbered) return <div key={index} style={{display:"grid",gridTemplateColumns:"20px minmax(0,1fr)",gap:5}}><strong style={{color:"#1e3a8a"}}>{numbered[1]}.</strong><LinkifiedText text={numbered[2]} /></div>;
+        const bullet = line.match(/^[-•]\s*(.*)$/);
+        if(bullet) return <div key={index} style={{display:"grid",gridTemplateColumns:"12px minmax(0,1fr)",gap:5}}><span style={{color:"#ef4444"}}>•</span><LinkifiedText text={bullet[1]} /></div>;
+        return <LinkifiedText key={index} text={line} />;
+      })}
+    </div>
+  );
+};
+const TaskTitleView = ({ text, done=false }) => {
+  const value = String(text || "").trim();
+  if(!isStructuredResearchTask(value)) return <div style={{fontSize:13,fontWeight:700,color:done?"#94a3b8":"#18233a",textDecoration:done?"line-through":"none",whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{value}</div>;
+  const [headline,...rest] = value.replace(/\r/g, "").split("\n");
+  return (
+    <div style={{minWidth:0}}>
+      <div style={{fontSize:13,fontWeight:800,color:done?"#94a3b8":"#18233a",textDecoration:done?"line-through":"none",wordBreak:"break-word"}}>{headline}</div>
+      <details onClick={e=>e.stopPropagation()} style={{marginTop:7}}>
+        <summary style={{cursor:"pointer",color:"#1d4ed8",fontSize:11,fontWeight:800,userSelect:"none"}}>View project brief</summary>
+        <div style={{marginTop:9,padding:"12px 14px",background:"#f8fbff",border:"1px solid #dbe7f5",borderRadius:6,maxHeight:520,overflow:"auto"}}>
+          <StructuredTaskBrief text={rest.join("\n")} />
+        </div>
+      </details>
     </div>
   );
 };
@@ -1801,6 +1866,9 @@ function App(){
   const [saving,setSaving] = useState(false);
   const [toast,setToast] = useState("");
   const [view,setView] = useState("dashboard");
+  const [connectContacts,setConnectContacts] = useState([]);
+  const [connectContactsLoading,setConnectContactsLoading] = useState(false);
+  const [connectContactsError,setConnectContactsError] = useState("");
   const [tab,setTab] = useState("manufacturer");
   const [search,setSearch] = useState("");
   const [stageF,setStageF] = useState("All");
@@ -2138,6 +2206,57 @@ function App(){
   };
 
   const toast2 = msg => { setToast(msg); setTimeout(()=>setToast(""),3000); };
+
+  const loadConnectContacts = useCallback(async () => {
+    setConnectContactsLoading(true);
+    try{
+      const {data,error} = await sb
+        .from("linkedin_outreach_contacts")
+        .select("id,contact_name,title,company,plant_city,role_category,linkedin_url,status,discovered_at,created_at")
+        .eq("status","new")
+        .order("created_at",{ascending:false});
+      if(error) throw error;
+      setConnectContacts(data || []);
+      setConnectContactsError("");
+    }catch(err){
+      setConnectContactsError(err.message || "Could not load contacts.");
+    }finally{
+      setConnectContactsLoading(false);
+    }
+  },[]);
+
+  useEffect(()=>{
+    if(view!=="connect") return;
+    let refreshTimer = null;
+    loadConnectContacts();
+    const changes = sb
+      .channel("crm-linkedin-connect-list")
+      .on("postgres_changes",{event:"*",schema:"public",table:"linkedin_outreach_contacts"},()=>{
+        if(refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(loadConnectContacts,180);
+      })
+      .subscribe();
+    return()=>{
+      if(refreshTimer) clearTimeout(refreshTimer);
+      sb.removeChannel(changes);
+    };
+  },[view,loadConnectContacts]);
+
+  const completeConnectContact = async id => {
+    try{
+      const now = new Date().toISOString();
+      const result = await sb
+        .from("linkedin_outreach_contacts")
+        .update({status:"connected",last_action_at:now,updated_at:now})
+        .eq("id",id)
+        .eq("status","new");
+      ensureOk(result);
+      setConnectContacts(list=>list.filter(contact=>contact.id!==id));
+      toast2("Contact completed.");
+    }catch(err){
+      toast2("Could not complete contact: "+(err.message || String(err)));
+    }
+  };
   const leadFinderRunRef = useRef({cancelled:false,controller:null,runId:0});
   const queueLatestContactSave = useCallback((saveKey, raw, worker) => {
     if(!saveKey || typeof worker !== "function") return Promise.resolve(false);
@@ -3567,7 +3686,7 @@ const taskActivityFromTask = task => ({
       <header className="m-header" style={{height:58,padding:"0 28px",display:"flex",alignItems:"center",justifyContent:"space-between",background:"#fff",borderBottom:"3px solid #ef4444",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
         <div className="condensed" style={{fontSize:22,fontWeight:800,letterSpacing:".04em"}}><span style={{color:"#ef4444"}}>ED</span> <span style={{color:"#1e3a8a"}}>INDUSTRIAL</span><span style={{fontSize:14,color:"#94a3b8",marginLeft:8,letterSpacing:".12em"}}>CRM</span></div>
         <div style={{display:"flex",gap:6}}>
-          {[["dashboard","Dashboard"],["contacts","Contacts"],["finder","Lead Finder"]].map(([value,label])=><button key={value} onClick={()=>setView(value)} style={{padding:"7px 16px",border:"none",borderRadius:3,background:view===value?"#1e3a8a":"transparent",color:view===value?"#fff":"#64748b",cursor:"pointer"}}>{label}</button>)}
+          {[["dashboard","Dashboard"],["contacts","Contacts"],["connect","Contacts to Connect With"]].map(([value,label])=><button key={value} onClick={()=>setView(value)} style={{padding:"7px 16px",border:"none",borderRadius:3,background:view===value?"#1e3a8a":"transparent",color:view===value?"#fff":"#64748b",cursor:"pointer"}}>{label}</button>)}
         </div>
         <button onClick={()=>openForm(effectiveTab)} style={{padding:"8px 18px",border:"none",borderRadius:3,background:"#ef4444",color:"#fff",fontWeight:700,cursor:"pointer"}}>+ Add Company</button>
       </header>
@@ -3650,7 +3769,7 @@ const taskActivityFromTask = task => ({
                       <div key={t.id} onClick={()=>setShowTasksModal(true)} style={{padding:"12px 18px",borderBottom:"1px solid #eef3f9",display:"flex",gap:10,alignItems:"flex-start",cursor:"pointer"}}>
                         <input type="checkbox" checked={t.done} onChange={()=>toggleTask(t.id)} onClick={e=>e.stopPropagation()} style={{marginTop:2}} />
                         <div style={{minWidth:0}}>
-                          <div style={{fontSize:13,fontWeight:700,color:"#18233a"}}>{t.title}</div>
+                          <TaskTitleView text={t.title} done={t.done} />
                           <div className="mono" style={{fontSize:11,color:"#ef4444",marginTop:3}}>{normalizeOwner(t.owner)}{" · "}{t.company}{t.due_date?" · "+t.due_date:""}</div>
                         </div>
                       </div>
@@ -3677,7 +3796,7 @@ const taskActivityFromTask = task => ({
                       <div key={t.id} onClick={()=>setShowTasksModal(true)} style={{padding:"12px 18px",borderBottom:"1px solid #eef3f9",display:"flex",gap:10,alignItems:"flex-start",cursor:"pointer"}}>
                         <input type="checkbox" checked={t.done} onChange={()=>toggleTask(t.id)} onClick={e=>e.stopPropagation()} style={{marginTop:2}} />
                         <div style={{minWidth:0}}>
-                          <div style={{fontSize:13,fontWeight:700,color:"#18233a"}}>{t.title}</div>
+                          <TaskTitleView text={t.title} done={t.done} />
                           <div className="mono" style={{fontSize:11,color:"#7f92b0",marginTop:3}}>{normalizeOwner(t.owner)}{" · "}{t.company}{t.due_date?" · "+t.due_date:""}</div>
                         </div>
                       </div>
@@ -3752,6 +3871,46 @@ const taskActivityFromTask = task => ({
                     })}
                   </tbody>
                 </table>
+              </div>
+            </section>
+          </div>
+        )}
+
+        {view==="connect" && (
+          <div className="fade" style={{display:"grid",gap:14,maxWidth:1080,margin:"0 auto"}}>
+            <section style={{background:"#fff",border:"1px solid #d8e2ef",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+              <div className="m-wrap" style={{padding:"18px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:14,borderBottom:"1px solid #d8e2ef",background:"#f8fbff"}}>
+                <div>
+                  <div className="condensed" style={{fontSize:24,fontWeight:800,color:"#18233a"}}>Contacts to Connect With</div>
+                  <div style={{fontSize:13,color:"#64748b",marginTop:5}}>Open the LinkedIn profile, connect, then check the contact off. Completed contacts disappear from this list.</div>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <span className="mono" style={{fontSize:11,color:"#1e3a8a",fontWeight:700}}>{connectContacts.length} OPEN</span>
+                  <button onClick={loadConnectContacts} disabled={connectContactsLoading} style={{padding:"8px 12px",border:"1px solid #cbd5e1",borderRadius:4,background:"#fff",color:"#475569",cursor:connectContactsLoading?"default":"pointer",fontWeight:700}}>{connectContactsLoading?"Refreshing...":"Refresh"}</button>
+                </div>
+              </div>
+
+              {connectContactsError && <div style={{padding:"12px 20px",background:"#fef2f2",borderBottom:"1px solid #fecaca",color:"#b91c1c",fontSize:13}}>{connectContactsError}</div>}
+
+              <div>
+                {!connectContactsLoading && !connectContacts.length && !connectContactsError && (
+                  <div style={{padding:"54px 20px",textAlign:"center"}}>
+                    <div className="condensed" style={{fontSize:22,fontWeight:800,color:"#334155"}}>You are caught up</div>
+                    <div style={{fontSize:13,color:"#8ea0bd",marginTop:6}}>New verified contacts from the hourly search will appear here automatically.</div>
+                  </div>
+                )}
+                {connectContacts.map(contact=>(
+                  <div key={contact.id} className="m-grid-1" style={{display:"grid",gridTemplateColumns:"34px minmax(160px,1fr) minmax(180px,1.25fr) minmax(180px,1.1fr) 150px",gap:14,alignItems:"center",padding:"15px 20px",borderBottom:"1px solid #eef3f9"}}>
+                    <input type="checkbox" aria-label={`Complete ${contact.contact_name}`} onChange={()=>completeConnectContact(contact.id)} style={{width:18,height:18,cursor:"pointer",accentColor:"#22c55e"}} />
+                    <div style={{minWidth:0}}>
+                      <div style={{fontSize:14,fontWeight:800,color:"#18233a",wordBreak:"break-word"}}>{contact.contact_name}</div>
+                      {contact.plant_city && <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:4}}>{contact.plant_city}</div>}
+                    </div>
+                    <div style={{fontSize:13,color:"#475569",wordBreak:"break-word"}}>{contact.title || "Position not listed"}</div>
+                    <div style={{fontSize:13,fontWeight:700,color:"#334155",wordBreak:"break-word"}}>{contact.company}</div>
+                    <a href={contact.linkedin_url} target="_blank" rel="noreferrer" style={{display:"inline-flex",justifyContent:"center",padding:"8px 11px",borderRadius:4,background:"#0a66c2",color:"#fff",fontSize:12,fontWeight:800,textDecoration:"none"}}>Open LinkedIn</a>
+                  </div>
+                ))}
               </div>
             </section>
           </div>
@@ -4325,7 +4484,7 @@ const taskActivityFromTask = task => ({
                               </select>
                             </div>
                           : <div>
-                              <div style={{fontSize:13,textDecoration:t.done?"line-through":"none",color:t.done?"#94a3b8":"#0f172a",cursor:"text"}}>{t.title}</div>
+                              <TaskTitleView text={t.title} done={t.done} />
                               <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginTop:4}}>
                                 <OwnerTag owner={t.owner} />
                                 {t.due_date&&<div className="mono" style={{fontSize:10,color:t.due_date<today()&&!t.done?"#ef4444":"#94a3b8"}}>{t.due_date}</div>}
@@ -4571,7 +4730,7 @@ const taskActivityFromTask = task => ({
                   <div key={task.id} className="m-grid-1" style={{display:"grid",gridTemplateColumns:"44px minmax(0,1fr) 170px 110px",gap:12,alignItems:"start",padding:"12px 16px",borderBottom:"1px solid #eef3f9"}}>
                     <input type="checkbox" checked={task.done} onChange={()=>toggleTask(task.id)} style={{marginTop:2}} />
                     <div style={{minWidth:0}}>
-                      <div style={{fontSize:13,fontWeight:700,color:task.done?"#94a3b8":"#18233a",textDecoration:task.done?"line-through":"none"}}>{task.title}</div>
+                      <TaskTitleView text={task.title} done={task.done} />
                       <div style={{marginTop:4}}><OwnerTag owner={task.owner} /></div>
                     </div>
                     {linkedRecord
@@ -4613,7 +4772,7 @@ const taskActivityFromTask = task => ({
                 {unmatchedLegacyTasks.map((task, index)=>(
                   <div key={`${task.company || "unknown"}|${task.title || "task"}|${task.due_date || ""}|${index}`} className="m-grid-1" style={{display:"grid",gridTemplateColumns:"minmax(160px,220px) minmax(0,1fr) 110px 90px",gap:12,padding:"12px 16px",borderBottom:"1px solid #eef3f9",alignItems:"start"}}>
                     <div style={{fontSize:12,fontWeight:700,color:"#18233a",wordBreak:"break-word"}}>{task.company || "No company name saved"}</div>
-                    <div style={{fontSize:12,color:"#475569",wordBreak:"break-word"}}>{task.title || "Untitled task"}</div>
+                    <TaskTitleView text={task.title || "Untitled task"} done={task.done} />
                     <div className="mono" style={{fontSize:11,color:"#64748b"}}>{task.due_date || "No date"}</div>
                     <div><OwnerTag owner={task.owner} /></div>
                   </div>
