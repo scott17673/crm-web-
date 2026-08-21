@@ -1911,6 +1911,7 @@ function App(){
   const [weeklyActivityFilter,setWeeklyActivityFilter] = useState("All");
   const [weeklyWeekOffset,setWeeklyWeekOffset] = useState(0);
   const [showTasksModal,setShowTasksModal] = useState(false);
+  const [taskListMode,setTaskListMode] = useState("regular");
   const [showUnmatchedTasksModal,setShowUnmatchedTasksModal] = useState(false);
   const [taskSearch,setTaskSearch] = useState("");
   const [dueTaskOwnerFilter,setDueTaskOwnerFilter] = useState("All");
@@ -3572,12 +3573,17 @@ const taskActivityFromTask = task => ({
 
   if(loading) return <div style={{minHeight:"100vh",display:"grid",placeItems:"center"}}><div style={{display:"grid",gap:14,justifyItems:"center"}}><div className="spinner"/><div className="condensed" style={{letterSpacing:".1em",fontWeight:700,color:"#64748b"}}>LOADING</div></div></div>;
 
+  // Find-a-Million creates CRM tasks with this stable title prefix. Keep them in
+  // activities for the normal completion/history flow, but display them apart
+  // from day-to-day work so automated outreach does not bury regular tasks.
+  const isReachOutTask = task => /^\s*reach[\s-]*out\s*:/i.test(String(task?.title || ""));
   const matchesTaskOwnerFilter = (task, ownerFilter) => ownerFilter==="All" || normalizeOwner(task.owner)===ownerFilter;
-  const overdue = sortTasksByNearest(tasks.filter(t=>!t.done&&t.due_date&&t.due_date<=today()&&matchesTaskOwnerFilter(t, dueTaskOwnerFilter)));
-  const upcoming = sortTasksByNearest(tasks.filter(t=>!t.done&&(!t.due_date||t.due_date>today())&&matchesTaskOwnerFilter(t, upcomingTaskOwnerFilter)));
+  const regularOpenTasks = tasks.filter(task => !task.done && !isReachOutTask(task));
+  const reachOutTasks = sortTasksByNearest(tasks.filter(task => !task.done && isReachOutTask(task)));
+  const overdue = sortTasksByNearest(regularOpenTasks.filter(t=>t.due_date&&t.due_date<=today()&&matchesTaskOwnerFilter(t, dueTaskOwnerFilter)));
+  const upcoming = sortTasksByNearest(regularOpenTasks.filter(t=>(!t.due_date||t.due_date>today())&&matchesTaskOwnerFilter(t, upcomingTaskOwnerFilter)));
   const taskSearchQuery = taskSearch.trim().toLowerCase();
-  const filteredTaskList = sortTasksByNearest(tasks.filter(task => {
-    if(task.done) return false;
+  const filteredTaskList = sortTasksByNearest((taskListMode==="reachout" ? reachOutTasks : regularOpenTasks).filter(task => {
     if(!matchesTaskOwnerFilter(task, allTasksOwnerFilter)) return false;
     if(!taskSearchQuery) return true;
     const haystack = [task.title, task.company, task.due_date, task.contact_type, task.owner].filter(Boolean).join(" ").toLowerCase();
@@ -3686,7 +3692,7 @@ const taskActivityFromTask = task => ({
       <header className="m-header" style={{height:58,padding:"0 28px",display:"flex",alignItems:"center",justifyContent:"space-between",background:"#fff",borderBottom:"3px solid #ef4444",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
         <div className="condensed" style={{fontSize:22,fontWeight:800,letterSpacing:".04em"}}><span style={{color:"#ef4444"}}>ED</span> <span style={{color:"#1e3a8a"}}>INDUSTRIAL</span><span style={{fontSize:14,color:"#94a3b8",marginLeft:8,letterSpacing:".12em"}}>CRM</span></div>
         <div style={{display:"flex",gap:6}}>
-          {[["dashboard","Dashboard"],["contacts","Contacts"],["connect","Contacts to Connect With"]].map(([value,label])=><button key={value} onClick={()=>setView(value)} style={{padding:"7px 16px",border:"none",borderRadius:3,background:view===value?"#1e3a8a":"transparent",color:view===value?"#fff":"#64748b",cursor:"pointer"}}>{label}</button>)}
+          {[["dashboard","Dashboard"],["contacts","Contacts"],["connect","Contacts to Connect With"],["reachout","Million Dollar Projects"]].map(([value,label])=><button key={value} onClick={()=>setView(value)} style={{padding:"7px 16px",border:"none",borderRadius:3,background:view===value?"#1e3a8a":"transparent",color:view===value?"#fff":"#64748b",cursor:"pointer"}}>{label}</button>)}
         </div>
         <button onClick={()=>openForm(effectiveTab)} style={{padding:"8px 18px",border:"none",borderRadius:3,background:"#ef4444",color:"#fff",fontWeight:700,cursor:"pointer"}}>+ Add Company</button>
       </header>
@@ -3759,14 +3765,14 @@ const taskActivityFromTask = task => ({
                       {PEOPLE.map(person => <option key={person} value={person}>{person}</option>)}
                     </select>
                     {unmatchedLegacyTasks.length>0 && <button onClick={()=>setShowUnmatchedTasksModal(true)} style={{border:"none",background:"transparent",color:"#ef4444",cursor:"pointer",fontSize:12,fontWeight:700}}>Review Unmatched ({unmatchedLegacyTasks.length})</button>}
-                    <button onClick={()=>setShowTasksModal(true)} style={{border:"none",background:"transparent",color:"#1e3a8a",cursor:"pointer",fontSize:12,fontWeight:700}}>View All</button>
+                    <button onClick={()=>{setTaskListMode("regular");setShowTasksModal(true);}} style={{border:"none",background:"transparent",color:"#1e3a8a",cursor:"pointer",fontSize:12,fontWeight:700}}>View All</button>
                   </div>
                 </div>
                 <div style={{minHeight:302}}>
                   {overdue.length===0
                     ? <div className="mono" style={{padding:"18px 20px",fontSize:12,color:"#8ea0bd"}}>No due or overdue tasks.</div>
                     : overdue.map(t=>(
-                      <div key={t.id} onClick={()=>setShowTasksModal(true)} style={{padding:"12px 18px",borderBottom:"1px solid #eef3f9",display:"flex",gap:10,alignItems:"flex-start",cursor:"pointer"}}>
+                      <div key={t.id} onClick={()=>{setTaskListMode("regular");setShowTasksModal(true);}} style={{padding:"12px 18px",borderBottom:"1px solid #eef3f9",display:"flex",gap:10,alignItems:"flex-start",cursor:"pointer"}}>
                         <input type="checkbox" checked={t.done} onChange={()=>toggleTask(t.id)} onClick={e=>e.stopPropagation()} style={{marginTop:2}} />
                         <div style={{minWidth:0}}>
                           <TaskTitleView text={t.title} done={t.done} />
@@ -3786,14 +3792,14 @@ const taskActivityFromTask = task => ({
                       <option value="All">All</option>
                       {PEOPLE.map(person => <option key={person} value={person}>{person}</option>)}
                     </select>
-                    <button onClick={()=>setShowTasksModal(true)} style={{border:"none",background:"transparent",color:"#1e3a8a",cursor:"pointer",fontSize:12,fontWeight:700}}>View All</button>
+                    <button onClick={()=>{setTaskListMode("regular");setShowTasksModal(true);}} style={{border:"none",background:"transparent",color:"#1e3a8a",cursor:"pointer",fontSize:12,fontWeight:700}}>View All</button>
                   </div>
                 </div>
                 <div style={{minHeight:302}}>
                   {upcoming.length===0
                     ? <div className="mono" style={{padding:"18px 20px",fontSize:12,color:"#8ea0bd"}}>No upcoming tasks.</div>
                     : upcoming.slice(0,8).map(t=>(
-                      <div key={t.id} onClick={()=>setShowTasksModal(true)} style={{padding:"12px 18px",borderBottom:"1px solid #eef3f9",display:"flex",gap:10,alignItems:"flex-start",cursor:"pointer"}}>
+                      <div key={t.id} onClick={()=>{setTaskListMode("regular");setShowTasksModal(true);}} style={{padding:"12px 18px",borderBottom:"1px solid #eef3f9",display:"flex",gap:10,alignItems:"flex-start",cursor:"pointer"}}>
                         <input type="checkbox" checked={t.done} onChange={()=>toggleTask(t.id)} onClick={e=>e.stopPropagation()} style={{marginTop:2}} />
                         <div style={{minWidth:0}}>
                           <TaskTitleView text={t.title} done={t.done} />
@@ -3912,6 +3918,35 @@ const taskActivityFromTask = task => ({
                   </div>
                 ))}
               </div>
+            </section>
+          </div>
+        )}
+
+        {view==="reachout" && (
+          <div className="fade" style={{display:"grid",gap:14,maxWidth:1080,margin:"0 auto"}}>
+            <section style={{background:"#fff",border:"1px solid #bfdbfe",borderRadius:7,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
+              <div className="m-wrap" style={{padding:"18px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:14,borderBottom:"1px solid #dbeafe",background:"#eff6ff"}}>
+                <div>
+                  <div className="condensed" style={{fontSize:24,fontWeight:800,color:"#18233a"}}>Million Dollar Projects</div>
+                  <div style={{fontSize:13,color:"#64748b",marginTop:5}}>Companies queued by Find-a-Million that have not been reached out to yet. They are kept out of your regular task list.</div>
+                </div>
+                <span className="mono" style={{fontSize:11,color:"#1e3a8a",fontWeight:700}}>{reachOutTasks.length} OPEN</span>
+              </div>
+              {!reachOutTasks.length
+                ? <div style={{padding:"54px 20px",textAlign:"center"}}><div className="condensed" style={{fontSize:22,fontWeight:800,color:"#334155"}}>You are caught up</div><div style={{fontSize:13,color:"#8ea0bd",marginTop:6}}>New Find-a-Million reach-out companies will appear here automatically.</div></div>
+                : reachOutTasks.map(task=>{
+                  const company = resolveTaskRecord(task);
+                  const contactNames = (company?.contacts || []).map(contact => [contact.name, contact.title].filter(Boolean).join(" — ")).filter(Boolean);
+                  return (
+                    <div key={task.id} className="m-grid-1" style={{display:"grid",gridTemplateColumns:"34px minmax(180px,1fr) minmax(220px,1.25fr) minmax(0,1.6fr) 130px",gap:14,alignItems:"center",padding:"15px 20px",borderBottom:"1px solid #eef3f9"}}>
+                      <input type="checkbox" aria-label={`Mark ${task.company || "company"} reached out`} checked={task.done} onChange={()=>toggleTask(task.id)} style={{width:18,height:18,cursor:"pointer",accentColor:"#22c55e"}} />
+                      <button onClick={()=>openTaskRecord(task)} style={{fontSize:14,fontWeight:800,color:"#18233a",wordBreak:"break-word",border:"none",background:"transparent",padding:0,textAlign:"left",cursor:company?"pointer":"default",textDecoration:company?"underline":"none"}}>{task.company || "Unknown company"}</button>
+                      <div style={{fontSize:13,color:"#475569",wordBreak:"break-word"}}>{contactNames.length ? contactNames.join("\n") : "No named contact saved yet"}</div>
+                      <TaskTitleView text={task.title} done={task.done} />
+                      <div className="mono" style={{fontSize:11,color:task.due_date&&task.due_date<today()?"#ef4444":"#64748b"}}>{task.due_date || "No date"}</div>
+                    </div>
+                  );
+                })}
             </section>
           </div>
         )}
@@ -4703,14 +4738,14 @@ const taskActivityFromTask = task => ({
             <div style={{borderTop:"3px solid #1e3a8a"}} />
             <div style={{padding:"18px 24px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:16,borderBottom:"1px solid #e8eef6"}}>
               <div>
-                <div className="condensed" style={{fontSize:22,fontWeight:800,color:"#172033"}}>All Tasks</div>
+                <div className="condensed" style={{fontSize:22,fontWeight:800,color:"#172033"}}>{taskListMode==="reachout" ? "Big Projects — To Reach Out" : "Regular Tasks"}</div>
                 <div className="mono" style={{fontSize:11,color:"#8ea0bd",marginTop:3}}>{filteredTaskList.length} matching task{filteredTaskList.length===1?"":"s"} · nearest due at the top</div>
               </div>
               <button onClick={()=>setShowTasksModal(false)} style={{width:30,height:30,border:"1px solid #d7dfeb",borderRadius:4,background:"#fff",cursor:"pointer",color:"#94a3b8"}}>×</button>
             </div>
             <div style={{padding:"18px 24px",display:"grid",gap:14}}>
               <div className="m-grid-1" style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 140px",gap:10}}>
-                <input className="field" value={taskSearch} onChange={e=>setTaskSearch(e.target.value)} placeholder="Search by company, task, or owner..." />
+                <input className="field" value={taskSearch} onChange={e=>setTaskSearch(e.target.value)} placeholder={taskListMode==="reachout" ? "Search reach-out projects..." : "Search regular tasks..."} />
                 <select className="field" value={allTasksOwnerFilter} onChange={e=>setAllTasksOwnerFilter(e.target.value)} style={{cursor:"pointer"}}>
                   <option value="All">All owners</option>
                   {PEOPLE.map(person => <option key={person} value={person}>{person}</option>)}
