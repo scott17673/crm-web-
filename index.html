@@ -3576,7 +3576,7 @@ const taskActivityFromTask = task => ({
   // Find-a-Million creates CRM tasks with this stable title prefix. Keep them in
   // activities for the normal completion/history flow, but display them apart
   // from day-to-day work so automated outreach does not bury regular tasks.
-  const isReachOutTask = task => /^\s*reach[\s-]*out\s*:/i.test(String(task?.title || ""));
+  const isReachOutTask = task => /^\s*reach[\s-]*out\b/i.test(String(task?.title || ""));
   const matchesTaskOwnerFilter = (task, ownerFilter) => ownerFilter==="All" || normalizeOwner(task.owner)===ownerFilter;
   const regularOpenTasks = tasks.filter(task => !task.done && !isReachOutTask(task));
   const reachOutTasks = sortTasksByNearest(tasks.filter(task => !task.done && isReachOutTask(task)));
