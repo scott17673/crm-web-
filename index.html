@@ -1328,6 +1328,18 @@ const replaceManufacturerContacts = async (manufacturerId, contacts) => {
     }))
   ));
 };
+const replaceVendorContacts = async (vendorId, contacts) => {
+  ensureOk(await sb.from("vendor_contacts").delete().eq("vendor_id", vendorId));
+  if(!contacts.length) return;
+  ensureOk(await sb.from("vendor_contacts").insert(
+    contacts.map(contact => ({
+      vendor_id: vendorId,
+      name: contact.name,
+      title: contact.title,
+      linkedin: contact.linkedin,
+    }))
+  ));
+};
 const SUPABASE_PAGE_SIZE = 1000;
 const CONTACT_LOOKUP_BATCH_SIZE = 150;
 const fetchManufacturerContactsByIds = async manufacturerIds => {
@@ -1343,6 +1355,23 @@ const fetchManufacturerContactsByIds = async manufacturerIds => {
         .in("manufacturer_id", batch)
         .order("id", {ascending:true})
         .range(from, from + SUPABASE_PAGE_SIZE - 1);
+      ensureOk(result);
+      const rows = result.data || [];
+      contacts.push(...rows);
+      if(rows.length < SUPABASE_PAGE_SIZE) break;
+      from += SUPABASE_PAGE_SIZE;
+    }
+  }
+  return contacts;
+};
+const fetchVendorContactsByIds = async vendorIds => {
+  const ids = [...new Set((vendorIds || []).filter(id => id !== null && id !== undefined))];
+  const contacts = [];
+  for(let index = 0; index < ids.length; index += CONTACT_LOOKUP_BATCH_SIZE){
+    const batch = ids.slice(index, index + CONTACT_LOOKUP_BATCH_SIZE);
+    let from = 0;
+    while(true){
+      const result = await sb.from("vendor_contacts").select("*").in("vendor_id", batch).order("id", {ascending:true}).range(from, from + SUPABASE_PAGE_SIZE - 1);
       ensureOk(result);
       const rows = result.data || [];
       contacts.push(...rows);
@@ -2079,7 +2108,7 @@ function App(){
   const selectedContactsSignature = useMemo(() => {
     if(!selected) return "";
     if(selected.type==="manufacturer") return manufacturerContactsSignature(selected.contacts || []);
-    if(selected.type==="vendor") return [selected.name || "", selected.title || "", selected.email || "", selected.phone || "", selected.industry || "", selected.region || ""].join("|");
+    if(selected.type==="vendor") return manufacturerContactsSignature(selected.contacts || []);
     return "";
   },[selected?.id, selected?.type, selected?.contacts, selected?.name, selected?.title, selected?.email, selected?.phone, selected?.industry, selected?.region]);
 
@@ -2090,7 +2119,7 @@ function App(){
       return;
     }
     const nextNotes = selected.notes || "";
-    const nextContacts = selected.type==="manufacturer" ? contactsTextFromRecord(selected) : selected.type==="vendor" ? vendorContactTextFromRecord(selected) : "";
+    const nextContacts = ["manufacturer","vendor"].includes(selected.type) ? contactsTextFromRecord(selected) : "";
     setNotesDraft(current => current===nextNotes ? current : nextNotes);
     setContactsDraft(current => current===nextContacts ? current : nextContacts);
   },[selected?.id, selected?.type, selected?.notes, selectedContactsSignature]);
@@ -2387,15 +2416,24 @@ const taskActivityFromTask = task => ({
         fetchAllSupabaseRows(()=>sb.from("lost_contacts").select("*").order("created_at",{ascending:false})),
         fetchAllSupabaseRows(()=>sb.from("activities").select("*").order("date",{ascending:false})),
       ]);
-      const contacts = await fetchManufacturerContactsByIds(manufacturerRows.map(row => row.id));
+      const [contacts, vendorContacts] = await Promise.all([
+        fetchManufacturerContactsByIds(manufacturerRows.map(row => row.id)),
+        fetchVendorContactsByIds(vendorRows.map(row => row.id)),
+      ]);
       const contactsByManufacturer = contacts.reduce((map, contact) => {
         const key = String(contact.manufacturer_id);
         if(!map.has(key)) map.set(key, []);
         map.get(key).push(contact);
         return map;
       }, new Map());
+      const contactsByVendor = vendorContacts.reduce((map, contact) => {
+        const key = String(contact.vendor_id);
+        if(!map.has(key)) map.set(key, []);
+        map.get(key).push(contact);
+        return map;
+      }, new Map());
       const m = manufacturerRows.map(row => ({...row,type:"manufacturer",tags:row.tags||[],lastContact:row.last_contact,industry:row.industry||"",notes:row.signals||"",contacts:contactsByManufacturer.get(String(row.id)) || []}));
-      const v = (vendorRows||[]).map(row => ({...row,type:"vendor",tags:row.tags||[],lastContact:row.last_contact}));
+      const v = (vendorRows||[]).map(row => ({...row,type:"vendor",tags:row.tags||[],lastContact:row.last_contact,contacts:contactsByVendor.get(String(row.id)) || []}));
       const l = (lostRows||[]).map(row => ({...row,type:"lost",tags:row.tags||[],lastContact:row.last_contact,lostReason:row.lost_reason,value:row.deal_value}));
       const allRecords = [...m, ...v, ...l];
       let activityRows = activityRowsRaw || [];
@@ -2875,7 +2913,7 @@ const taskActivityFromTask = task => ({
     const key = recordKey(rec);
     setSelected(rec);
     setNotesDraft(rec.notes || "");
-    setContactsDraft(rec.type==="manufacturer" ? contactsTextFromRecord(rec) : rec.type==="vendor" ? vendorContactTextFromRecord(rec) : "");
+    setContactsDraft(["manufacturer","vendor"].includes(rec.type) ? contactsTextFromRecord(rec) : "");
     setEditingTaskId(null);
     setEditingTaskDraft(createEmptyTaskEditDraft());
     setEditingActId(null);
@@ -2997,29 +3035,15 @@ const taskActivityFromTask = task => ({
   const persistVendorContacts = useCallback(async (target, raw, options={}) => {
     if(!target || target.type!=="vendor") return false;
     const quiet = !!options.quiet;
-    const parsed = parseVendorContactText(raw);
+    const nextContacts = parseManufacturerContactsText(raw);
     const currentRecord = vendors.find(record => record.id===target.id) || selected;
-    const unchanged =
-      String(currentRecord?.name || "")===parsed.name &&
-      String(currentRecord?.title || "")===parsed.title &&
-      String(currentRecord?.email || "")===parsed.email &&
-      String(currentRecord?.phone || "")===parsed.phone &&
-      String(currentRecord?.industry || "")===parsed.industry &&
-      String(currentRecord?.region || "")===parsed.region;
+    const unchanged = manufacturerContactsSignature(currentRecord?.contacts || [])===manufacturerContactsSignature(nextContacts);
     setContactsDraft(raw);
     if(unchanged) return true;
     try{
-      const payload = {
-        name: parsed.name,
-        title: parsed.title,
-        email: parsed.email,
-        phone: parsed.phone,
-        industry: parsed.industry,
-        region: parsed.region,
-      };
-      ensureOk(await sb.from("vendors").update(payload).eq("id",target.id));
-      setSelected(current => current && current.id===target.id && current.type==="vendor" ? {...current, ...payload} : current);
-      setVendors(list => list.map(record => record.id===target.id ? {...record,...payload} : record));
+      await replaceVendorContacts(target.id, nextContacts);
+      setSelected(current => current && current.id===target.id && current.type==="vendor" ? {...current, contacts:nextContacts} : current);
+      setVendors(list => list.map(record => record.id===target.id ? {...record,contacts:nextContacts} : record));
       if(!quiet) toast2("Saved");
       return true;
     }catch(err){
@@ -4472,14 +4496,14 @@ const taskActivityFromTask = task => ({
                     <EditableLinkField
                       ref={contactsBoxRef}
                       height={detailPanelHeight}
-                      placeholder={selected.type==="manufacturer" ? "Name, Title, LinkedIn/source URL" : "Name, Title\nEmail: person@company.com\nPhone: 555-555-5555\nIndustry: Others\nRegion: Ontario"}
+                      placeholder="Name, Title, LinkedIn/source URL"
                       value={contactsDraft}
                       onChange={setContactsDraft}
                       onAutoSave={nextValue=>selected.type==="manufacturer" ? saveContacts(nextValue, {quiet:true, record:selected}) : saveVendorContacts(nextValue, {quiet:true, record:selected})}
                       onMeasure={syncDetailPanelHeight}
                       onBlurSave={nextValue=>selected.type==="manufacturer" ? saveContacts(nextValue, {quiet:true, record:selected}) : saveVendorContacts(nextValue, {quiet:true, record:selected})}
                     />
-                    <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:6}}>{selected.type==="manufacturer" ? "One per line: Name, Title, LinkedIn/source link" : "First line: Name, Title. Then Email:, Phone:, Industry:, Region:"}</div>
+                    <div className="mono" style={{fontSize:10,color:"#8ea0bd",marginTop:6}}>One per line: Name, Title, LinkedIn/source link</div>
                   </div>
                 </div>
               </> : (
