@@ -1316,30 +1316,57 @@ const deriveImportedContacts = row => {
     ...extractContactsFromNotes(firstFilled(row.notes, row.note, row.internal_notes)),
   ]);
 };
-const replaceManufacturerContacts = async (manufacturerId, contacts) => {
-  ensureOk(await sb.from("manufacturer_contacts").delete().eq("manufacturer_id", manufacturerId));
-  if(!contacts.length) return;
-  ensureOk(await sb.from("manufacturer_contacts").insert(
-    contacts.map(contact => ({
-      manufacturer_id: manufacturerId,
-      name: contact.name,
-      title: contact.title,
-      linkedin: contact.linkedin,
-    }))
-  ));
+const contactRowKey = contact => [contact?.name, contact?.title, contact?.linkedin]
+  .map(value => String(value || "").trim().toLowerCase())
+  .join("|");
+const takeContactRow = (pool, contact) => pool.get(contactRowKey(contact))?.shift() || null;
+const poolContactRows = rows => (rows || []).reduce((pool, row) => {
+  const key = contactRowKey(row);
+  if(!pool.has(key)) pool.set(key, []);
+  pool.get(key).push(row);
+  return pool;
+}, new Map());
+// Contact rows this page inserted itself, so a quick add-then-remove can still
+// be deleted even if the editor's loaded contact list is not refreshed yet.
+const uiInsertedContactIds = new Set();
+// Saves only the difference between the edited contact list and the database
+// instead of deleting and reinserting every row. A row is deleted only if this
+// page loaded it (knownContacts) or inserted it, so a contact added elsewhere
+// (e.g. by the ChatGPT CRM connector while the editor was open) is never wiped.
+// Returns the saved rows, with ids, in list order.
+const syncCompanyContacts = async (table, foreignKey, companyId, contacts, knownContacts=[]) => {
+  const current = await sb.from(table).select("*").eq(foreignKey, companyId).order("id", {ascending:true});
+  ensureOk(current);
+  const unmatched = poolContactRows(current.data);
+  const kept = contacts.map(contact => takeContactRow(unmatched, contact));
+  const toInsert = contacts.filter((contact, index) => !kept[index]);
+  const knownIds = new Set((knownContacts || []).map(contact => contact?.id).filter(id => id !== null && id !== undefined).map(String));
+  const removeIds = [...unmatched.values()].flat()
+    .map(row => row.id)
+    .filter(id => knownIds.has(String(id)) || uiInsertedContactIds.has(`${table}:${id}`));
+  let insertedPool = new Map();
+  if(toInsert.length){
+    const inserted = await sb.from(table).insert(
+      toInsert.map(contact => ({
+        [foreignKey]: companyId,
+        name: contact.name,
+        title: contact.title,
+        linkedin: contact.linkedin,
+      }))
+    ).select("*");
+    ensureOk(inserted);
+    (inserted.data || []).forEach(row => uiInsertedContactIds.add(`${table}:${row.id}`));
+    insertedPool = poolContactRows(inserted.data);
+  }
+  if(removeIds.length){
+    ensureOk(await sb.from(table).delete().eq(foreignKey, companyId).in("id", removeIds));
+  }
+  return contacts.map((contact, index) => kept[index] || takeContactRow(insertedPool, contact) || contact);
 };
-const replaceVendorContacts = async (vendorId, contacts) => {
-  ensureOk(await sb.from("vendor_contacts").delete().eq("vendor_id", vendorId));
-  if(!contacts.length) return;
-  ensureOk(await sb.from("vendor_contacts").insert(
-    contacts.map(contact => ({
-      vendor_id: vendorId,
-      name: contact.name,
-      title: contact.title,
-      linkedin: contact.linkedin,
-    }))
-  ));
-};
+const syncManufacturerContacts = (manufacturerId, contacts, knownContacts) =>
+  syncCompanyContacts("manufacturer_contacts", "manufacturer_id", manufacturerId, contacts, knownContacts);
+const syncVendorContacts = (vendorId, contacts, knownContacts) =>
+  syncCompanyContacts("vendor_contacts", "vendor_id", vendorId, contacts, knownContacts);
 const SUPABASE_PAGE_SIZE = 1000;
 const CONTACT_LOOKUP_BATCH_SIZE = 150;
 const fetchManufacturerContactsByIds = async manufacturerIds => {
@@ -1929,6 +1956,10 @@ function App(){
   const contactsBoxRef = useRef(null);
   const companyNameSaveRef = useRef({timer:null, record:null, value:""});
   const contactSaveQueueRef = useRef(new Map());
+  // Contact rows whose text is currently shown in the contacts editor. Only these
+  // may be deleted by an editor save; a contact loaded in the background while
+  // the editor was focused (and therefore not redrawn) is never treated as removed.
+  const contactsShownRef = useRef({key:"", contacts:[]});
   const [showEmailFmt,setShowEmailFmt] = useState(false);
   const [efName,setEfName] = useState("");
   const [efDomain,setEfDomain] = useState("");
@@ -2122,6 +2153,12 @@ function App(){
     const nextContacts = ["manufacturer","vendor"].includes(selected.type) ? contactsTextFromRecord(selected) : "";
     setNotesDraft(current => current===nextNotes ? current : nextNotes);
     setContactsDraft(current => current===nextContacts ? current : nextContacts);
+    // The editor does not redraw while focused, so only record what it shows
+    // when the new contacts will actually be rendered into it.
+    const editorFocused = !!contactsBoxRef.current && document.activeElement===contactsBoxRef.current;
+    if(!editorFocused || contactsShownRef.current.key!==recordKey(selected)){
+      contactsShownRef.current = {key:recordKey(selected), contacts:["manufacturer","vendor"].includes(selected.type) ? (selected.contacts || []) : []};
+    }
   },[selected?.id, selected?.type, selected?.notes, selectedContactsSignature]);
 
   const finderAction=async(endpoint)=>{
@@ -3015,9 +3052,9 @@ const taskActivityFromTask = task => ({
     setContactsDraft(raw);
     if(currentSignature===nextSignature) return true;
     try{
-      await replaceManufacturerContacts(target.id, nextContacts);
-      setSelected(current => current && current.id===target.id && current.type==="manufacturer" ? {...current, contacts:nextContacts} : current);
-      setMfrs(list => list.map(record => record.id===target.id ? {...record, contacts:nextContacts} : record));
+      const savedContacts = await syncManufacturerContacts(target.id, nextContacts, options.knownContacts || []);
+      setSelected(current => current && current.id===target.id && current.type==="manufacturer" ? {...current, contacts:savedContacts} : current);
+      setMfrs(list => list.map(record => record.id===target.id ? {...record, contacts:savedContacts} : record));
       if(!quiet) toast2("Saved");
       return true;
     }catch(err){
@@ -3029,7 +3066,9 @@ const taskActivityFromTask = task => ({
   const saveContacts = useCallback((raw, options={}) => {
     const target = options.record || selected;
     if(!target || target.type!=="manufacturer") return Promise.resolve(false);
-    return queueLatestContactSave(`manufacturer:${target.id}`, raw, nextRaw => persistManufacturerContacts(target, nextRaw, options));
+    const shown = contactsShownRef.current;
+    const knownContacts = shown.key===recordKey(target) ? shown.contacts : [];
+    return queueLatestContactSave(`manufacturer:${target.id}`, raw, nextRaw => persistManufacturerContacts(target, nextRaw, {...options, knownContacts}));
   },[selected, queueLatestContactSave, persistManufacturerContacts]);
 
   const persistVendorContacts = useCallback(async (target, raw, options={}) => {
@@ -3041,9 +3080,9 @@ const taskActivityFromTask = task => ({
     setContactsDraft(raw);
     if(unchanged) return true;
     try{
-      await replaceVendorContacts(target.id, nextContacts);
-      setSelected(current => current && current.id===target.id && current.type==="vendor" ? {...current, contacts:nextContacts} : current);
-      setVendors(list => list.map(record => record.id===target.id ? {...record,contacts:nextContacts} : record));
+      const savedContacts = await syncVendorContacts(target.id, nextContacts, options.knownContacts || []);
+      setSelected(current => current && current.id===target.id && current.type==="vendor" ? {...current, contacts:savedContacts} : current);
+      setVendors(list => list.map(record => record.id===target.id ? {...record,contacts:savedContacts} : record));
       if(!quiet) toast2("Saved");
       return true;
     }catch(err){
@@ -3055,7 +3094,9 @@ const taskActivityFromTask = task => ({
   const saveVendorContacts = useCallback((raw, options={}) => {
     const target = options.record || selected;
     if(!target || target.type!=="vendor") return Promise.resolve(false);
-    return queueLatestContactSave(`vendor:${target.id}`, raw, nextRaw => persistVendorContacts(target, nextRaw, options));
+    const shown = contactsShownRef.current;
+    const knownContacts = shown.key===recordKey(target) ? shown.contacts : [];
+    return queueLatestContactSave(`vendor:${target.id}`, raw, nextRaw => persistVendorContacts(target, nextRaw, {...options, knownContacts}));
   },[selected, queueLatestContactSave, persistVendorContacts]);
 
   const addTask = () => {
@@ -3357,10 +3398,10 @@ const taskActivityFromTask = task => ({
           ensureOk(inserted);
           targetId = inserted.data?.id;
         }
-        await replaceManufacturerContacts(targetId, manufacturerContacts);
+        const savedContacts = await syncManufacturerContacts(targetId, manufacturerContacts, existingManufacturer?.contacts || []);
         ensureOk(await sb.from("activities").update({contact_id:targetId,contact_type:"manufacturer"}).eq("contact_type","vendor").eq("contact_id",source.id));
         ensureOk(await sb.from("vendors").delete().eq("id", source.id));
-        const nextSelected = {...manufacturerRow,id:targetId,type:"manufacturer",tags:manufacturerRow.tags,lastContact:manufacturerRow.last_contact,notes:manufacturerRow.signals,contacts:manufacturerContacts};
+        const nextSelected = {...manufacturerRow,id:targetId,type:"manufacturer",tags:manufacturerRow.tags,lastContact:manufacturerRow.last_contact,notes:manufacturerRow.signals,contacts:savedContacts};
         setSelectedKeys(keys => {
           const hadOld = keys.includes(sourceKey);
           const nextKey = `manufacturer:${targetId}`;
@@ -3397,7 +3438,7 @@ const taskActivityFromTask = task => ({
         let id=form.id;
         if(id) ensureOk(await sb.from("manufacturers").update(row).eq("id",id));
         else { const { data, error } = await sb.from("manufacturers").insert(row).select().single(); ensureOk({ error }); id=data?.id; }
-        await replaceManufacturerContacts(id, (form.contactsText||"").split("\n").map(line=>line.trim()).filter(Boolean).map(line=>{ const p=line.split(",").map(x=>x.trim()); return {name:p[0]||"",title:p[1]||"",linkedin:p[2]||""}; }));
+        await syncManufacturerContacts(id, (form.contactsText||"").split("\n").map(line=>line.trim()).filter(Boolean).map(line=>{ const p=line.split(",").map(x=>x.trim()); return {name:p[0]||"",title:p[1]||"",linkedin:p[2]||""}; }), form.contacts || []);
       } else if(formType==="vendor"){
         const row={company:form.company,name:form.name,title:form.title,email:form.email,phone:form.phone,industry:form.industry,region:form.region,stage:form.stage||"Prospect",tags,notes:form.notes,last_contact:today()};
         if(form.id) ensureOk(await sb.from("vendors").update(row).eq("id",form.id)); else ensureOk(await sb.from("vendors").insert(row));
@@ -3461,13 +3502,13 @@ const taskActivityFromTask = task => ({
 
         if(keepRecord){
           ensureOk(await sb.from("manufacturers").update(payload).eq("id",keepRecord.id));
-          if(importMode==="replace" || importContacts.length) await replaceManufacturerContacts(keepRecord.id, importContacts);
+          if(importMode==="replace" || importContacts.length) await syncManufacturerContacts(keepRecord.id, importContacts, keepRecord.contacts || []);
           if(importMode==="replace") manufacturerIdsToDelete.push(...existingMatches.filter(record => record.id!==keepRecord.id).map(record => record.id));
         } else {
           const insertedResult = await sb.from("manufacturers").insert(payload).select("id").single();
           ensureOk(insertedResult);
           createdCount += 1;
-          if(insertedResult.data?.id && importContacts.length) await replaceManufacturerContacts(insertedResult.data.id, importContacts);
+          if(insertedResult.data?.id && importContacts.length) await syncManufacturerContacts(insertedResult.data.id, importContacts);
         }
       }
 
