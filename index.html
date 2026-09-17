@@ -1326,24 +1326,40 @@ const poolContactRows = rows => (rows || []).reduce((pool, row) => {
   pool.get(key).push(row);
   return pool;
 }, new Map());
-// Contact rows this page inserted itself, so a quick add-then-remove can still
-// be deleted even if the editor's loaded contact list is not refreshed yet.
-const uiInsertedContactIds = new Set();
+// Contact rows this page inserted itself (id -> saved content), so a quick
+// add-then-remove can still be deleted before the editor reloads its contacts.
+const uiInsertedContactKeys = new Map();
 // Saves only the difference between the edited contact list and the database
-// instead of deleting and reinserting every row. A row is deleted only if this
-// page loaded it (knownContacts) or inserted it, so a contact added elsewhere
-// (e.g. by the ChatGPT CRM connector while the editor was open) is never wiped.
+// instead of deleting and reinserting every row. A row is deleted only if the
+// editor displayed it unchanged (knownContacts) or this page inserted it, so a
+// contact added, edited, moved, or archived elsewhere (e.g. by the ChatGPT CRM
+// connector while the editor was open) is never wiped or re-created by a save.
 // Returns the saved rows, with ids, in list order.
 const syncCompanyContacts = async (table, foreignKey, companyId, contacts, knownContacts=[]) => {
   const current = await sb.from(table).select("*").eq(foreignKey, companyId).order("id", {ascending:true});
   ensureOk(current);
-  const unmatched = poolContactRows(current.data);
+  const currentRows = current.data || [];
+  const currentById = new Map(currentRows.map(row => [String(row.id), row]));
+  const shownById = new Map((knownContacts || [])
+    .filter(contact => contact?.id !== null && contact?.id !== undefined)
+    .map(contact => [String(contact.id), contact]));
+  const unmatched = poolContactRows(currentRows);
   const kept = contacts.map(contact => takeContactRow(unmatched, contact));
-  const toInsert = contacts.filter((contact, index) => !kept[index]);
-  const knownIds = new Set((knownContacts || []).map(contact => contact?.id).filter(id => id !== null && id !== undefined).map(String));
+  // Lines the editor still shows for contacts that changed elsewhere since they
+  // were displayed; those lines must not re-create or overwrite the contact.
+  const changedElsewhere = poolContactRows([...shownById.values()].filter(shown => {
+    const row = currentById.get(String(shown.id));
+    return !row || contactRowKey(row)!==contactRowKey(shown);
+  }));
+  const staleLines = contacts.map((contact, index) => kept[index] ? null : takeContactRow(changedElsewhere, contact));
+  const toInsert = contacts.filter((contact, index) => !kept[index] && !staleLines[index]);
   const removeIds = [...unmatched.values()].flat()
-    .map(row => row.id)
-    .filter(id => knownIds.has(String(id)) || uiInsertedContactIds.has(`${table}:${id}`));
+    .filter(row => {
+      const shown = shownById.get(String(row.id));
+      if(shown) return contactRowKey(shown)===contactRowKey(row);
+      return uiInsertedContactKeys.get(`${table}:${row.id}`)===contactRowKey(row);
+    })
+    .map(row => row.id);
   let insertedPool = new Map();
   if(toInsert.length){
     const inserted = await sb.from(table).insert(
@@ -1355,14 +1371,29 @@ const syncCompanyContacts = async (table, foreignKey, companyId, contacts, known
       }))
     ).select("*");
     ensureOk(inserted);
-    (inserted.data || []).forEach(row => uiInsertedContactIds.add(`${table}:${row.id}`));
+    (inserted.data || []).forEach(row => uiInsertedContactKeys.set(`${table}:${row.id}`, contactRowKey(row)));
     insertedPool = poolContactRows(inserted.data);
   }
   if(removeIds.length){
     ensureOk(await sb.from(table).delete().eq(foreignKey, companyId).in("id", removeIds));
   }
-  return contacts.map((contact, index) => kept[index] || takeContactRow(insertedPool, contact) || contact);
+  return contacts.flatMap((contact, index) => {
+    if(kept[index]) return [kept[index]];
+    if(staleLines[index]){
+      const row = currentById.get(String(staleLines[index].id));
+      return row ? [row] : [];
+    }
+    return [takeContactRow(insertedPool, contact) || contact];
+  });
 };
+const sha256Hex = async value => {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(value ?? "")));
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+};
+const NOTES_CONFLICT_LABEL = "— Notes changed elsewhere while you were editing —";
+const notesConflictSeparator = (...values) => values.some(value => /<[a-z][\s\S]*>/i.test(String(value || "")))
+  ? `<br><br>${NOTES_CONFLICT_LABEL}<br>`
+  : `\n\n${NOTES_CONFLICT_LABEL}\n`;
 const syncManufacturerContacts = (manufacturerId, contacts, knownContacts) =>
   syncCompanyContacts("manufacturer_contacts", "manufacturer_id", manufacturerId, contacts, knownContacts);
 const syncVendorContacts = (vendorId, contacts, knownContacts) =>
@@ -1935,6 +1966,9 @@ function App(){
   const [activityMode,setActivityMode] = useState("on_or_after");
   const [selectedKeys,setSelectedKeys] = useState([]);
   const [selected,setSelected] = useState(null);
+  // Latest open record, for async saves that finish after the panel changed.
+  const selectedRef = useRef(null);
+  selectedRef.current = selected;
   const [showForm,setShowForm] = useState(false);
   const [formType,setFormType] = useState("manufacturer");
   const [form,setForm] = useState({});
@@ -1960,6 +1994,10 @@ function App(){
   // may be deleted by an editor save; a contact loaded in the background while
   // the editor was focused (and therefore not redrawn) is never treated as removed.
   const contactsShownRef = useRef({key:"", contacts:[]});
+  // Per record: the notes value last confirmed in the database, plus any text
+  // added elsewhere (e.g. by the ChatGPT CRM connector) that the focused notes
+  // editor cannot display yet and that every save must therefore keep.
+  const notesSyncRef = useRef(new Map());
   const [showEmailFmt,setShowEmailFmt] = useState(false);
   const [efName,setEfName] = useState("");
   const [efDomain,setEfDomain] = useState("");
@@ -2153,6 +2191,10 @@ function App(){
     const nextContacts = ["manufacturer","vendor"].includes(selected.type) ? contactsTextFromRecord(selected) : "";
     setNotesDraft(current => current===nextNotes ? current : nextNotes);
     setContactsDraft(current => current===nextContacts ? current : nextContacts);
+    const notesFocused = !!notesBoxRef.current && document.activeElement===notesBoxRef.current;
+    if(!notesFocused || !notesSyncRef.current.has(recordKey(selected))){
+      notesSyncRef.current.set(recordKey(selected), {base:nextNotes, extra:""});
+    }
     // The editor does not redraw while focused, so only record what it shows
     // when the new contacts will actually be rendered into it.
     const editorFocused = !!contactsBoxRef.current && document.activeElement===contactsBoxRef.current;
@@ -2446,6 +2488,13 @@ const taskActivityFromTask = task => ({
 
   const hydrate = useCallback(async (withSpinner=false)=>{
     if(withSpinner) setLoading(true);
+    const hydrateStartedAt = Date.now();
+    // Notes saved by this page after the reload started are newer than the rows
+    // being fetched, so keep them instead of rolling the editor back.
+    const freshNotes = (type, id, fetched) => {
+      const state = notesSyncRef.current.get(`${type}:${id}`);
+      return state?.savedAt && state.savedAt >= hydrateStartedAt ? state.base : fetched;
+    };
     try{
       const [manufacturerRows,vendorRows,lostRows,activityRowsRaw] = await Promise.all([
         fetchAllSupabaseRows(()=>sb.from("manufacturers").select("*").order("created_at",{ascending:false})),
@@ -2469,8 +2518,8 @@ const taskActivityFromTask = task => ({
         map.get(key).push(contact);
         return map;
       }, new Map());
-      const m = manufacturerRows.map(row => ({...row,type:"manufacturer",tags:row.tags||[],lastContact:row.last_contact,industry:row.industry||"",notes:row.signals||"",contacts:contactsByManufacturer.get(String(row.id)) || []}));
-      const v = (vendorRows||[]).map(row => ({...row,type:"vendor",tags:row.tags||[],lastContact:row.last_contact,contacts:contactsByVendor.get(String(row.id)) || []}));
+      const m = manufacturerRows.map(row => ({...row,type:"manufacturer",tags:row.tags||[],lastContact:row.last_contact,industry:row.industry||"",notes:freshNotes("manufacturer", row.id, row.signals||""),signals:freshNotes("manufacturer", row.id, row.signals||""),contacts:contactsByManufacturer.get(String(row.id)) || []}));
+      const v = (vendorRows||[]).map(row => ({...row,type:"vendor",tags:row.tags||[],lastContact:row.last_contact,notes:freshNotes("vendor", row.id, row.notes),contacts:contactsByVendor.get(String(row.id)) || []}));
       const l = (lostRows||[]).map(row => ({...row,type:"lost",tags:row.tags||[],lastContact:row.last_contact,lostReason:row.lost_reason,value:row.deal_value}));
       const allRecords = [...m, ...v, ...l];
       let activityRows = activityRowsRaw || [];
@@ -2596,6 +2645,8 @@ const taskActivityFromTask = task => ({
 
   const all = useMemo(() => [...mfrs,...vendors,...lost], [mfrs,vendors,lost]);
   const visibleMfrs = useMemo(() => mfrs.filter(record => !isDeletedRecord(record)), [mfrs]);
+  const visibleVendors = useMemo(() => vendors.filter(record => !isDeletedRecord(record)), [vendors]);
+  const visibleLost = useMemo(() => lost.filter(record => !isDeletedRecord(record)), [lost]);
   const importBatches = useMemo(() => buildImportBatchSummaries(all.filter(record => !isDeletedRecord(record))), [all]);
   const selectedImportBatch = importBatches.find(batch => batch.id===selectedImportBatchId) || importBatches[0] || null;
   useEffect(()=>{
@@ -2692,9 +2743,9 @@ const taskActivityFromTask = task => ({
   },[visibleMfrs,search,stageF,indF,sortBy,activityDate,activityMode,matchesManufacturerSearch]);
   const filteredOthers = useMemo(()=>{
     const q=search.trim().toLowerCase();
-    const base=(tab==="vendor"?vendors:lost).filter(r=>matchesOtherSearch(r, q)&&(tab!=="lost"?(stageF==="All"||r.stage===stageF):(reasonF==="All"||r.lostReason===reasonF))&&matchesActivityDate(r.lastContact, activityDate, activityMode));
+    const base=(tab==="vendor"?visibleVendors:visibleLost).filter(r=>matchesOtherSearch(r, q)&&(tab!=="lost"?(stageF==="All"||r.stage===stageF):(reasonF==="All"||r.lostReason===reasonF))&&matchesActivityDate(r.lastContact, activityDate, activityMode));
     return sortRecordsByActivity(base, sortBy);
-  },[vendors,lost,tab,search,stageF,reasonF,sortBy,activityDate,activityMode,matchesOtherSearch]);
+  },[visibleVendors,visibleLost,tab,search,stageF,reasonF,sortBy,activityDate,activityMode,matchesOtherSearch]);
   const leadFinderCities = useMemo(() => normalizeLeadFinderCities(leadFinderCitiesText), [leadFinderCitiesText]);
   const filteredLeadFinderLogs = useMemo(() => {
     const query = leadFinderLogSearch.trim().toLowerCase();
@@ -3042,6 +3093,90 @@ const taskActivityFromTask = task => ({
     setSelected(current => current && current.id===record.id && current.type===record.type ? {...current,lastContact:activityDate,last_contact:activityDate} : current);
   };
 
+  const persistCompanyNotes = useCallback(async (target, raw) => {
+    if(!target || !["manufacturer","vendor"].includes(target.type)) return false;
+    const key = recordKey(target);
+    const state = notesSyncRef.current.get(key) || {base:String(target.notes || ""), extra:""};
+    const local = String(raw ?? "");
+    const showSavedNotes = () => {
+      const saved = state.base;
+      const patch = target.type==="manufacturer" ? {notes:saved, signals:saved} : {notes:saved};
+      const notesFocused = !!notesBoxRef.current && document.activeElement===notesBoxRef.current;
+      if(!notesFocused){
+        // The editor redraws only while unfocused, so text kept from elsewhere
+        // can now be displayed and no longer needs to be re-appended.
+        state.extra = "";
+        setSelected(cur => cur && cur.id===target.id && cur.type===target.type ? {...cur,...patch} : cur);
+        setNotesDraft(saved);
+        // The editor re-renders itself from its own text on blur, so redraw it
+        // directly in case the draft already held the merged value.
+        const editor = notesBoxRef.current;
+        if(editor && selectedRef.current?.id===target.id && selectedRef.current?.type===target.type){
+          const html = renderRichNotesHtml(saved);
+          if(editor.innerHTML!==html) editor.innerHTML = html;
+        }
+      }
+      if(target.type==="manufacturer") setMfrs(list => list.map(record => record.id===target.id ? {...record,...patch} : record));
+      else setVendors(list => list.map(record => record.id===target.id ? {...record,...patch} : record));
+      notesSyncRef.current.set(key, state);
+    };
+    let outgoing = state.extra && !local.endsWith(state.extra) ? local + state.extra : local;
+    if(outgoing===state.base){
+      if(state.extra) showSavedNotes();
+      return true;
+    }
+    let mergedElsewhere = false;
+    for(let attempt = 0; attempt < 3; attempt += 1){
+      const result = await sb.rpc("save_crm_company_notes", {
+        p_company_type: target.type,
+        p_company_id: target.id,
+        p_base_sha256: await sha256Hex(state.base),
+        p_notes: outgoing,
+      });
+      if(result.error){
+        toast2("Save error: "+result.error.message);
+        return false;
+      }
+      if(result.data?.saved){
+        state.base = typeof result.data.stored_notes==="string" ? result.data.stored_notes : outgoing;
+        state.savedAt = Date.now();
+        break;
+      }
+      // Someone else changed the notes since this page loaded them. Keep both:
+      // text appended elsewhere is added after this edit; anything else is kept
+      // below a visible separator rather than overwritten.
+      const currentNotes = String(result.data?.current_notes ?? "");
+      if(currentNotes===outgoing || currentNotes.startsWith(local)){
+        // The stored notes already contain this edit; adopt them as-is.
+        state.extra = currentNotes.slice(local.length);
+        state.base = currentNotes;
+        state.savedAt = Date.now();
+        mergedElsewhere = currentNotes!==outgoing;
+        break;
+      }
+      state.extra += currentNotes.startsWith(state.base)
+        ? currentNotes.slice(state.base.length)
+        : notesConflictSeparator(outgoing, currentNotes) + currentNotes;
+      state.base = currentNotes;
+      outgoing = local + state.extra;
+      mergedElsewhere = true;
+      if(attempt===2){
+        toast2("Notes keep changing elsewhere; your edit was not saved yet.");
+        notesSyncRef.current.set(key, state);
+        return false;
+      }
+    }
+    showSavedNotes();
+    if(mergedElsewhere) toast2("Notes were also changed elsewhere; both versions were kept.");
+    return true;
+  },[]);
+
+  const saveCompanyNotes = useCallback((raw, options={}) => {
+    const target = options.record || selected;
+    if(!target || !["manufacturer","vendor"].includes(target.type)) return Promise.resolve(false);
+    return queueLatestContactSave(`notes:${recordKey(target)}`, raw, nextRaw => persistCompanyNotes(target, nextRaw));
+  },[selected, queueLatestContactSave, persistCompanyNotes]);
+
   const persistManufacturerContacts = useCallback(async (target, raw, options={}) => {
     if(!target || target.type!=="manufacturer") return false;
     const quiet = !!options.quiet;
@@ -3136,9 +3271,26 @@ const taskActivityFromTask = task => ({
     if(!current) return;
     const done = !current.done;
     try{
-      ensureOk(await sb.from("activities").update({created_by:taskActivityMeta(done, current.owner)}).eq("id",id));
-      setTasks(list => sortTasksByNearest(list.map(task => task.id===id ? {...task,done} : task)));
-      if(done){
+      const latest = await sb.from("activities").select("id,created_by").eq("id",id).maybeSingle();
+      ensureOk(latest);
+      if(!latest.data){
+        setTasks(list => list.filter(task => task.id!==id));
+        toast2("That task was removed elsewhere.");
+        return;
+      }
+      const meta = parseTaskActivityMeta(latest.data.created_by);
+      if(meta.done!==done){
+        // Keep the owner stored in the database; only the open/done state changes.
+        const updated = await sb.from("activities").update({created_by:taskActivityMeta(done, meta.owner)}).eq("id",id).eq("created_by", latest.data.created_by).select("id");
+        ensureOk(updated);
+        if(!updated.data?.length){
+          toast2("That task changed elsewhere; reloaded.");
+          await hydrate();
+          return;
+        }
+      }
+      setTasks(list => sortTasksByNearest(list.map(task => task.id===id ? {...task,done,owner:meta.owner} : task)));
+      if(done && !meta.done){
         const linkedRecord = resolveTaskRecord(current);
         if(linkedRecord) await touchRecordLastActivity(linkedRecord, today());
       }
@@ -3156,7 +3308,8 @@ const taskActivityFromTask = task => ({
   })();
   const startTaskEdit = task => {
     setEditingTaskId(task.id);
-    setEditingTaskDraft({title:task.title || "",due_date:task.due_date || "",owner:normalizeOwner(task.owner)});
+    const original = {title:task.title || "",due_date:task.due_date || "",owner:normalizeOwner(task.owner)};
+    setEditingTaskDraft({...original, original});
   };
   const saveTaskEdit = id => {
     const title = String(editingTaskDraft.title || "").trim();
@@ -3169,8 +3322,40 @@ const taskActivityFromTask = task => ({
     (async () => {
       try{
         const nextOwner = normalizeOwner(editingTaskDraft.owner);
-        ensureOk(await sb.from("activities").update({note:title,date:editingTaskDraft.due_date || null,created_by:taskActivityMeta(!!current?.done, nextOwner)}).eq("id",id));
-        setTasks(list => sortTasksByNearest(list.map(task => task.id===id ? {...task,title,due_date:editingTaskDraft.due_date || "",owner:nextOwner} : task)));
+        const original = editingTaskDraft.original || {title:current?.title || "",due_date:current?.due_date || "",owner:normalizeOwner(current?.owner)};
+        // Write only what the user changed, so a reschedule or completion made
+        // elsewhere while this editor was open is not overwritten.
+        const patch = {};
+        if(title!==original.title) patch.note = title;
+        if((editingTaskDraft.due_date || "")!==(original.due_date || "")) patch.date = editingTaskDraft.due_date || null;
+        if(Object.keys(patch).length || nextOwner!==original.owner){
+          const latest = await sb.from("activities").select("id,created_by").eq("id",id).maybeSingle();
+          ensureOk(latest);
+          if(!latest.data){
+            setTasks(list => list.filter(task => task.id!==id));
+            setEditingTaskId(null);
+            setEditingTaskDraft(createEmptyTaskEditDraft());
+            toast2("That task was removed elsewhere.");
+            return;
+          }
+          let query;
+          if(nextOwner!==original.owner){
+            patch.created_by = taskActivityMeta(parseTaskActivityMeta(latest.data.created_by).done, nextOwner);
+            query = sb.from("activities").update(patch).eq("id",id).eq("created_by", latest.data.created_by);
+          } else {
+            query = sb.from("activities").update(patch).eq("id",id);
+          }
+          const updated = await query.select("id,note,date,created_by");
+          ensureOk(updated);
+          if(!updated.data?.length){
+            toast2("That task changed elsewhere; reloaded.");
+            await hydrate();
+            return;
+          }
+          const row = updated.data[0];
+          const meta = parseTaskActivityMeta(row.created_by);
+          setTasks(list => sortTasksByNearest(list.map(task => task.id===id ? {...task,title:row.note || "",due_date:row.date || "",owner:meta.owner,done:meta.done} : task)));
+        }
         setEditingTaskId(null);
         setEditingTaskDraft(createEmptyTaskEditDraft());
       }catch(err){
@@ -3180,7 +3365,8 @@ const taskActivityFromTask = task => ({
   };
   const startActivityEdit = activity => {
     setEditingActId(activity.id);
-    setEditingActDraft({type:activity.type || "Call",note:activity.note || "",created_by:normalizeOwner(activity.created_by)});
+    const original = {type:activity.type || "Call",note:activity.note || "",created_by:normalizeOwner(activity.created_by)};
+    setEditingActDraft({...original, original});
   };
   const deleteActivity = async activityOrId => {
     const id = typeof activityOrId==="object" ? activityOrId?.id : activityOrId;
@@ -3204,11 +3390,17 @@ const taskActivityFromTask = task => ({
       await deleteActivity(id);
       return;
     }
-    const payload = {type:editingActDraft.type || "Call",note,created_by:normalizeOwner(editingActDraft.created_by)};
-    const { error } = await sb.from("activities").update(payload).eq("id",id);
-    if(error){
-      toast2("Save error: "+error.message);
-      return;
+    const next = {type:editingActDraft.type || "Call",note,created_by:normalizeOwner(editingActDraft.created_by)};
+    const original = editingActDraft.original || {};
+    // Write only what the user changed, so a correction made elsewhere to another
+    // field of this activity is not overwritten.
+    const payload = Object.fromEntries(Object.entries(next).filter(([field, value]) => value!==original[field]));
+    if(Object.keys(payload).length){
+      const { error } = await sb.from("activities").update(payload).eq("id",id);
+      if(error){
+        toast2("Save error: "+error.message);
+        return;
+      }
     }
     setActs(list => list.map(activity => activity.id===id ? {...activity,...payload} : activity));
     setEditingActId(null);
@@ -3239,7 +3431,8 @@ const taskActivityFromTask = task => ({
 
   const addFinderSkipTag = async (record) => {
     if(record.type!=="manufacturer") return;
-    const tags = Array.isArray(record.tags) ? record.tags : [];
+    const latest = await sb.from("manufacturers").select("tags").eq("id", record.id).maybeSingle();
+    const tags = Array.isArray(latest.data?.tags) ? latest.data.tags : (Array.isArray(record.tags) ? record.tags : []);
     if(tags.includes(FINDER_SKIP_TAG)) return;
     const newTags = [...tags, FINDER_SKIP_TAG];
     await sb.from("manufacturers").update({tags: newTags}).eq("id", record.id);
@@ -3262,7 +3455,8 @@ const taskActivityFromTask = task => ({
 
       if(manufacturerRecords.length){
         for(const mfr of manufacturerRecords){
-          const tags = Array.isArray(mfr.tags) ? mfr.tags : [];
+          const latest = await sb.from("manufacturers").select("tags").eq("id", mfr.id).maybeSingle();
+          const tags = Array.isArray(latest.data?.tags) ? latest.data.tags : (Array.isArray(mfr.tags) ? mfr.tags : []);
           const newTags = [...tags, ...[FINDER_SKIP_TAG, DELETED_TAG].filter(tag => !tags.includes(tag))];
           await run(sb.from("manufacturers").update({tags: newTags, stage: "Closed Lost"}).eq("id", mfr.id));
         }
@@ -3539,8 +3733,8 @@ const taskActivityFromTask = task => ({
   const list = tab==="manufacturer" ? filteredMfrs : filteredOthers;
   const tabCounts = {
     manufacturer: visibleMfrs.length,
-    vendor: vendors.length,
-    lost: lost.length
+    vendor: visibleVendors.length,
+    lost: visibleLost.length
   };
   const importPreviewRows = (importRows || []).map(normalizeImportRow);
   const validImportRows = importPreviewRows.filter(row => isLikelyCompanyName(row.company));
@@ -3704,9 +3898,9 @@ const taskActivityFromTask = task => ({
   const activeMfrs = visibleMfrs.filter(record => !isHiddenManufacturerRecord(record));
   const pipe = activeMfrs.filter(m=>m.stage!=="Closed Won").length;
   const hot = activeMfrs.filter(m=>(m.tags||[]).includes("Hot")).length;
-  const lostValue = lost.reduce((sum,r)=>sum+(r.value||0),0);
+  const lostValue = visibleLost.reduce((sum,r)=>sum+(r.value||0),0);
   const soFacilities = activeMfrs.filter(m=>m.has_so_facilities).length;
-  const preferredVendors = vendors.filter(v=>(v.tags||[]).includes("Preferred")).length;
+  const preferredVendors = visibleVendors.filter(v=>(v.tags||[]).includes("Preferred")).length;
   const industryStats = INDUSTRY_OPTIONS.map(industry => ({ industry, count: visibleMfrs.filter(m=>getIndustryBucket(m.industry)===industry).length }));
   const stageStats = STAGES.map(stage => ({ stage, count: visibleMfrs.filter(m=>normalizeStage(m.stage)===stage).length }));
   const maxIndustryCount = Math.max(1, ...industryStats.map(item => item.count));
@@ -3769,8 +3963,8 @@ const taskActivityFromTask = task => ({
               {[
                 ["Manufacturers",visibleMfrs.length,"","#1e3a8a","◌"],
                 ["In Pipeline",pipe,"","#ef4444","◈"],
-                ["Vendors",vendors.length,preferredVendors+" preferred","#1d4ed8","◉"],
-                ["Lost Value","$"+(lostValue/1000).toFixed(0)+"k",lost.length+" lost contacts","#94a3b8","✕"],
+                ["Vendors",visibleVendors.length,preferredVendors+" preferred","#1d4ed8","◉"],
+                ["Lost Value","$"+(lostValue/1000).toFixed(0)+"k",visibleLost.length+" lost contacts","#94a3b8","✕"],
               ].map(([label,value,sub,color,icon])=>(
                 <div key={label} style={{background:"#fff",border:"1px solid #d8e2ef",borderTop:"3px solid "+color,borderRadius:7,padding:"18px 20px",boxShadow:"0 2px 8px rgba(15,23,42,.04)"}}>
                   <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
@@ -4526,9 +4720,9 @@ const taskActivityFromTask = task => ({
                     placeholder="Internal notes, follow-up reminders..."
                     value={notesDraft}
                     onChange={setNotesDraft}
-                    onAutoSave={nextValue=>selected.type==="manufacturer" ? saveMfrField("notes", nextValue, {quiet:true}) : saveVendorField("notes", nextValue, {quiet:true})}
+                    onAutoSave={nextValue=>saveCompanyNotes(nextValue, {record:selected})}
                     onMeasure={syncDetailPanelHeight}
-                    onBlurSave={nextValue=>selected.type==="manufacturer" ? saveMfrField("notes", nextValue, {quiet:true}) : saveVendorField("notes", nextValue, {quiet:true})}
+                    onBlurSave={nextValue=>saveCompanyNotes(nextValue, {record:selected})}
                   />
                 </div>
                 <div style={{display:"grid",gap:20,alignContent:"start"}}>
